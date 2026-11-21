@@ -135,7 +135,8 @@ impl Composer {
             });
             ListState::new(delegate, window, cx).searchable(true)
         });
-        if session.read(cx).has_folder_tools() {
+        // Index the folder in the background (never for the welcome screen's placeholder).
+        if session.read(cx).has_folder_tools() && !session.read(cx).is_idle() {
             file_picker::refresh_index(&picker, cx);
         }
         Self {
@@ -1129,7 +1130,14 @@ fn folder_menu(
             .map(|recent| recent.0.clone())
             .unwrap_or_default();
         let mut folders = vec![cwd.clone()];
-        folders.extend(recent.into_iter().filter(|folder| *folder != cwd));
+        // Folders are checked when the menu opens (not at startup): checking a folder under
+        // Desktop or Documents can make macOS ask for access.
+        folders.extend(
+            recent
+                .into_iter()
+                .filter(|folder| *folder != cwd && folder.is_dir())
+                .take(crate::config::RECENT_FOLDERS),
+        );
         menu = menu
             .min_w(px(260.))
             .max_w(px(FOLDER_MENU_WIDTH))

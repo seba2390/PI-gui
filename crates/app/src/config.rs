@@ -13,8 +13,6 @@ pub struct AppConfig {
     pub child_env: Vec<(OsString, OsString)>,
     /// pi's session directory, if it could be determined.
     pub sessions_dir: Option<PathBuf>,
-    /// Folder new chats start in until the user picks one.
-    pub default_cwd: PathBuf,
     pub home: Option<PathBuf>,
     /// The folder chat-mode sessions run in (see [`pi_sessions::Mode`]).
     pub chat_dir: PathBuf,
@@ -48,7 +46,6 @@ impl AppConfig {
             pi_program,
             child_env: Vec::new(),
             sessions_dir: None,
-            default_cwd: std::env::temp_dir(),
             home: None,
             chat_dir: std::env::temp_dir().join("pi-gui-test-chat"),
             open_at_startup: Vec::new(),
@@ -58,17 +55,11 @@ impl AppConfig {
     /// `child_env` is the result of [`crate::shell_env::login_shell_env`].
     pub fn detect(child_env: Vec<(OsString, OsString)>) -> Self {
         let home = dirs_home();
-        let default_cwd = std::env::current_dir()
-            .ok()
-            .filter(|dir| dir.as_os_str() != "/")
-            .or_else(|| home.clone())
-            .unwrap_or_else(|| PathBuf::from("."));
         Self {
             pi_program: std::env::var_os("PI_GUI_PI_BIN")
                 .map_or_else(|| "pi".into(), PathBuf::from),
             child_env,
             sessions_dir: pi_sessions::sessions_dir(),
-            default_cwd,
             home,
             chat_dir: pi_sessions::chat_dir()
                 .unwrap_or_else(|| std::env::temp_dir().join("pi-gui-chat")),

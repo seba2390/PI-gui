@@ -196,15 +196,14 @@ impl Sidebar {
                 .spawn(async move {
                     let sessions = pi_sessions::scan_reusing(&dir, &previous);
                     // Over-fetch so deleted folders can be dropped without shrinking the menu.
+                    // Menus check that folders still exist when they open: touching folders
+                    // under Desktop or Documents here would make macOS ask for access at
+                    // startup.
                     let code = sessions.iter().filter(|session| session.cwd != chat_dir);
                     let folders = pi_sessions::recent_folders(
                         &code.cloned().collect::<Vec<_>>(),
                         RECENT_FOLDERS * 2,
-                    )
-                    .into_iter()
-                    .filter(|folder| folder.is_dir())
-                    .take(RECENT_FOLDERS)
-                    .collect();
+                    );
                     (sessions, folders)
                 })
                 .await;

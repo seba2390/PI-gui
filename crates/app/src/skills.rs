@@ -201,6 +201,11 @@ impl SkillsView {
 
     /// Scans the folder for project skills and reads the trust store, in the background.
     fn rescan(&mut self, cx: &mut Context<Self>) {
+        if self.session.read(cx).is_idle() {
+            // No session folder yet: nothing to scan.
+            self.scan = Some(Ok(ProjectScan::default()));
+            return;
+        }
         let Some(place) = self.place.clone() else {
             self.scan = Some(Err(
                 "Connect to the host first: pi's folders there are not known yet.".into(),
@@ -586,6 +591,9 @@ impl SkillsView {
 
     /// The project's trust state when it matters (it has project resources).
     fn render_trust(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.session.read(cx).is_idle() {
+            return None;
+        }
         let Some(Ok(scan)) = &self.scan else {
             return None;
         };
@@ -671,6 +679,7 @@ impl SkillsView {
             Some(Ok(scan)) => !scan.trust.as_ref().is_some_and(Trust::is_trusted),
             _ => true,
         };
+        let idle = self.session.read(cx).is_idle();
         let label = |text: &'static str| div().text_xs().text_color(muted).child(text);
         let scope_button =
             |id: &'static str, scope: NewScope, text: &'static str, cx: &mut Context<Self>| {
@@ -716,7 +725,14 @@ impl SkillsView {
                         h_flex()
                             .gap_2()
                             .child(scope_button("scope-personal", NewScope::Personal, "Personal: every project", cx))
-                            .child(scope_button("scope-project", NewScope::Project, "This project (.pi/skills)", cx)),
+                            .when(!idle, |this| {
+                                this.child(scope_button(
+                                    "scope-project",
+                                    NewScope::Project,
+                                    "This project (.pi/skills)",
+                                    cx,
+                                ))
+                            }),
                     )
                     .when(self.new_scope == NewScope::Project && untrusted, |this| {
                         this.child(

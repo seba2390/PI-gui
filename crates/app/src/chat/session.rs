@@ -23,9 +23,13 @@ use crate::config::AppConfig;
 /// Where the pi process is in its life.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Lifecycle {
+    /// A placeholder with no pi process (the welcome screen before any session is open).
+    Idle,
     Starting,
     Ready,
-    Exited { message: String },
+    Exited {
+        message: String,
+    },
 }
 
 /// What a view may want to react to.
@@ -176,6 +180,35 @@ impl PiSession {
             }
         }
         this
+    }
+
+    /// A placeholder without a pi process: nothing runs, nothing is read from disk. Shown
+    /// (behind the welcome screen) until the user opens or starts a session.
+    pub fn idle(cwd: PathBuf, mode: Mode) -> Self {
+        Self {
+            host: None,
+            mode,
+            cwd,
+            resumed_from: None,
+            process: None,
+            client: None,
+            lifecycle: Lifecycle::Idle,
+            transcript: Transcript::new(),
+            state: None,
+            models: Vec::new(),
+            thinking_levels: Vec::new(),
+            stats: None,
+            commands: Vec::new(),
+            extension_status: BTreeMap::new(),
+            widgets: BTreeMap::new(),
+            pending: VecDeque::new(),
+            pending_model: None,
+            _event_pump: Task::ready(()),
+        }
+    }
+
+    pub fn is_idle(&self) -> bool {
+        self.lifecycle == Lifecycle::Idle
     }
 
     // ---- reads ---------------------------------------------------------------

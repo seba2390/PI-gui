@@ -100,6 +100,26 @@ impl ChatView {
         cx: &mut Context<Self>,
     ) -> Self {
         let session = cx.new(|cx| PiSession::new(cwd, session_file, host, cx));
+        Self::with_session(session, window, cx)
+    }
+
+    /// A placeholder with no pi process behind the welcome screen (see
+    /// [`PiSession::idle`]).
+    pub fn idle(
+        cwd: PathBuf,
+        mode: pi_sessions::Mode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let session = cx.new(|_| PiSession::idle(cwd, mode));
+        Self::with_session(session, window, cx)
+    }
+
+    fn with_session(
+        session: Entity<PiSession>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let composer = cx.new(|cx| Composer::new(session.clone(), window, cx));
         let scroller = cx.new(|cx| MessageScrollerState::new(0, cx));
 

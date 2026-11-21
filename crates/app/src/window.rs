@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::resizable::{h_resizable, resizable_panel, v_resizable};
 use gpui_kit::component::{
     ActiveTheme as _, IconName, Selectable as _, Sizable as _, TitleBar, WindowExt as _, h_flex,
@@ -105,6 +106,8 @@ pub struct MainWindow {
     skills_open: bool,
     /// Set while pi restarts for the Skills page, so showing the new chat keeps the page.
     keep_skills: bool,
+    /// The welcome screen is showing (no session open yet; `chat` is an idle placeholder).
+    welcome: bool,
     sidebar_open: bool,
     right_open: bool,
     terminal_open: bool,
@@ -117,14 +120,16 @@ pub struct MainWindow {
 impl MainWindow {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let sidebar = cx.new(|cx| Sidebar::new(window, cx));
-        let cwd = {
-            let config = cx.global::<AppConfig>();
-            match sidebar.read(cx).mode() {
-                Mode::Chat => config.chat_dir.clone(),
-                Mode::Code => config.default_cwd.clone(),
-            }
-        };
-        let chat = cx.new(|cx| ChatView::new(cwd.clone(), None, None, window, cx));
+        // Start on the welcome screen: no pi process and no folder until the user picks one
+        // (starting in the launch folder, often `~` or `/`, was surprising and made the file
+        // index walk the whole home folder).
+        let mode = sidebar.read(cx).mode();
+        let cwd = cx
+            .global::<AppConfig>()
+            .home
+            .clone()
+            .unwrap_or_else(std::env::temp_dir);
+        let chat = cx.new(|cx| ChatView::idle(cwd.clone(), mode, window, cx));
         let right_panel = cx.new(|cx| RightPanel::new(cwd, window, cx));
         let chat_subscription = cx.subscribe_in(&chat, window, Self::on_chat_event);
         let subscriptions = vec![
@@ -210,6 +215,7 @@ impl MainWindow {
             pending_remote: restore.map(|target| (target, true)),
             after_remote: Vec::new(),
             pending_latest: None,
+            welcome: true,
             models_reload: None,
             skills: None,
             skills_open: false,
@@ -227,6 +233,16 @@ impl MainWindow {
     /// Opens panels and dialogs named in `PI_GUI_OPEN` (scripted screenshots and checks).
     fn open_panels(&mut self, panels: &[String], window: &mut Window, cx: &mut Context<Self>) {
         for (index, panel) in panels.iter().enumerate() {
+            // Panels need a session: scripted runs open one in the launch folder.
+            if self.welcome
+                && matches!(
+                    panel.as_str(),
+                    "terminal" | "diff" | "files" | "attach" | "context"
+                )
+                && let Ok(folder) = std::env::current_dir()
+            {
+                self.new_chat_in(folder, window, cx);
+            }
             match panel.as_str() {
                 "terminal" => self.toggle_terminal(&ToggleTerminal, window, cx),
                 "diff" => self.show_diff(&ShowDiff, window, cx),
@@ -314,13 +330,13 @@ impl MainWindow {
 
     /// The visible conversation is a Code session on this computer.
     fn local_code(&self, cx: &App) -> bool {
-        self.chat.read(cx).session().read(cx).is_local_code()
+        !self.welcome && self.chat.read(cx).session().read(cx).is_local_code()
     }
 
     /// The visible conversation has a project folder (here or on an SSH host), so the
     /// terminal and the diff / files panels apply.
     fn folder_tools(&self, cx: &App) -> bool {
-        self.chat.read(cx).session().read(cx).has_folder_tools()
+        !self.welcome && self.chat.read(cx).session().read(cx).has_folder_tools()
     }
 
     /// The SSH host of the visible conversation.
@@ -335,17 +351,58 @@ impl MainWindow {
 
     /// Where a new conversation in `mode` starts: the chat folder, or for Code the current
     /// project, else the most recent one, else the launch folder.
-    fn default_folder(&self, mode: Mode, cx: &App) -> PathBuf {
+    /// The chat folder, or for Code the current project, else the most recent one. `None`
+    /// when there is no project yet: the user picks one (never silently the launch folder).
+    fn default_folder(&self, mode: Mode, cx: &App) -> Option<PathBuf> {
         let config = cx.global::<AppConfig>();
         match mode {
-            Mode::Chat => config.chat_dir.clone(),
-            Mode::Code if self.local_code(cx) => self.cwd(cx),
-            Mode::Code => self
-                .sidebar
-                .read(cx)
-                .latest_code_folder(cx)
-                .unwrap_or_else(|| config.default_cwd.clone()),
+            Mode::Chat => Some(config.chat_dir.clone()),
+            Mode::Code if self.local_code(cx) => Some(self.cwd(cx)),
+            Mode::Code => self.sidebar.read(cx).latest_code_folder(cx),
         }
+    }
+
+    /// A new conversation in `mode`'s default folder; asks for a folder when there is none.
+    fn new_in_default_folder(&mut self, mode: Mode, window: &mut Window, cx: &mut Context<Self>) {
+        match self.default_folder(mode, cx) {
+            Some(folder) => self.new_chat_in(folder, window, cx),
+            None => self.choose_folder(window, cx),
+        }
+    }
+
+    /// The system folder dialog; a new Code session starts in the chosen folder.
+    fn choose_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Open".into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            if let Ok(Ok(Some(mut paths))) = paths.await
+                && let Some(folder) = paths.pop()
+            {
+                let _ = this.update_in(cx, |this, window, cx| this.new_chat_in(folder, window, cx));
+            }
+        })
+        .detach();
+    }
+
+    /// Shows the welcome screen for `mode` (nothing running until the user starts something).
+    fn show_welcome(&mut self, mode: Mode, window: &mut Window, cx: &mut Context<Self>) {
+        let cwd = cx
+            .global::<AppConfig>()
+            .home
+            .clone()
+            .unwrap_or_else(std::env::temp_dir);
+        let chat = cx.new(|cx| ChatView::idle(cwd, mode, window, cx));
+        self.show_chat(chat, window, cx);
+        self.welcome = true;
+        self.terminal_open = false;
+        if self.right_open {
+            self.set_right_open(false, cx);
+        }
+        cx.notify();
     }
 
     /// Shows `mode`: the conversation last open in it, or a new one. Chat has no project
@@ -391,10 +448,8 @@ impl MainWindow {
             }) if let Some(summary) = self.sidebar.read(cx).summary(&file) => {
                 drop(self.open_session(None, &summary, window, cx));
             }
-            _ => {
-                let folder = self.default_folder(mode, cx);
-                self.new_chat_in(folder, window, cx);
-            }
+            // Nothing to come back to: the welcome screen for that mode.
+            _ => self.show_welcome(mode, window, cx),
         }
     }
 
@@ -409,6 +464,7 @@ impl MainWindow {
     /// Replaces the visible chat, keeping the old one alive if it is still working.
     fn show_chat(&mut self, chat: Entity<ChatView>, window: &mut Window, cx: &mut Context<Self>) {
         let previous = std::mem::replace(&mut self.chat, chat.clone());
+        self.welcome = false;
         remember(&previous, cx);
         remember(&chat, cx);
         if self.skills_open {
@@ -704,8 +760,7 @@ impl MainWindow {
                 ComposerEvent::ChangeFolder(folder) => self.new_chat_in(folder.clone(), window, cx),
                 ComposerEvent::ChooseHost(None) => {
                     if self.chat.read(cx).session().read(cx).host().is_some() {
-                        let folder = self.default_folder(Mode::Code, cx);
-                        self.new_chat_in(folder, window, cx);
+                        self.new_in_default_folder(Mode::Code, window, cx);
                     }
                 }
                 ComposerEvent::ChooseHost(Some(host)) | ComposerEvent::BrowseRemote(host) => {
@@ -1087,6 +1142,10 @@ impl MainWindow {
     fn new_chat(&mut self, _: &NewChat, window: &mut Window, cx: &mut Context<Self>) {
         // An untouched conversation of the sidebar's mode is already "new": just focus it.
         let mode = self.sidebar.read(cx).mode();
+        if self.welcome {
+            self.new_in_default_folder(mode, window, cx);
+            return;
+        }
         if self.mode(cx) == mode && self.chat.read(cx).session().read(cx).is_empty() {
             focus_chat(&self.chat, window, cx);
             return;
@@ -1104,8 +1163,7 @@ impl MainWindow {
             self.new_remote_chat(host, folder, window, cx);
             return;
         }
-        let folder = self.default_folder(mode, cx);
-        self.new_chat_in(folder, window, cx);
+        self.new_in_default_folder(mode, window, cx);
     }
 
     fn toggle_sidebar(&mut self, _: &ToggleSidebar, _: &mut Window, cx: &mut Context<Self>) {
@@ -1244,6 +1302,8 @@ impl MainWindow {
         let session = self.chat.read(cx).session().read(cx);
         let title = if self.skills_open {
             "Skills".to_owned()
+        } else if self.welcome {
+            String::new()
         } else {
             session.display_title().unwrap_or_else(|| {
                 match session.mode() {
@@ -1257,7 +1317,7 @@ impl MainWindow {
         let folder = crate::ui::short_path(session.cwd(), home.as_deref());
         // Code sessions (here or on an SSH host) have folder tools (terminal, diff, files);
         // chats have no folder, and remote folders are shown as `host:path`.
-        let code = session.has_folder_tools() && !self.skills_open;
+        let code = session.has_folder_tools() && !self.skills_open && !self.welcome;
         let folder = match session.host() {
             Some(host) => {
                 let label = crate::hosts::hosts(cx)
@@ -1268,7 +1328,7 @@ impl MainWindow {
             }
             None => folder,
         };
-        let show_folder = session.mode() == Mode::Code;
+        let show_folder = session.mode() == Mode::Code && !self.welcome;
         let tab = self.right_panel.read(cx).tab();
         let theme = cx.theme();
 
@@ -1442,6 +1502,147 @@ fn add_alias_host(alias: String, cx: &mut App) -> HostId {
     crate::hosts::hosts(cx).update(cx, |hosts, cx| hosts.add(alias, target, cx))
 }
 
+impl MainWindow {
+    /// The start screen: logo and a button that starts a session (Code: in a recent folder,
+    /// a chosen folder or on an SSH host; Chat: a new chat).
+    fn render_welcome(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let mode = self.sidebar.read(cx).mode();
+        let theme = cx.theme();
+        let (muted, foreground) = (theme.muted_foreground, theme.foreground);
+        let accent = crate::theme::palette(cx).accent;
+        let (headline, detail, label) = match mode {
+            Mode::Code => (
+                "Start a coding session",
+                "Open a folder on this computer or an SSH host, or pick up a session from the \
+                 sidebar.",
+                "New session",
+            ),
+            Mode::Chat => (
+                "Start a chat",
+                "A plain conversation, without access to your files.",
+                "New chat",
+            ),
+        };
+        let weak = cx.weak_entity();
+        let button = Button::new("welcome-new")
+            .primary()
+            .large()
+            .icon(component::Icon::from(AppIcon::SquarePen))
+            .label(label);
+        let button = match mode {
+            Mode::Chat => button
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.new_in_default_folder(Mode::Chat, window, cx);
+                }))
+                .into_any_element(),
+            Mode::Code => button
+                .dropdown_caret(true)
+                .dropdown_menu_with_anchor(Anchor::TopCenter, move |menu, _, cx| {
+                    welcome_menu(menu, weak.clone(), cx)
+                })
+                .into_any_element(),
+        };
+        v_flex()
+            .flex_1()
+            .min_h_0()
+            .items_center()
+            .justify_center()
+            .gap_3()
+            .px_6()
+            .child(
+                component::Icon::from(AppIcon::PiLogo)
+                    .size_12()
+                    .text_color(accent),
+            )
+            .child(div().text_xl().text_color(foreground).child(headline))
+            .child(
+                div()
+                    .max_w(px(420.))
+                    .text_sm()
+                    .text_center()
+                    .text_color(muted)
+                    .child(detail),
+            )
+            .child(div().pt_2().child(button))
+    }
+}
+
+/// The welcome screen's "New session" menu: recent folders (checked now, not at startup),
+/// "Choose a folder…", and SSH hosts.
+fn welcome_menu(
+    mut menu: component::menu::PopupMenu,
+    window_view: WeakEntity<MainWindow>,
+    cx: &mut Context<component::menu::PopupMenu>,
+) -> component::menu::PopupMenu {
+    let home = cx.global::<AppConfig>().home.clone();
+    let recent: Vec<PathBuf> = cx
+        .try_global::<crate::config::RecentFolders>()
+        .map(|recent| recent.0.clone())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|folder| folder.is_dir())
+        .take(crate::config::RECENT_FOLDERS)
+        .collect();
+    menu = menu.min_w(px(300.)).max_w(px(460.));
+    if !recent.is_empty() {
+        menu = menu.label("Recent folders");
+        for folder in recent {
+            let short = crate::ui::short_path(&folder, home.as_deref());
+            let view = window_view.clone();
+            menu = menu.item(
+                component::menu::PopupMenuItem::new(short)
+                    .icon(IconName::Folder)
+                    .on_click(move |_, window, cx| {
+                        let folder = folder.clone();
+                        let _ = view.update(cx, |this, cx| this.new_chat_in(folder, window, cx));
+                    }),
+            );
+        }
+        menu = menu.separator();
+    }
+    let view = window_view.clone();
+    menu = menu.item(
+        component::menu::PopupMenuItem::new("Choose a folder…")
+            .icon(IconName::FolderOpen)
+            .on_click(move |_, window, cx| {
+                let _ = view.update(cx, |this, cx| this.choose_folder(window, cx));
+            }),
+    );
+    let hosts: Vec<(HostId, String, crate::hosts::HostStatus)> = {
+        let hosts = crate::hosts::hosts(cx);
+        let hosts = hosts.read(cx);
+        hosts
+            .hosts()
+            .iter()
+            .map(|host| (host.id.clone(), host.label.clone(), hosts.status(&host.id)))
+            .collect()
+    };
+    menu = menu.separator().label("On an SSH host");
+    for (id, label, status) in hosts {
+        let view = window_view.clone();
+        menu = menu.item(
+            component::menu::PopupMenuItem::element(move |_, cx| {
+                h_flex()
+                    .gap_2()
+                    .child(crate::remote_ui::status_dot(Some(&status), cx))
+                    .child(label.clone())
+            })
+            .on_click(move |_, window, cx| {
+                let id = id.clone();
+                let _ = view.update(cx, |this, cx| this.open_connect_flow(id, window, cx));
+            }),
+        );
+    }
+    let view = window_view;
+    menu.item(
+        component::menu::PopupMenuItem::new("Add SSH connection…")
+            .icon(IconName::Plus)
+            .on_click(move |_, window, cx| {
+                let _ = view.update(cx, |this, cx| this.open_add_host(window, cx));
+            }),
+    )
+}
+
 impl Focusable for MainWindow {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -1467,7 +1668,10 @@ impl Render for MainWindow {
             .when_some(skills, |this, skills| {
                 this.child(div().flex_1().min_h_0().child(skills.cached(full())))
             })
-            .when(!self.skills_open, |this| {
+            .when(self.welcome && !self.skills_open, |this| {
+                this.child(self.render_welcome(cx))
+            })
+            .when(!self.skills_open && !self.welcome, |this| {
                 this.child(
                     v_resizable("chat-and-terminal")
                         .child(resizable_panel().child(self.chat.clone().cached(full())))
