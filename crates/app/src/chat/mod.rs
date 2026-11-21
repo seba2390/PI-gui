@@ -12,7 +12,6 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use gpui_kit::component::clipboard::Clipboard;
 use gpui_kit::component::message_scroller::{MessageScroller, MessageScrollerState};
 use gpui_kit::component::text::{TextView, TextViewState};
 use gpui_kit::component::{ActiveTheme as _, WindowExt as _, h_flex, v_flex};
@@ -445,10 +444,6 @@ pub(crate) fn markdown_view(state: &Entity<TextViewState>) -> TextView {
                     block.lang().filter(|lang| !lang.is_empty()),
                     |this, lang| this.child(div().pl_1().text_xs().text_color(muted).child(lang)),
                 )
-                .child(
-                    Clipboard::new("copy")
-                        .value(block.code())
-                        .tooltip("Copy code"),
-                )
+                .child(crate::ui::CopyButton::new("copy", block.code()).tooltip("Copy code"))
         })
 }
