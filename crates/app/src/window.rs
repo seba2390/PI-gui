@@ -20,16 +20,19 @@ use crate::actions::{
     FocusComposer, NewChat, ShowChatMode, ShowCodeMode, ShowDiff, ShowFiles, ToggleRightPanel,
     ToggleSidebar, ToggleTerminal, WINDOW_CONTEXT,
 };
-use crate::chat::{ChatEvent, ChatView};
+use crate::chat::{ChatEvent, ChatView, ComposerEvent};
 use crate::config::AppConfig;
 use crate::panels::{RightPanel, RightPanelEvent, RightTab, TerminalPanel, TerminalPanelEvent};
+use crate::remote_ui::{AddHost, AddHostEvent, ConnectFlow, ConnectFlowEvent};
 use crate::sidebar::{Sidebar, SidebarEvent};
 use crate::ui::QuietButton as _;
 use crate::ui::{AppIcon, TOP_BAR_HEIGHT, TRAFFIC_LIGHT_INSET, WindowDrag};
+use remote::HostId;
 
 pub fn open_main_window(cx: &mut App) {
     crate::chat::init(cx);
     crate::panels::terminal_panel::init(cx);
+    crate::hosts::init(cx);
     let bounds = Bounds::centered(None, size(px(1320.), px(860.)), cx);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -58,6 +61,14 @@ fn focus_chat(chat: &Entity<ChatView>, window: &mut Window, cx: &mut App) {
     focus.focus(window, cx);
 }
 
+/// A conversation to come back to when switching modes.
+#[derive(Debug, Clone)]
+struct LastSession {
+    file: PathBuf,
+    /// For a session on an SSH host: the host and the folder there.
+    remote: Option<(HostId, PathBuf)>,
+}
+
 pub struct MainWindow {
     sidebar: Entity<Sidebar>,
     chat: Entity<ChatView>,
@@ -67,7 +78,9 @@ pub struct MainWindow {
     right_panel: Entity<RightPanel>,
     terminal: Option<Entity<TerminalPanel>>,
     /// The conversation last shown in each mode, reopened when switching back to it.
-    last_session: HashMap<Mode, PathBuf>,
+    last_session: HashMap<Mode, LastSession>,
+    /// Events of the open SSH dialog (add host / connect flow).
+    dialog_subscription: Option<Subscription>,
     sidebar_open: bool,
     right_open: bool,
     terminal_open: bool,
@@ -87,7 +100,7 @@ impl MainWindow {
                 Mode::Code => config.default_cwd.clone(),
             }
         };
-        let chat = cx.new(|cx| ChatView::new(cwd.clone(), None, window, cx));
+        let chat = cx.new(|cx| ChatView::new(cwd.clone(), None, None, window, cx));
         let right_panel = cx.new(|cx| RightPanel::new(cwd, window, cx));
         let chat_subscription = cx.subscribe_in(&chat, window, Self::on_chat_event);
         let subscriptions = vec![
@@ -124,6 +137,16 @@ impl MainWindow {
                         "files" => this.show_files(&ShowFiles, window, cx),
                         "no-sidebar" => this.toggle_sidebar(&ToggleSidebar, window, cx),
                         "chat" => this.switch_to_mode(Mode::Chat, window, cx),
+                        "add-host" => this.open_add_host(window, cx),
+                        other if other.starts_with("ssh:") => {
+                            let alias = other.trim_start_matches("ssh:").to_owned();
+                            let target = remote::Target::Alias {
+                                alias: alias.clone(),
+                            };
+                            let host = crate::hosts::hosts(cx)
+                                .update(cx, |hosts, cx| hosts.add(alias, target, cx));
+                            this.open_connect_flow(host, window, cx);
+                        }
                         "code" => this.switch_to_mode(Mode::Code, window, cx),
                         "latest" => {
                             let dir = cx.global::<AppConfig>().sessions_dir.clone();
@@ -154,6 +177,7 @@ impl MainWindow {
             right_panel,
             terminal: None,
             last_session: HashMap::new(),
+            dialog_subscription: None,
             sidebar_open: true,
             right_open: false,
             terminal_open: false,
@@ -168,6 +192,11 @@ impl MainWindow {
         self.chat.read(cx).session().read(cx).cwd().to_owned()
     }
 
+    /// The visible conversation is a Code session on this computer (local folder tools apply).
+    fn local_code(&self, cx: &App) -> bool {
+        self.chat.read(cx).session().read(cx).is_local_code()
+    }
+
     /// The mode of the visible conversation.
     fn mode(&self, cx: &App) -> Mode {
         self.chat.read(cx).session().read(cx).mode()
@@ -179,7 +208,7 @@ impl MainWindow {
         let config = cx.global::<AppConfig>();
         match mode {
             Mode::Chat => config.chat_dir.clone(),
-            Mode::Code if self.mode(cx) == Mode::Code => self.cwd(cx),
+            Mode::Code if self.local_code(cx) => self.cwd(cx),
             Mode::Code => self
                 .sidebar
                 .read(cx)
@@ -200,13 +229,22 @@ impl MainWindow {
             self.terminal_open = false;
             self.set_right_open(false, cx);
         }
-        let last = self
-            .last_session
-            .get(&mode)
-            .and_then(|path| self.sidebar.read(cx).summary(path));
+        let last = self.last_session.get(&mode).cloned();
         match last {
-            Some(summary) => drop(self.open_session(&summary, window, cx)),
-            None => {
+            // A remote session resumes on its host (the sidebar lists local sessions only).
+            Some(LastSession {
+                file,
+                remote: Some((host, folder)),
+            }) => {
+                let chat = cx.new(|cx| ChatView::new(folder, Some(file), Some(host), window, cx));
+                self.show_chat(chat, window, cx);
+            }
+            Some(LastSession { file, remote: None })
+                if let Some(summary) = self.sidebar.read(cx).summary(&file) =>
+            {
+                drop(self.open_session(&summary, window, cx));
+            }
+            _ => {
                 let folder = self.default_folder(mode, cx);
                 self.new_chat_in(folder, window, cx);
             }
@@ -227,14 +265,18 @@ impl MainWindow {
         {
             let session = previous.read(cx).session().read(cx);
             if let Some(file) = session.session_file() {
-                self.last_session.insert(session.mode(), file);
+                let remote = session
+                    .host()
+                    .map(|host| (host.clone(), session.cwd().to_path_buf()));
+                self.last_session
+                    .insert(session.mode(), LastSession { file, remote });
             }
         }
         // Opening a conversation of the other mode (e.g. at startup) switches the sidebar too.
         let mode = chat.read(cx).session().read(cx).mode();
         self.sidebar
             .update(cx, |sidebar, cx| sidebar.set_mode(mode, window, cx));
-        if mode == Mode::Chat {
+        if !chat.read(cx).session().read(cx).is_local_code() {
             self.terminal_open = false;
             if self.right_open {
                 self.set_right_open(false, cx);
@@ -272,7 +314,7 @@ impl MainWindow {
     }
 
     fn new_chat_in(&mut self, cwd: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        let chat = cx.new(|cx| ChatView::new(cwd, None, window, cx));
+        let chat = cx.new(|cx| ChatView::new(cwd, None, None, window, cx));
         self.show_chat(chat, window, cx);
     }
 
@@ -292,7 +334,15 @@ impl MainWindow {
             .find(|(chat, _)| chat.read(cx).session().read(cx).session_file() == target)
             .map(|(chat, _)| chat.clone());
         let chat = existing.unwrap_or_else(|| {
-            cx.new(|cx| ChatView::new(summary.cwd.clone(), Some(summary.path.clone()), window, cx))
+            cx.new(|cx| {
+                ChatView::new(
+                    summary.cwd.clone(),
+                    Some(summary.path.clone()),
+                    None,
+                    window,
+                    cx,
+                )
+            })
         });
         self.show_chat(chat.clone(), window, cx);
         chat
@@ -333,8 +383,72 @@ impl MainWindow {
                 self.right_panel.update(cx, |panel, cx| panel.refresh(cx));
                 cx.notify();
             }
-            ChatEvent::ChangeFolder(folder) => self.new_chat_in(folder.clone(), window, cx),
+            ChatEvent::Composer(event) => match event {
+                ComposerEvent::ChangeFolder(folder) => self.new_chat_in(folder.clone(), window, cx),
+                ComposerEvent::ChooseHost(None) => {
+                    if self.chat.read(cx).session().read(cx).host().is_some() {
+                        let folder = self.default_folder(Mode::Code, cx);
+                        self.new_chat_in(folder, window, cx);
+                    }
+                }
+                ComposerEvent::ChooseHost(Some(host)) | ComposerEvent::BrowseRemote(host) => {
+                    self.open_connect_flow(host.clone(), window, cx);
+                }
+                ComposerEvent::AddHost => self.open_add_host(window, cx),
+            },
         }
+    }
+
+    /// "Add SSH connection": on success continues straight to connecting.
+    fn open_add_host(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let add = cx.new(AddHost::new);
+        self.dialog_subscription =
+            Some(
+                cx.subscribe_in(&add, window, |this, _, event: &AddHostEvent, window, cx| {
+                    let AddHostEvent::Added(host) = event;
+                    window.close_dialog(cx);
+                    this.open_connect_flow(host.clone(), window, cx);
+                }),
+            );
+        window.open_dialog(cx, move |dialog, _, _| {
+            dialog
+                .title("Add SSH connection")
+                .w(px(480.))
+                .child(add.clone())
+        });
+    }
+
+    /// Connects to `host` (trust prompt, pi check) and lets the user pick a folder there.
+    fn open_connect_flow(&mut self, host: HostId, window: &mut Window, cx: &mut Context<Self>) {
+        let title = crate::hosts::hosts(cx).read(cx).get(&host).map_or_else(
+            || "Connect".to_owned(),
+            |saved| format!("Open a folder on {}", saved.label),
+        );
+        let flow = cx.new(|cx| ConnectFlow::new(host, cx));
+        self.dialog_subscription = Some(cx.subscribe_in(
+            &flow,
+            window,
+            |this, _, event: &ConnectFlowEvent, window, cx| {
+                let ConnectFlowEvent::Open { host, folder } = event;
+                window.close_dialog(cx);
+                this.new_remote_chat(host.clone(), folder.clone(), window, cx);
+            },
+        ));
+        window.open_dialog(cx, move |dialog, _, _| {
+            dialog.title(title.clone()).w(px(520.)).child(flow.clone())
+        });
+    }
+
+    fn new_remote_chat(
+        &mut self,
+        host: HostId,
+        folder: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        crate::hosts::hosts(cx).update(cx, |hosts, cx| hosts.touch_folder(&host, &folder, cx));
+        let chat = cx.new(|cx| ChatView::new(PathBuf::from(folder), None, Some(host), window, cx));
+        self.show_chat(chat, window, cx);
     }
 
     fn confirm_delete(
@@ -449,6 +563,19 @@ impl MainWindow {
             focus_chat(&self.chat, window, cx);
             return;
         }
+        // On an SSH host, a new session stays on that host and folder.
+        let remote = {
+            let session = self.chat.read(cx).session().read(cx);
+            session
+                .host()
+                .cloned()
+                .filter(|_| mode == Mode::Code)
+                .map(|host| (host, session.cwd().to_string_lossy().into_owned()))
+        };
+        if let Some((host, folder)) = remote {
+            self.new_remote_chat(host, folder, window, cx);
+            return;
+        }
         let folder = self.default_folder(mode, cx);
         self.new_chat_in(folder, window, cx);
     }
@@ -459,7 +586,7 @@ impl MainWindow {
     }
 
     fn toggle_right_panel(&mut self, _: &ToggleRightPanel, _: &mut Window, cx: &mut Context<Self>) {
-        if self.mode(cx) == Mode::Chat {
+        if !self.local_code(cx) {
             return;
         }
         self.set_right_open(!self.right_open, cx);
@@ -474,7 +601,7 @@ impl MainWindow {
     }
 
     fn show_tab(&mut self, tab: RightTab, cx: &mut Context<Self>) {
-        if self.mode(cx) == Mode::Chat {
+        if !self.local_code(cx) {
             return;
         }
         let current = self.right_panel.read(cx).tab();
@@ -496,7 +623,7 @@ impl MainWindow {
     }
 
     fn toggle_terminal(&mut self, _: &ToggleTerminal, window: &mut Window, cx: &mut Context<Self>) {
-        if self.mode(cx) == Mode::Chat {
+        if !self.local_code(cx) {
             return;
         }
         if self.terminal_open {
@@ -550,8 +677,20 @@ impl MainWindow {
         });
         let home = cx.global::<AppConfig>().home.clone();
         let folder = crate::ui::short_path(session.cwd(), home.as_deref());
-        // Chat has no project folder: no path, terminal, diff or files.
-        let code = session.mode() == Mode::Code;
+        // Only Code sessions on this computer have local folder tools (terminal, diff, files);
+        // chats have no folder, and remote folders are shown as `host:path`.
+        let code = session.is_local_code();
+        let folder = match session.host() {
+            Some(host) => {
+                let label = crate::hosts::hosts(cx)
+                    .read(cx)
+                    .get(host)
+                    .map_or_else(|| host.0.clone(), |h| h.label.clone());
+                format!("{label}:{}", session.cwd().display())
+            }
+            None => folder,
+        };
+        let show_folder = session.mode() == Mode::Code;
         let tab = self.right_panel.read(cx).tab();
         let theme = cx.theme();
 
@@ -612,7 +751,7 @@ impl MainWindow {
                                 .text_color(theme.foreground)
                                 .child(title),
                         )
-                        .when(code, |this| {
+                        .when(show_folder, |this| {
                             this.child(
                                 div()
                                     .text_xs()

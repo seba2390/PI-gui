@@ -1,6 +1,7 @@
 //! Window-level actions and their default key bindings.
 
-use gpui_kit::{App, KeyBinding, actions};
+use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
+use gpui_kit::{App, KeyBinding, Menu, MenuItem, OsAction, SystemMenuType, actions};
 
 actions!(
     pi_gui,
@@ -14,6 +15,9 @@ actions!(
         FocusComposer,
         ShowChatMode,
         ShowCodeMode,
+        Hide,
+        HideOthers,
+        ShowAll,
         Quit,
     ]
 );
@@ -58,6 +62,53 @@ pub fn init(cx: &mut App) {
         KeyBinding::new(primary!("q"), Quit, None),
     ]);
     cx.on_action(|_: &Quit, cx| cx.quit());
+    cx.on_action(|_: &Hide, cx| cx.hide());
+    cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
+    cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
+    if cfg!(target_os = "macos") {
+        cx.bind_keys([
+            KeyBinding::new("cmd-h", Hide, None),
+            KeyBinding::new("cmd-alt-h", HideOthers, None),
+        ]);
+    }
+    cx.set_menus(menus());
+}
+
+/// The native menu bar. On macOS the first menu is the app menu ("PI"), so the app can be
+/// quit, hidden etc. like any other; shortcuts show next to the items automatically.
+fn menus() -> Vec<Menu> {
+    vec![
+        Menu::new("PI").items([
+            MenuItem::os_submenu("Services", SystemMenuType::Services),
+            MenuItem::separator(),
+            MenuItem::action("Hide PI", Hide),
+            MenuItem::action("Hide Others", HideOthers),
+            MenuItem::action("Show All", ShowAll),
+            MenuItem::separator(),
+            MenuItem::action("Quit PI", Quit),
+        ]),
+        Menu::new("File").items([MenuItem::action("New Chat / Session", NewChat)]),
+        Menu::new("Edit").items([
+            MenuItem::os_action("Undo", Undo, OsAction::Undo),
+            MenuItem::os_action("Redo", Redo, OsAction::Redo),
+            MenuItem::separator(),
+            MenuItem::os_action("Cut", Cut, OsAction::Cut),
+            MenuItem::os_action("Copy", Copy, OsAction::Copy),
+            MenuItem::os_action("Paste", Paste, OsAction::Paste),
+            MenuItem::os_action("Select All", SelectAll, OsAction::SelectAll),
+        ]),
+        Menu::new("View").items([
+            MenuItem::action("Chat", ShowChatMode),
+            MenuItem::action("Code", ShowCodeMode),
+            MenuItem::separator(),
+            MenuItem::action("Toggle Sidebar", ToggleSidebar),
+            MenuItem::action("Toggle Side Panel", ToggleRightPanel),
+            MenuItem::action("Changes", ShowDiff),
+            MenuItem::action("Files", ShowFiles),
+            MenuItem::action("Terminal", ToggleTerminal),
+        ]),
+        Menu::new("Window").items([MenuItem::action("Focus Message Box", FocusComposer)]),
+    ]
 }
 
 #[cfg(test)]

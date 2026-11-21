@@ -5487,10 +5487,12 @@ dependencies = [
  "async-channel",
  "base64 0.22.1",
  "env_logger",
+ "futures",
  "gpui-kit",
  "log",
  "pi-rpc",
  "pi-sessions",
+ "remote",
  "serde",
  "serde_json",
  "tempfile",
@@ -6229,6 +6231,20 @@ name = "regex-syntax"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d902046e6a28a1e4c3cab97258a0ce11e994903f01c2d97a9447a0b3df85f4f6"
+
+[[package]]
+name = "remote"
+version = "0.1.0"
+dependencies = [
+ "dirs 6.0.0",
+ "log",
+ "pi-sessions",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+]
 
 [[package]]
 name = "renderdoc-sys"

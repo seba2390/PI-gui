@@ -58,8 +58,8 @@ struct Markdown {
 pub enum ChatEvent {
     /// The session's file, title or state changed; the sidebar may need a refresh.
     SessionChanged,
-    /// The user picked another working folder for a new chat.
-    ChangeFolder(PathBuf),
+    /// Folder / device choices from the composer, handled by the window.
+    Composer(ComposerEvent),
 }
 
 pub struct ChatView {
@@ -88,19 +88,18 @@ impl ChatView {
     pub fn new(
         cwd: PathBuf,
         session_file: Option<PathBuf>,
+        host: Option<remote::HostId>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let session = cx.new(|cx| PiSession::new(cwd, session_file, cx));
+        let session = cx.new(|cx| PiSession::new(cwd, session_file, host, cx));
         let composer = cx.new(|cx| Composer::new(session.clone(), window, cx));
         let scroller = cx.new(|cx| MessageScrollerState::new(0, cx));
 
         let subscriptions = vec![
             cx.subscribe_in(&session, window, Self::on_session_event),
-            cx.subscribe(&composer, |_, _, event: &ComposerEvent, cx| match event {
-                ComposerEvent::ChangeFolder(folder) => {
-                    cx.emit(ChatEvent::ChangeFolder(folder.clone()));
-                }
+            cx.subscribe(&composer, |_, _, event: &ComposerEvent, cx| {
+                cx.emit(ChatEvent::Composer(event.clone()));
             }),
             cx.observe(&session, |_, _, cx| cx.notify()),
         ];

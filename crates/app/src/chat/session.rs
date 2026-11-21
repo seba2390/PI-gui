@@ -5,6 +5,7 @@
 //! methods. Views observe it and render; they never hold protocol state.
 
 use pi_sessions::Mode;
+use remote::HostId;
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -55,6 +56,8 @@ struct PendingPrompt {
 }
 
 pub struct PiSession {
+    /// The SSH host pi runs on, or `None` for this computer.
+    host: Option<HostId>,
     mode: Mode,
     cwd: PathBuf,
     resumed_from: Option<PathBuf>,
@@ -79,9 +82,26 @@ impl EventEmitter<SessionEvent> for PiSession {}
 
 impl PiSession {
     /// Starts pi in `cwd`, resuming `session_file` when given.
-    pub fn new(cwd: PathBuf, session_file: Option<PathBuf>, cx: &mut Context<Self>) -> Self {
+    /// Starts pi in `cwd`, resuming `session_file` when given; on `host` (a saved SSH host)
+    /// pi runs on that machine and `cwd` / `session_file` are paths there.
+    pub fn new(
+        cwd: PathBuf,
+        session_file: Option<PathBuf>,
+        host: Option<HostId>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let config = cx.global::<AppConfig>().clone();
-        let (options, mode) = spawn_options(&config, &cwd, session_file.as_deref());
+        let saved = host.as_ref().and_then(|id| {
+            let hosts = cx.try_global::<crate::hosts::HostsHandle>()?.0.read(cx);
+            let mut saved = hosts.get(id).cloned()?;
+            // Prefer the exact path the probe found (conda / nvm installs may only be on an
+            // interactive shell's PATH).
+            if let Some(path) = hosts.probe(id).and_then(|probe| probe.pi_path.clone()) {
+                saved.pi_command = Some(path);
+            }
+            Some(saved)
+        });
+        let (options, mode) = spawn_options(&config, &cwd, session_file.as_deref(), saved.as_ref());
         if mode == Mode::Chat
             && let Err(error) = std::fs::create_dir_all(&cwd)
         {
@@ -92,6 +112,7 @@ impl PiSession {
         }
 
         let mut this = Self {
+            host,
             mode,
             cwd,
             resumed_from: session_file,
@@ -160,6 +181,17 @@ impl PiSession {
 
     pub fn cwd(&self) -> &Path {
         &self.cwd
+    }
+
+    /// The SSH host this session runs on (`None`: this computer).
+    pub fn host(&self) -> Option<&HostId> {
+        self.host.as_ref()
+    }
+
+    /// A Code session on this computer: the only kind with local folder tools (terminal,
+    /// diff, files, local file picker) for now.
+    pub fn is_local_code(&self) -> bool {
+        self.host.is_none() && self.mode == Mode::Code
     }
 
     /// Chat sessions have no tools and no project folder.
@@ -671,20 +703,40 @@ impl PiSession {
 /// How to launch pi for a session in `cwd`. Chat sessions get `--no-tools`: pi records the
 /// empty tool set in the session and restores it on resume (even from the terminal), so a chat
 /// can never read or change files; passing it again on resume is belt and braces.
+///
+/// On a remote `host`, pi runs there through the host's shared ssh connection, in `cwd` on the
+/// remote, via the login shell (see [`remote::Ssh::command`]); remote sessions are always Code.
 fn spawn_options(
     config: &AppConfig,
     cwd: &Path,
     session_file: Option<&Path>,
+    host: Option<&remote::SavedHost>,
 ) -> (SpawnOptions, Mode) {
     let mut options = SpawnOptions::new(cwd);
     options.program.clone_from(&config.pi_program);
     options.env.clone_from(&config.child_env);
     options.session = session_file.map(Path::to_path_buf);
-    let mode = config.mode_of(cwd);
-    if mode == Mode::Chat {
-        options.extra_args.push("--no-tools".into());
-    }
-    (options, mode)
+    let Some(host) = host else {
+        let mode = config.mode_of(cwd);
+        if mode == Mode::Chat {
+            options.extra_args.push("--no-tools".into());
+        }
+        return (options, mode);
+    };
+    let argv: Vec<String> = std::iter::once(host.pi_command().to_owned())
+        .chain(
+            options
+                .args()
+                .iter()
+                .map(|arg| arg.to_string_lossy().into_owned()),
+        )
+        .collect();
+    let ssh = remote::Ssh::new(host.target.clone());
+    let (program, args) = ssh.command(Some(&cwd.to_string_lossy()), &argv);
+    options.launcher = Some(pi_rpc::Launcher { program, args });
+    // The local ssh client just needs some existing folder to run in.
+    options.cwd = config.home.clone().unwrap_or_else(std::env::temp_dir);
+    (options, Mode::Code)
 }
 
 #[cfg(test)]
@@ -694,7 +746,7 @@ mod tests {
     #[test]
     fn chat_sessions_launch_without_tools() {
         let config = AppConfig::for_tests("pi".into());
-        let (chat, mode) = super::spawn_options(&config, &config.chat_dir.clone(), None);
+        let (chat, mode) = super::spawn_options(&config, &config.chat_dir.clone(), None, None);
         assert_eq!(mode, super::Mode::Chat);
         assert_eq!(
             chat.extra_args,
@@ -703,10 +755,48 @@ mod tests {
 
         let project = std::env::temp_dir().join("some-project");
         let session = project.join("s.jsonl");
-        let (code, mode) = super::spawn_options(&config, &project, Some(&session));
+        let (code, mode) = super::spawn_options(&config, &project, Some(&session), None);
         assert_eq!(mode, super::Mode::Code);
         assert_eq!(code.extra_args, [] as [std::ffi::OsString; 0]);
         assert_eq!(code.session.as_deref(), Some(session.as_path()));
+    }
+
+    #[test]
+    fn remote_sessions_launch_pi_through_ssh() {
+        let config = AppConfig::for_tests("pi".into());
+        let host = remote::SavedHost {
+            id: remote::HostId("box".into()),
+            label: "Box".into(),
+            target: remote::Target::Alias {
+                alias: "box".into(),
+            },
+            pi_command: Some("/opt/pi/bin/pi".into()),
+            recent_folders: Vec::new(),
+        };
+        let folder = std::path::Path::new("/srv/my app");
+        let (options, mode) = super::spawn_options(&config, folder, None, Some(&host));
+        assert_eq!(mode, super::Mode::Code);
+        let launcher = options.launcher.expect("remote sessions use a launcher");
+        assert_eq!(launcher.program, PathBuf::from("ssh"));
+        let args: Vec<String> = launcher
+            .args
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        let joined = args.join(" ");
+        assert!(args.iter().any(|arg| arg == "box"), "{joined}");
+        assert!(
+            joined.contains("/opt/pi/bin/pi")
+                && joined.contains("--mode")
+                && joined.contains("rpc"),
+            "{joined}"
+        );
+        assert!(
+            joined.contains("'/srv/my app'"),
+            "remote folder is quoted: {joined}"
+        );
+        // The local ssh client runs in an existing local folder, not the remote path.
+        assert_ne!(options.cwd, folder);
     }
 
     use gpui_kit::{AppContext as _, TestAppContext};
@@ -724,7 +814,7 @@ mod tests {
         cx.update(|cx| {
             cx.set_global(AppConfig::for_tests(fake));
         });
-        let session = cx.new(|cx| PiSession::new(std::env::temp_dir(), None, cx));
+        let session = cx.new(|cx| PiSession::new(std::env::temp_dir(), None, None, cx));
         let (sender, events) = async_channel::unbounded();
         let _subscription = cx.update(|cx| {
             cx.subscribe(&session, move |_, event: &SessionEvent, _| {

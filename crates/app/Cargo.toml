@@ -14,6 +14,7 @@ path = "src/main.rs"
 gpui-kit.workspace = true
 pi-rpc.workspace = true
 pi-sessions.workspace = true
+remote.workspace = true
 transcript.workspace = true
 workspace.workspace = true
 term.workspace = true
@@ -27,6 +28,7 @@ base64 = "0.22"
 trash = "5"
 
 [dev-dependencies]
+futures.workspace = true
 tempfile.workspace = true
 gpui-kit = { workspace = true, features = ["test-support"] }
 

@@ -6,6 +6,7 @@
 //! interrupts, Alt+Up restores queued messages, Shift+Tab cycles thinking.
 
 use pi_sessions::Mode;
+use remote::HostId;
 use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -52,6 +53,12 @@ pub fn init(cx: &mut App) {
 #[derive(Debug, Clone)]
 pub enum ComposerEvent {
     ChangeFolder(PathBuf),
+    /// Run Code sessions on this computer (`None`) or a saved SSH host.
+    ChooseHost(Option<HostId>),
+    /// Open the "Add SSH connection" dialog.
+    AddHost,
+    /// Pick another folder on this session's SSH host.
+    BrowseRemote(HostId),
 }
 
 /// A file attached to the next prompt.
@@ -107,6 +114,8 @@ impl Composer {
                 }
             }),
             cx.observe(&session, |_, _, cx| cx.notify()),
+            // Repaint the device button's status dot.
+            cx.observe(&crate::hosts::hosts(cx), |_, _, cx| cx.notify()),
         ];
         let weak = cx.weak_entity();
         let root = session.read(cx).cwd().to_path_buf();
@@ -116,7 +125,7 @@ impl Composer {
             });
             ListState::new(delegate, window, cx).searchable(true)
         });
-        if session.read(cx).mode() == Mode::Code {
+        if session.read(cx).is_local_code() {
             file_picker::refresh_index(&picker, cx);
         }
         Self {
@@ -195,10 +204,10 @@ impl Composer {
             text
         } else {
             // Pasted files (chat mode) each get their own paragraph; `@path`s share a line.
-            let separator = if self.session.read(cx).mode() == Mode::Chat {
-                "\n\n"
-            } else {
+            let separator = if self.session.read(cx).is_local_code() {
                 " "
+            } else {
+                "\n\n"
             };
             format!("{}\n\n{text}", references.join(separator))
                 .trim()
@@ -342,7 +351,8 @@ impl Composer {
     }
 
     fn attach_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
-        let inline = self.session.read(cx).mode() == Mode::Chat;
+        // Without local file access (chat, or pi on another machine) text files are pasted in.
+        let inline = !self.session.read(cx).is_local_code();
         cx.spawn(async move |this, cx| {
             let attachments = cx
                 .background_executor()
@@ -406,6 +416,37 @@ impl Composer {
             return self.toolbar_layout(left, cx).into_any_element();
         }
 
+        if let Some(host) = session.host().cloned() {
+            // pi runs on another machine: attach from the system dialog (pasted in), and the
+            // folder button browses folders on that machine.
+            let left = h_flex()
+                .gap_1()
+                .child(
+                    Button::new("attach")
+                        .quiet(cx)
+                        .small()
+                        .icon(Icon::from(AppIcon::Paperclip))
+                        .tooltip("Attach files or images")
+                        .on_click(cx.listener(|this, _, _, cx| this.pick_attachments(cx))),
+                )
+                .child(self.render_device(Some(&host), cx))
+                .child(
+                    Button::new("remote-folder")
+                        .quiet(cx)
+                        .small()
+                        .icon(IconName::Folder)
+                        .label(folder)
+                        .tooltip(format!(
+                            "{} (choosing another starts a new session)",
+                            cwd.display()
+                        ))
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            cx.emit(ComposerEvent::BrowseRemote(host.clone()));
+                        })),
+                );
+            return self.toolbar_layout(left, cx).into_any_element();
+        }
+
         let left = h_flex()
             .gap_1()
             .child({
@@ -427,6 +468,7 @@ impl Composer {
                     .p_0()
                     .content(move |_, _, _| List::new(&picker).w(px(460.)).h(px(320.)))
             })
+            .child(self.render_device(None, cx))
             .child(
                 Button::new(menu_id(
                     "folder",
@@ -445,6 +487,49 @@ impl Composer {
             );
 
         self.toolbar_layout(left, cx).into_any_element()
+    }
+
+    /// "This computer" / an SSH host, with its status dot; the menu switches machines.
+    fn render_device(
+        &self,
+        current: Option<&HostId>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let hosts = crate::hosts::hosts(cx);
+        let hosts = hosts.read(cx);
+        let (label, status) = match current {
+            Some(id) => (
+                hosts
+                    .get(id)
+                    .map_or_else(|| id.0.clone(), |host| host.label.clone()),
+                Some(hosts.status(id)),
+            ),
+            None => ("This computer".to_owned(), None),
+        };
+        let tooltip: SharedString = match &status {
+            Some(status) => format!("{label}: {}", crate::remote_ui::status_text(status)).into(),
+            None => "Runs on this computer".into(),
+        };
+        // Key the menu by hosts and statuses so its dots are never stale.
+        let key: Vec<(String, String)> = hosts
+            .hosts()
+            .iter()
+            .map(|host| (host.id.0.clone(), format!("{:?}", hosts.status(&host.id))))
+            .collect();
+        Button::new(menu_id("device", &(current.map(|id| id.0.clone()), key)))
+            .quiet(cx)
+            .small()
+            .child(
+                h_flex()
+                    .gap_1p5()
+                    .child(crate::remote_ui::status_dot(status.as_ref(), cx))
+                    .child(label),
+            )
+            .tooltip(tooltip)
+            .dropdown_menu_with_anchor(
+                Anchor::BottomLeft,
+                device_menu(cx.weak_entity(), current.cloned()),
+            )
     }
 
     /// The composer's bottom bar: `left` controls, then model, thinking, context and send.
@@ -881,6 +966,78 @@ fn inline_file_block(name: &str, contents: &str) -> String {
 /// Builds the folder menu: recent working folders (instant, no disk access) and a fallback to
 /// the system folder dialog, which macOS takes a noticeable moment to open.
 const FOLDER_MENU_WIDTH: f32 = 440.;
+
+/// The device menu: this computer, saved SSH hosts (with status dots) and "Add SSH connection…".
+fn device_menu(
+    composer: WeakEntity<Composer>,
+    current: Option<HostId>,
+) -> impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static {
+    move |mut menu, _, cx| {
+        let hosts = crate::hosts::hosts(cx);
+        let entries: Vec<(
+            Option<HostId>,
+            String,
+            Option<crate::hosts::HostStatus>,
+            String,
+        )> = std::iter::once((None, "This computer".to_owned(), None, String::new()))
+            .chain(hosts.read(cx).hosts().iter().map(|host| {
+                let status = hosts.read(cx).status(&host.id);
+                (
+                    Some(host.id.clone()),
+                    host.label.clone(),
+                    Some(status),
+                    host.target.display(),
+                )
+            }))
+            .collect();
+        menu = menu
+            .min_w(px(240.))
+            .max_w(px(FOLDER_MENU_WIDTH))
+            .label("Run on");
+        for (id, label, status, detail) in entries {
+            let checked = id == current;
+            let composer = composer.clone();
+            menu = menu.item(
+                PopupMenuItem::element(move |_, cx| {
+                    let muted = cx.theme().muted_foreground;
+                    h_flex()
+                        .min_w_0()
+                        .max_w(px(FOLDER_MENU_WIDTH - 64.))
+                        .gap_2()
+                        .child(crate::remote_ui::status_dot(status.as_ref(), cx))
+                        .child(
+                            div()
+                                .flex_none()
+                                .max_w(px(180.))
+                                .truncate()
+                                .child(label.clone()),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_xs()
+                                .text_color(muted)
+                                .child(detail.clone()),
+                        )
+                })
+                .checked(checked)
+                .on_click(move |_, _, cx| {
+                    let id = id.clone();
+                    let _ = composer.update(cx, |_, cx| cx.emit(ComposerEvent::ChooseHost(id)));
+                }),
+            );
+        }
+        let composer = composer.clone();
+        menu.separator().item(
+            PopupMenuItem::new("Add SSH connection…")
+                .icon(IconName::Plus)
+                .on_click(move |_, _, cx| {
+                    let _ = composer.update(cx, |_, cx| cx.emit(ComposerEvent::AddHost));
+                }),
+        )
+    }
+}
 
 /// `(folder name, shortened parent)` for a menu row; the home folder is just `~`.
 fn folder_label(

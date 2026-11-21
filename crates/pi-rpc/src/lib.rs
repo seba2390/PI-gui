@@ -22,4 +22,4 @@ pub mod protocol;
 
 pub use client::{ClientEvent, PiClient};
 pub use error::RpcError;
-pub use process::{PiProcess, SpawnOptions};
+pub use process::{Launcher, PiProcess, SpawnOptions};

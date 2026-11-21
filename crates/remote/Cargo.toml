@@ -1,0 +1,22 @@
+[package]
+name = "remote"
+description = "UI-agnostic SSH support: discover hosts from ~/.ssh/config, remember saved connections, and run pi on a remote machine through the system ssh binary"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+pi-sessions.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+log.workspace = true
+dirs.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+pretty_assertions.workspace = true
+
+[lints]
+workspace = true

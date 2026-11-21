@@ -34,6 +34,18 @@ pub struct SpawnOptions {
     pub extra_args: Vec<OsString>,
     /// Environment overrides (e.g. a login-shell `PATH` for GUI launches).
     pub env: Vec<(OsString, OsString)>,
+    /// Runs pi through another program instead of directly, e.g. `ssh host -- … pi …` for a
+    /// remote machine. The launcher's arguments must already contain the pi command line
+    /// (see [`SpawnOptions::args`]); `program`, `args` and `cwd` above are then only used to
+    /// build it, and the launcher runs in `cwd` locally.
+    pub launcher: Option<Launcher>,
+}
+
+/// A program that starts pi on pi-rpc's behalf; see [`SpawnOptions::launcher`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Launcher {
+    pub program: PathBuf,
+    pub args: Vec<OsString>,
 }
 
 impl SpawnOptions {
@@ -46,6 +58,7 @@ impl SpawnOptions {
             thinking: None,
             extra_args: Vec::new(),
             env: Vec::new(),
+            launcher: None,
         }
     }
 
@@ -80,9 +93,19 @@ impl PiProcess {
     pub fn spawn(
         options: &SpawnOptions,
     ) -> std::io::Result<(Self, async_channel::Receiver<ClientEvent>)> {
-        let mut command = OsCommand::new(&options.program);
+        let mut command = match &options.launcher {
+            Some(launcher) => {
+                let mut command = OsCommand::new(&launcher.program);
+                command.args(&launcher.args);
+                command
+            }
+            None => {
+                let mut command = OsCommand::new(&options.program);
+                command.args(options.args());
+                command
+            }
+        };
         command
-            .args(options.args())
             .current_dir(&options.cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
