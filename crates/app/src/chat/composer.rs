@@ -1091,7 +1091,7 @@ fn device_menu(
 }
 
 /// `(folder name, shortened parent)` for a menu row; the home folder is just `~`.
-fn folder_label(
+pub(crate) fn folder_label(
     folder: &std::path::Path,
     home: Option<&std::path::Path>,
 ) -> (SharedString, SharedString) {

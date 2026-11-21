@@ -45,6 +45,8 @@ pub enum SidebarEvent {
     ConnectHost(HostId),
     /// Show the Skills page (Code mode).
     ShowSkills,
+    /// Move every session of this folder (on this host) to the trash.
+    DeleteFolder(Option<HostId>, PathBuf),
 }
 
 pub struct Sidebar {
@@ -170,6 +172,15 @@ impl Sidebar {
             .iter()
             .find(|session| session.path == path)
             .cloned()
+    }
+
+    /// The listed sessions whose working folder is `folder` (on this computer).
+    pub fn sessions_in(&self, folder: &Path) -> Vec<SessionSummary> {
+        self.sessions
+            .iter()
+            .filter(|session| session.cwd == folder)
+            .cloned()
+            .collect()
     }
 
     /// The working folder of the most recent Code session, if any.

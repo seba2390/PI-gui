@@ -722,6 +722,9 @@ impl MainWindow {
             }
             SidebarEvent::ConnectHost(host) => self.open_connect_flow(host.clone(), window, cx),
             SidebarEvent::ShowSkills => self.toggle_skills(window, cx),
+            SidebarEvent::DeleteFolder(host, folder) => {
+                self.confirm_delete_folder(host.clone(), folder.clone(), window, cx);
+            }
         }
     }
 
@@ -1036,6 +1039,122 @@ impl MainWindow {
                     true
                 })
         });
+    }
+
+    /// Asks before moving every session of `folder` (on `host`) to the trash. The folder
+    /// itself and its files are not touched.
+    fn confirm_delete_folder(
+        &mut self,
+        host: Option<HostId>,
+        folder: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let sessions: Vec<SessionSummary> = match &host {
+            None => self.sidebar.read(cx).sessions_in(&folder),
+            Some(host) => crate::hosts::hosts(cx)
+                .read(cx)
+                .sessions(host)
+                .iter()
+                .filter(|session| session.cwd == folder)
+                .cloned()
+                .collect(),
+        };
+        if sessions.is_empty() {
+            return;
+        }
+        let count = sessions.len();
+        let name = folder.file_name().map_or_else(
+            || folder.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        let place = match &host {
+            Some(host) => format!(" on {}", crate::hosts::hosts(cx).read(cx).label(host)),
+            None => String::new(),
+        };
+        let sessions_text = if count == 1 {
+            "its session".to_owned()
+        } else {
+            format!("its {count} sessions")
+        };
+        let description = format!(
+            "This moves {sessions_text} to the trash{place}, so the folder leaves the sidebar. \
+             The folder {} and its files are not touched.",
+            folder.display()
+        );
+        let ok_text = if count == 1 {
+            "Move 1 session to trash".to_owned()
+        } else {
+            format!("Move {count} sessions to trash")
+        };
+        let weak = cx.weak_entity();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let (weak, host, folder, sessions) =
+                (weak.clone(), host.clone(), folder.clone(), sessions.clone());
+            alert
+                .title(format!("Remove “{name}” from the sidebar?"))
+                .description(description.clone())
+                .confirm()
+                .ok_text(ok_text.clone())
+                .ok_variant(component::button::ButtonVariant::Danger)
+                .on_ok(move |_, window, cx| {
+                    let (host, folder, sessions) = (host.clone(), folder.clone(), sessions.clone());
+                    let _ = weak.update(cx, |this, cx| {
+                        this.delete_folder_sessions(host, &folder, sessions, window, cx);
+                    });
+                    true
+                })
+        });
+    }
+
+    fn delete_folder_sessions(
+        &mut self,
+        host: Option<HostId>,
+        folder: &std::path::Path,
+        sessions: Vec<SessionSummary>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let paths: Vec<PathBuf> = sessions.into_iter().map(|session| session.path).collect();
+        let in_folder = |chat: &Entity<ChatView>, cx: &App| {
+            let session = chat.read(cx).session().read(cx);
+            session.host() == host.as_ref()
+                && (session.cwd() == folder
+                    || session
+                        .session_file()
+                        .is_some_and(|file| paths.contains(&file)))
+        };
+        if !self.welcome && in_folder(&self.chat, cx) {
+            self.show_welcome(Mode::Code, window, cx);
+        }
+        self.background.retain(|(chat, _)| !in_folder(chat, cx));
+        match host {
+            Some(host) => {
+                let task = crate::hosts::hosts(cx)
+                    .update(cx, |hosts, cx| hosts.trash_sessions(&host, paths, cx));
+                cx.spawn_in(window, async move |_, cx| {
+                    if let Err(error) = task.await {
+                        let _ = cx.update(|window, cx| {
+                            window.push_notification(
+                                format!("Some sessions could not be moved to the trash: {error}"),
+                                cx,
+                            );
+                        });
+                    }
+                })
+                .detach();
+            }
+            None => {
+                if let Err(error) = trash::delete_all(&paths) {
+                    log::warn!("could not trash sessions of {}: {error}", folder.display());
+                    window.push_notification(
+                        format!("Some sessions could not be moved to the trash: {error}"),
+                        cx,
+                    );
+                }
+                self.sidebar.update(cx, |sidebar, cx| sidebar.refresh(cx));
+            }
+        }
     }
 
     fn delete_session(
@@ -1587,15 +1706,43 @@ fn welcome_menu(
     if !recent.is_empty() {
         menu = menu.label("Recent folders");
         for folder in recent {
-            let short = crate::ui::short_path(&folder, home.as_deref());
+            // Name, then its folder in muted text, cut with an ellipsis: long paths must not
+            // stretch the menu.
+            let (name, parent) = crate::chat::composer::folder_label(&folder, home.as_deref());
             let view = window_view.clone();
             menu = menu.item(
-                component::menu::PopupMenuItem::new(short)
-                    .icon(IconName::Folder)
-                    .on_click(move |_, window, cx| {
-                        let folder = folder.clone();
-                        let _ = view.update(cx, |this, cx| this.new_chat_in(folder, window, cx));
-                    }),
+                component::menu::PopupMenuItem::element(move |_, cx| {
+                    let muted = cx.theme().muted_foreground;
+                    h_flex()
+                        .w_full()
+                        .max_w(px(400.))
+                        .min_w_0()
+                        .gap_2()
+                        .child(
+                            component::Icon::new(IconName::Folder)
+                                .small()
+                                .text_color(muted),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .max_w(px(180.))
+                                .truncate()
+                                .child(name.clone()),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_xs()
+                                .text_color(muted)
+                                .child(parent.clone()),
+                        )
+                })
+                .on_click(move |_, window, cx| {
+                    let folder = folder.clone();
+                    let _ = view.update(cx, |this, cx| this.new_chat_in(folder, window, cx));
+                }),
             );
         }
         menu = menu.separator();

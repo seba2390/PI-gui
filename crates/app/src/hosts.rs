@@ -679,14 +679,32 @@ impl Hosts {
         path: PathBuf,
         cx: &mut Context<Self>,
     ) -> Task<Result<(), String>> {
+        self.trash_sessions(id, vec![path], cx)
+    }
+
+    /// Moves session files on the host to its trash (one round trip each, in the
+    /// background), then refreshes the list. Reports the first failure.
+    pub fn trash_sessions(
+        &mut self,
+        id: &HostId,
+        paths: Vec<PathBuf>,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<(), String>> {
         let Some(ssh) = self.ssh_mut(id) else {
             return Task::ready(Err("Unknown host".to_owned()));
         };
-        let path_text = path.to_string_lossy().into_owned();
+        let texts: Vec<String> = paths
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect();
         if let Some(sessions) = self.sessions.get_mut(id) {
-            sessions.list.retain(|session| session.path != path);
+            sessions
+                .list
+                .retain(|session| !paths.contains(&session.path));
             if let Ok(mut index) = sessions.index.lock() {
-                index.forget(&path_text);
+                for text in &texts {
+                    index.forget(text);
+                }
             }
         }
         cx.emit(HostsEvent::SessionsChanged(id.clone()));
@@ -694,10 +712,18 @@ impl Hosts {
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { ssh.trash(&path_text) })
+                .spawn(async move {
+                    let mut first_error = None;
+                    for text in &texts {
+                        if let Err(error) = ssh.trash(text) {
+                            first_error.get_or_insert(error.to_string());
+                        }
+                    }
+                    first_error.map_or(Ok(()), Err)
+                })
                 .await;
             let _ = this.update(cx, |this, cx| this.refresh_sessions(&id, cx));
-            result.map_err(|error| error.to_string())
+            result
         })
     }
 

@@ -139,6 +139,7 @@ pub fn folder_row(
         None => folder.to_path_buf(),
     };
     let new_in = SidebarEvent::NewInFolder(host.cloned(), folder.to_path_buf());
+    let delete = SidebarEvent::DeleteFolder(host.cloned(), folder.to_path_buf());
     let indented = host.is_some();
     let id = SharedString::from(format!("folder:{}", toggle.display()));
     h_flex()
@@ -223,6 +224,18 @@ pub fn folder_row(
                             window.prevent_default();
                             cx.stop_propagation();
                             cx.emit(new_in.clone());
+                        })),
+                )
+                .child(
+                    Button::new(ElementId::Name(format!("delete-folder:{id}").into()))
+                        .quiet(cx)
+                        .xsmall()
+                        .icon(IconName::Delete)
+                        .tooltip("Move this folder's sessions to the trash")
+                        .on_click(cx.listener(move |_, _, window, cx| {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                            cx.emit(delete.clone());
                         })),
                 ),
         )
