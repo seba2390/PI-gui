@@ -110,6 +110,7 @@ fn render_item(item: &TranscriptItem, cx: &RowContext<'_>, bubble: Hsla) -> AnyE
             .justify_end()
             .child(
                 v_flex()
+                    .min_w_0()
                     .max_w(relative(0.85))
                     .px_4()
                     .py_2p5()
@@ -117,7 +118,15 @@ fn render_item(item: &TranscriptItem, cx: &RowContext<'_>, bubble: Hsla) -> AnyE
                     .bg(bubble)
                     .text_color(cx.foreground)
                     .gap_1()
-                    .child(user.text.clone())
+                    .child(
+                        match cx.chat.markdown(BlockKey {
+                            item: item.id,
+                            block: 0,
+                        }) {
+                            Some(state) => markdown_view(state).into_any_element(),
+                            None => div().child(user.text.clone()).into_any_element(),
+                        },
+                    )
                     .when(user.image_count > 0, |this| {
                         this.child(
                             h_flex()

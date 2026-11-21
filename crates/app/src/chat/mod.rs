@@ -228,11 +228,24 @@ impl ChatView {
         // Only the new suffix of a streamed block is copied (a full copy per delta would make
         // long answers quadratic); `None` source_len means a full (re)load.
         let mut sources: Vec<(BlockKey, Option<usize>, String)> = Vec::new();
+        // User messages: shown as typed, but through a text view so they can be selected.
+        let mut user_texts: Vec<(BlockKey, String)> = Vec::new();
         for (index, item) in items.iter().enumerate() {
             if self.row_versions.get(index) == Some(&item.version) {
                 continue;
             }
             changed_rows.push(index);
+            if let ItemKind::User(user) = &item.kind {
+                let key = BlockKey {
+                    item: item.id,
+                    block: 0,
+                };
+                if self.markdown.get(&key).map(|markdown| markdown.source_len)
+                    != Some(user.text.len())
+                {
+                    user_texts.push((key, user.text.clone()));
+                }
+            }
             if let ItemKind::Assistant(assistant) = &item.kind {
                 for (block_index, block) in assistant.blocks.iter().enumerate() {
                     if let BlockKind::Text(text) = &block.kind {
@@ -271,6 +284,28 @@ impl ChatView {
                 }
                 (None, _) => {
                     let state = cx.new(|cx| TextViewState::markdown(&text, cx).selectable(true));
+                    self.markdown.insert(
+                        key,
+                        Markdown {
+                            state,
+                            source_len: text.len(),
+                        },
+                    );
+                }
+            }
+        }
+
+        for (key, text) in user_texts {
+            let source = literal_markdown(&text);
+            match self.markdown.get_mut(&key) {
+                Some(markdown) => {
+                    markdown
+                        .state
+                        .update(cx, |state, cx| state.set_text(&source, cx));
+                    markdown.source_len = text.len();
+                }
+                None => {
+                    let state = cx.new(|cx| TextViewState::markdown(&source, cx).selectable(true));
                     self.markdown.insert(
                         key,
                         Markdown {
@@ -544,6 +579,40 @@ impl Render for ChatView {
     }
 }
 
+/// Markdown that renders `text` exactly as typed: punctuation is escaped (no emphasis, links,
+/// headings or math), line breaks are kept, and leading indentation stays text instead of
+/// becoming a code block. Copying the rendered text gives the original back.
+fn literal_markdown(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out = String::with_capacity(text.len() + text.len() / 4);
+    for (index, line) in lines.iter().enumerate() {
+        if line.trim().is_empty() {
+            out.push('\n');
+            continue;
+        }
+        let body = line.trim_start();
+        for c in line[..line.len() - body.len()].chars() {
+            out.push_str(if c == '\t' {
+                "&#32;&#32;&#32;&#32;"
+            } else {
+                "&#32;"
+            });
+        }
+        for c in body.trim_end().chars() {
+            if c.is_ascii_punctuation() {
+                out.push('\\');
+            }
+            out.push(c);
+        }
+        // A trailing backslash is a hard line break, unless the paragraph ends here.
+        let next_is_text = lines
+            .get(index + 1)
+            .is_some_and(|next| !next.trim().is_empty());
+        out.push_str(if next_is_text { "\\\n" } else { "\n" });
+    }
+    out
+}
+
 /// Renders a markdown view for `state` (helper so rows stay declarative). Fenced code blocks
 /// get their language label and a copy button in the top-right corner.
 pub(crate) fn markdown_view(state: &Entity<TextViewState>) -> TextView {
@@ -560,4 +629,22 @@ pub(crate) fn markdown_view(state: &Entity<TextViewState>) -> TextView {
                 )
                 .child(crate::ui::CopyButton::new("copy", block.code()).tooltip("Copy code"))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::literal_markdown;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn user_text_renders_literally() {
+        assert_eq!(
+            literal_markdown("tell me something funny"),
+            "tell me something funny\n"
+        );
+        assert_eq!(
+            literal_markdown("# not a *heading* [x](y) $5\n    indented\n\nnext"),
+            "\\# not a \\*heading\\* \\[x\\]\\(y\\) \\$5\\\n&#32;&#32;&#32;&#32;indented\n\nnext\n"
+        );
+    }
 }
