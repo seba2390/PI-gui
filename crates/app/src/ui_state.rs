@@ -1,8 +1,9 @@
-//! Small pieces of UI state remembered across launches: the sidebar mode and which Code
-//! folders are collapsed. Stored as JSON next to the chat folder
+//! Small pieces of UI state remembered across launches: the sidebar mode, which Code
+//! folders are collapsed, and the conversation last open in each mode (so a session on an SSH
+//! host comes back after a restart). Stored as JSON next to the chat folder
 //! (`<agent dir>/pi-gui/state.json`), written off the UI thread whenever it changes.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use gpui_kit::{App, Global};
@@ -13,8 +14,34 @@ use serde::{Deserialize, Serialize};
 #[serde(default)]
 pub struct UiState {
     pub mode: Mode,
-    /// Code-mode folders whose session list is collapsed.
+    /// Code-mode folders whose session list is collapsed. Folders and hosts on SSH hosts
+    /// use keys from [`remote_key`].
     pub collapsed: BTreeSet<PathBuf>,
+    /// The conversation last shown in each mode.
+    pub last_sessions: HashMap<Mode, LastSession>,
+}
+
+/// A conversation to come back to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LastSession {
+    /// pi's session file (a path on `host` for remote sessions).
+    pub file: PathBuf,
+    /// The saved SSH host it runs on; `None` for this computer.
+    #[serde(default)]
+    pub host: Option<String>,
+    /// Its working folder (on `host`).
+    #[serde(default)]
+    pub folder: Option<PathBuf>,
+}
+
+/// The key under which a remote host (`folder: None`) or a folder on it is remembered as
+/// collapsed: `ssh://<host id><folder>`, which can never clash with a local absolute path.
+pub fn remote_key(host: &str, folder: Option<&Path>) -> PathBuf {
+    let mut key = format!("ssh://{host}");
+    if let Some(folder) = folder {
+        key.push_str(&folder.to_string_lossy());
+    }
+    PathBuf::from(key)
 }
 
 impl Global for UiState {}
@@ -55,7 +82,10 @@ impl UiState {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        let tmp = path.with_extension("json.tmp");
+        // A temp name of its own per write: saves can overlap (they run in the background).
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = path.with_extension(format!("json.{}-{n}.tmp", std::process::id()));
         std::fs::write(
             &tmp,
             serde_json::to_vec_pretty(self).map_err(std::io::Error::other)?,
@@ -68,6 +98,7 @@ impl UiState {
 mod tests {
     use super::UiState;
     use pi_sessions::Mode;
+    use std::path::Path;
 
     #[test]
     fn round_trips_and_tolerates_missing_or_partial_files() {
@@ -77,7 +108,22 @@ mod tests {
 
         let state = UiState {
             mode: Mode::Chat,
-            collapsed: ["/a".into()].into_iter().collect(),
+            collapsed: [
+                "/a".into(),
+                super::remote_key("box", Some(Path::new("/srv"))),
+            ]
+            .into_iter()
+            .collect(),
+            last_sessions: [(
+                Mode::Code,
+                super::LastSession {
+                    file: "/home/me/.pi/agent/sessions/--srv--/s.jsonl".into(),
+                    host: Some("box".into()),
+                    folder: Some("/srv".into()),
+                },
+            )]
+            .into_iter()
+            .collect(),
         };
         state.write(&path).unwrap();
         assert_eq!(UiState::load(Some(&path)), state);

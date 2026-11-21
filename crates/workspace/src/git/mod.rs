@@ -12,10 +12,13 @@ mod status;
 use std::io;
 use std::path::{Path, PathBuf};
 
-pub use diff::{TRUNCATION_MARKER, change_diff, file_diff, full_diff};
-pub use status::status;
+pub use diff::{
+    TRUNCATION_MARKER, change_diff, change_diff_at, file_diff, file_diff_at, full_diff,
+    full_diff_at,
+};
+pub use status::{status, status_at};
 
-use crate::WorkspaceError;
+use crate::{Location, WorkspaceError};
 
 /// Snapshot of a repository's working-tree state.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,8 +113,8 @@ pub(crate) struct Head {
 }
 
 /// Finds the work tree containing `cwd`. `Ok(None)` when `cwd` is not inside a work tree.
-pub(crate) fn discover(cwd: &Path) -> Result<Option<Head>, WorkspaceError> {
-    if !cwd.is_dir() {
+pub(crate) fn discover(loc: &Location, cwd: &Path) -> Result<Option<Head>, WorkspaceError> {
+    if loc.is_local() && !cwd.is_dir() {
         // Spawning in a missing directory would otherwise look like "git not found".
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
@@ -120,6 +123,7 @@ pub(crate) fn discover(cwd: &Path) -> Result<Option<Head>, WorkspaceError> {
         .into());
     }
     let output = command::run(
+        loc,
         cwd,
         [
             "rev-parse",
@@ -147,16 +151,20 @@ pub(crate) fn discover(cwd: &Path) -> Result<Option<Head>, WorkspaceError> {
 }
 
 /// Like [`discover`], but not being in a repository is an error.
-pub(crate) fn discover_required(cwd: &Path) -> Result<Head, WorkspaceError> {
-    discover(cwd)?.ok_or_else(|| WorkspaceError::NotARepo(cwd.to_path_buf()))
+pub(crate) fn discover_required(loc: &Location, cwd: &Path) -> Result<Head, WorkspaceError> {
+    discover(loc, cwd)?.ok_or_else(|| WorkspaceError::NotARepo(cwd.to_path_buf()))
 }
 
 /// The tree to diff the working tree against: `HEAD`, or the empty tree when there are no
 /// commits yet (computed, so SHA-256 repositories work too).
-pub(crate) fn diff_base(root: &Path, has_commits: bool) -> Result<String, WorkspaceError> {
+pub(crate) fn diff_base(
+    loc: &Location,
+    root: &Path,
+    has_commits: bool,
+) -> Result<String, WorkspaceError> {
     if has_commits {
         return Ok("HEAD".to_owned());
     }
-    let out = command::run_ok(root, ["hash-object", "-t", "tree", "--stdin"], &[0])?;
+    let out = command::run_ok(loc, root, ["hash-object", "-t", "tree", "--stdin"], &[0])?;
     Ok(String::from_utf8_lossy(&out).trim().to_owned())
 }

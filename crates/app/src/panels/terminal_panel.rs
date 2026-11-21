@@ -58,8 +58,18 @@ enum Drag {
     Reporting(ReportButton),
 }
 
+/// A terminal on an SSH host: the local `ssh -t …` that runs the remote login shell.
+struct RemoteShell {
+    host: remote::HostId,
+    label: String,
+    program: PathBuf,
+    args: Vec<String>,
+}
+
 pub struct TerminalPanel {
+    /// The shell's folder (a path on the host for a remote terminal).
     cwd: PathBuf,
+    remote: Option<RemoteShell>,
     focus_handle: FocusHandle,
     state: State,
     /// Latest viewport copy; shared with the paint closure. Refilled in place (no allocation).
@@ -84,13 +94,38 @@ impl EventEmitter<TerminalPanelEvent> for TerminalPanel {}
 
 impl TerminalPanel {
     pub fn new(cwd: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self::with_shell(cwd, None, window, cx)
+        Self::with_shell(cwd, None, None, window, cx)
+    }
+
+    /// A terminal on SSH host `host` (shown as `label`) in `cwd` there, through the host's
+    /// shared connection. With `command`, the remote login shell runs it first.
+    pub fn remote(
+        host: remote::HostId,
+        label: String,
+        ssh: &remote::Ssh,
+        cwd: PathBuf,
+        command: Option<&str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let (program, args) = ssh.terminal_command(&cwd.to_string_lossy(), command);
+        let remote = RemoteShell {
+            host,
+            label,
+            program,
+            args: args
+                .iter()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect(),
+        };
+        Self::with_shell(cwd, None, Some(remote), window, cx)
     }
 
     /// Like [`new`](Self::new) with an explicit shell instead of the user's login shell.
     fn with_shell(
         cwd: PathBuf,
         shell: Option<PathBuf>,
+        remote: Option<RemoteShell>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -105,6 +140,7 @@ impl TerminalPanel {
         ];
         let mut this = Self {
             cwd,
+            remote,
             focus_handle,
             state: State::Failed(SharedString::default()),
             snapshot: Rc::default(),
@@ -127,9 +163,31 @@ impl TerminalPanel {
         &self.cwd
     }
 
+    /// The SSH host this terminal runs on (`None`: this computer).
+    pub fn host(&self) -> Option<&remote::HostId> {
+        self.remote.as_ref().map(|remote| &remote.host)
+    }
+
     fn spawn(&mut self, shell: Option<PathBuf>, cx: &mut Context<Self>) {
-        let mut config = TerminalConfig::new(&self.cwd);
-        config.shell = shell;
+        let mut config = match &self.remote {
+            // The local ssh client only needs some existing folder.
+            Some(remote) => {
+                let mut config = TerminalConfig::new(
+                    cx.global::<AppConfig>()
+                        .home
+                        .clone()
+                        .unwrap_or_else(std::env::temp_dir),
+                );
+                config.shell = Some(remote.program.clone());
+                config.args.clone_from(&remote.args);
+                config
+            }
+            None => {
+                let mut config = TerminalConfig::new(&self.cwd);
+                config.shell = shell;
+                config
+            }
+        };
         config.palette = colors::for_mode(cx.theme().mode.is_dark());
         config.env = cx
             .global::<AppConfig>()
@@ -381,7 +439,10 @@ impl TerminalPanel {
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = cx.theme();
         let home = cx.global::<AppConfig>().home.clone();
-        let folder = crate::ui::short_path(&self.cwd, home.as_deref());
+        let folder = match &self.remote {
+            Some(remote) => format!("{}:{}", remote.label, self.cwd.display()),
+            None => crate::ui::short_path(&self.cwd, home.as_deref()),
+        };
         h_flex()
             .h(HEADER_HEIGHT)
             .flex_none()
@@ -653,7 +714,7 @@ mod tests {
         });
         let dir = std::env::temp_dir();
         let (panel, cx) = cx.add_window_view(|window, cx| {
-            TerminalPanel::with_shell(dir, Some("/bin/sh".into()), window, cx)
+            TerminalPanel::with_shell(dir, Some("/bin/sh".into()), None, window, cx)
         });
         cx.update(|window, cx| {
             let focus = panel.read(cx).focus_handle(cx);

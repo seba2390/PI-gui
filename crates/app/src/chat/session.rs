@@ -95,10 +95,8 @@ impl PiSession {
             let hosts = cx.try_global::<crate::hosts::HostsHandle>()?.0.read(cx);
             let mut saved = hosts.get(id).cloned()?;
             // Prefer the exact path the probe found (conda / nvm installs may only be on an
-            // interactive shell's PATH).
-            if let Some(path) = hosts.probe(id).and_then(|probe| probe.pi_path.clone()) {
-                saved.pi_command = Some(path);
-            }
+            // interactive shell's PATH; pi-gui's own install is not on PATH at all).
+            saved.pi_command = hosts.pi_command(id);
             Some(saved)
         });
         let (options, mode) = spawn_options(&config, &cwd, session_file.as_deref(), saved.as_ref());
@@ -188,10 +186,15 @@ impl PiSession {
         self.host.as_ref()
     }
 
-    /// A Code session on this computer: the only kind with local folder tools (terminal,
-    /// diff, files, local file picker) for now.
+    /// A Code session on this computer (its folder is a local path).
     pub fn is_local_code(&self) -> bool {
         self.host.is_none() && self.mode == Mode::Code
+    }
+
+    /// A Code session, here or on an SSH host: it has a project folder, so the terminal,
+    /// diff and files panels and the file picker apply.
+    pub fn has_folder_tools(&self) -> bool {
+        self.mode == Mode::Code
     }
 
     /// Chat sessions have no tools and no project folder.
@@ -797,6 +800,122 @@ mod tests {
         );
         // The local ssh client runs in an existing local folder, not the remote path.
         assert_ne!(options.cwd, folder);
+    }
+
+    /// End to end on a real SSH host with real pi (e.g. after `remote`'s `live_install`):
+    /// pi is started through the same launch path as a remote session, runs a shell command
+    /// on the host through pi's RPC, its session file is listed from the host, and the
+    /// session resumes with its history. No model is needed.
+    /// `PI_GUI_SSH_TEST_HOST=<alias> cargo test -p pi-gui -- --ignored real_pi_over_ssh`
+    #[test]
+    #[ignore = "runs pi on PI_GUI_SSH_TEST_HOST"]
+    fn real_pi_over_ssh() {
+        use futures::executor::block_on;
+        let Ok(alias) = std::env::var("PI_GUI_SSH_TEST_HOST") else {
+            return;
+        };
+        let ssh = remote::Ssh::new(remote::Target::Alias {
+            alias: alias.clone(),
+        });
+        ssh.connect(false).expect("connect");
+        let probe = ssh.probe("pi").expect("probe");
+        let pi = probe.pi_path.expect("pi is installed on the host");
+        // A scratch folder with a project, a pi settings folder whose only model is a dummy
+        // that refuses connections (so pi records an error reply without any real model or
+        // key), and a custom pi command (a wrapper) that points pi at those settings.
+        let scratch = ssh
+            .exec(&format!(
+                "d=$(mktemp -d /tmp/pi-gui-e2e.XXXXXX) && cd \"$d\" && mkdir -p proj agent && \
+                 (cd proj && git init -q) && \
+                 printf '%s' '{{\"providers\":{{\"dummy\":{{\"baseUrl\":\"http://127.0.0.1:9/v1\",\"api\":\"openai-completions\",\"apiKey\":\"none\",\"models\":[{{\"id\":\"none\",\"name\":\"None\"}}]}}}}}}' > agent/models.json && \
+                 printf '%s' '{{\"defaultProvider\":\"dummy\",\"defaultModel\":\"none\"}}' > agent/settings.json && \
+                 printf '#!/bin/sh\\nPI_CODING_AGENT_DIR=%s/agent\\nexport PI_CODING_AGENT_DIR\\nexec %s \"$@\"\\n' \"$d\" {} > pi && chmod 755 pi && pwd -P",
+                remote::sh_quote(&pi)
+            ))
+            .expect("scratch folder")
+            .trim()
+            .to_owned();
+        let folder = format!("{scratch}/proj");
+        let host = remote::SavedHost {
+            id: remote::HostId("e2e".into()),
+            label: alias,
+            target: ssh.target().clone(),
+            pi_command: Some(format!("{scratch}/pi")),
+            recent_folders: Vec::new(),
+        };
+        let config = AppConfig::for_tests("pi".into());
+        let (options, mode) =
+            super::spawn_options(&config, std::path::Path::new(&folder), None, Some(&host));
+        assert_eq!(mode, super::Mode::Code);
+        let (process, events) = pi_rpc::PiProcess::spawn(&options).expect("spawn pi over ssh");
+        let client = process.client().clone();
+        let state = block_on(client.get_state()).expect("get_state");
+        eprintln!(
+            "remote pi state: session {:?} file {:?}",
+            state.session_id, state.session_file
+        );
+        let response = block_on(client.request(pi_rpc::protocol::Command::Bash {
+            command: "printf e2e > made-by-pi.txt && pwd -P".into(),
+            exclude_from_context: false,
+        }))
+        .expect("bash through pi");
+        let result: pi_rpc::protocol::BashResult =
+            serde_json::from_value(response.data.unwrap_or_default()).unwrap_or_default();
+        eprintln!("bash: {:?} exit {:?}", result.output, result.exit_code);
+        assert_eq!(result.output.trim(), folder);
+        assert!(ssh.exists(&format!("{folder}/made-by-pi.txt")).unwrap());
+
+        // A prompt: the dummy model fails, and pi records the turn (and writes its file).
+        block_on(client.prompt("hello from the e2e test".into(), Vec::new(), None))
+            .expect("prompt accepted");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let mut settled = false;
+        while std::time::Instant::now() < deadline {
+            match block_on(events.recv()) {
+                Ok(pi_rpc::ClientEvent::Event(event)) => {
+                    if matches!(*event, pi_rpc::protocol::Event::AgentSettled { .. }) {
+                        settled = true;
+                        break;
+                    }
+                }
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+        assert!(settled, "the turn settles");
+        let file = block_on(client.get_state())
+            .expect("state")
+            .session_file
+            .expect("pi reports its session file");
+        drop(process);
+
+        // The sidebar's listing of the host finds it (pi writes it once there is history).
+        let mut index = remote::SessionIndex::default();
+        let sessions = index
+            .refresh(&ssh, &format!("{scratch}/agent/sessions"))
+            .expect("list sessions");
+        eprintln!("sessions on the host: {}", sessions.len());
+        let listed = sessions
+            .iter()
+            .find(|session| session.path == std::path::Path::new(&file));
+        eprintln!("listed: {listed:?}");
+
+        // Resume it: the history comes back.
+        let (options, _) = super::spawn_options(
+            &config,
+            std::path::Path::new(&folder),
+            Some(std::path::Path::new(&file)),
+            Some(&host),
+        );
+        let (process, _events) = pi_rpc::PiProcess::spawn(&options).expect("resume");
+        let messages = block_on(process.client().get_messages()).expect("messages");
+        eprintln!("resumed with {} messages", messages.len());
+        drop(process);
+        let _ = ssh.exec(&format!("rm -rf {}", remote::sh_quote(&scratch)));
+        let listed = listed.expect("the session is listed from the host");
+        assert_eq!(listed.title(), "hello from the e2e test");
+        assert_eq!(listed.cwd, std::path::Path::new(&folder));
+        assert!(!messages.is_empty(), "the resumed session has its history");
     }
 
     use gpui_kit::{AppContext as _, TestAppContext};

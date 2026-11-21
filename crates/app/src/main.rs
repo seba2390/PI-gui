@@ -20,6 +20,11 @@ mod window;
 use gpui_kit::*;
 
 fn main() {
+    // Started by ssh as its askpass program (a password or passphrase prompt): hand the
+    // question to the running app and exit, before any UI starts.
+    if let Some(code) = remote::askpass::run_client_if_requested() {
+        std::process::exit(code);
+    }
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn,pi_gui=info"))
         .init();
 

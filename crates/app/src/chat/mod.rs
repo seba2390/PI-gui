@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use gpui_kit::component::message_scroller::{MessageScroller, MessageScrollerState};
 use gpui_kit::component::text::{TextView, TextViewState};
-use gpui_kit::component::{ActiveTheme as _, WindowExt as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Sizable as _, WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use transcript::{BlockKind, ItemId, ItemKind};
@@ -60,8 +60,12 @@ pub enum ChatEvent {
     SessionChanged,
     /// Folder / device choices from the composer, handled by the window.
     Composer(ComposerEvent),
+    /// The session runs on an SSH host and ended (e.g. the connection dropped): connect again
+    /// and resume it.
+    Reconnect,
 }
 
+#[allow(clippy::struct_excessive_bools)] // independent view flags
 pub struct ChatView {
     session: Entity<PiSession>,
     composer: Entity<Composer>,
@@ -79,6 +83,8 @@ pub struct ChatView {
     ticker: Option<Task<()>>,
     /// Advances every [`SPINNER_FRAME`] while the agent works.
     spinner_frame: usize,
+    /// The host was re-checked after this remote session ended.
+    checked_host: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -97,6 +103,12 @@ impl ChatView {
         let scroller = cx.new(|cx| MessageScrollerState::new(0, cx));
 
         let subscriptions = vec![
+            // The reconnect banner shows the host's live status.
+            cx.observe(&crate::hosts::hosts(cx), |this, _, cx| {
+                if this.session.read(cx).host().is_some() {
+                    cx.notify();
+                }
+            }),
             cx.subscribe_in(&session, window, Self::on_session_event),
             cx.subscribe(&composer, |_, _, event: &ComposerEvent, cx| {
                 cx.emit(ChatEvent::Composer(event.clone()));
@@ -117,6 +129,7 @@ impl ChatView {
             focus_handle: cx.focus_handle(),
             ticker: None,
             spinner_frame: 0,
+            checked_host: false,
             _subscriptions: subscriptions,
         };
         this.sync(cx);
@@ -146,7 +159,18 @@ impl ChatView {
     ) {
         match event {
             SessionEvent::TranscriptChanged => self.sync(cx),
-            SessionEvent::MetaChanged => cx.notify(),
+            SessionEvent::MetaChanged => {
+                let session = self.session.read(cx);
+                if let (Some(host), session::Lifecycle::Exited { .. }) =
+                    (session.host().cloned(), session.lifecycle())
+                    && !self.checked_host
+                {
+                    self.checked_host = true;
+                    crate::hosts::hosts(cx)
+                        .update(cx, |hosts, cx| hosts.check_connection(&host, cx));
+                }
+                cx.notify();
+            }
             SessionEvent::SessionFileChanged | SessionEvent::Settled => {
                 self.sync(cx);
                 cx.emit(ChatEvent::SessionChanged);
@@ -390,6 +414,64 @@ impl ChatView {
     }
 }
 
+impl ChatView {
+    /// For a session on an SSH host that ended: what happened and a Reconnect button.
+    fn render_reconnect(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let session = self.session.read(cx);
+        let host = session.host()?;
+        if !matches!(session.lifecycle(), session::Lifecycle::Exited { .. }) {
+            return None;
+        }
+        let hosts = crate::hosts::hosts(cx);
+        let hosts = hosts.read(cx);
+        let label = hosts.label(host);
+        let status = hosts.status(host);
+        let resumable = session.session_file().is_some();
+        let text = if status.is_connected() {
+            format!("pi stopped on {label}.")
+        } else {
+            format!("The connection to {label} was lost.")
+        };
+        let theme = cx.theme();
+        let (muted, border) = (theme.muted_foreground, theme.border);
+        Some(
+            h_flex()
+                .w_full()
+                .gap_2()
+                .mb_2()
+                .px_3()
+                .py_2()
+                .rounded_lg()
+                .border_1()
+                .border_color(border)
+                .child(crate::remote_ui::status_dot(Some(&status), cx))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_sm()
+                        .text_color(muted)
+                        .child(if resumable {
+                            format!("{text} Reconnect to continue this session.")
+                        } else {
+                            text
+                        }),
+                )
+                .child(
+                    component::button::Button::new("reconnect")
+                        .small()
+                        .label(if status.is_busy() {
+                            "Connecting…"
+                        } else {
+                            "Reconnect"
+                        })
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(ChatEvent::Reconnect))),
+                )
+                .into_any_element(),
+        )
+    }
+}
+
 impl Focusable for ChatView {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -434,6 +516,7 @@ impl Render for ChatView {
                     div()
                         .w_full()
                         .max_w(CONTENT_MAX_WIDTH + px(32.))
+                        .children(self.render_reconnect(cx))
                         .child(self.composer.clone()),
                 ),
             )

@@ -254,6 +254,10 @@ pub struct Resolved {
 pub(crate) struct ResolvedFull {
     pub resolved: Resolved,
     pub proxied: bool,
+    /// `HostKeyAlias`: the name the host key is recorded under instead of the host name.
+    pub host_key_alias: Option<String>,
+    /// The first `UserKnownHostsFile` (tilde not expanded).
+    pub known_hosts: Option<String>,
 }
 
 /// Asks `ssh -G` (which evaluates the config without connecting) for the hostname, user and
@@ -278,6 +282,8 @@ pub(crate) fn parse_ssh_g(text: &str) -> Result<ResolvedFull, RemoteError> {
     let mut user = None;
     let mut port = 22;
     let mut proxied = false;
+    let mut host_key_alias = None;
+    let mut known_hosts = None;
     for line in text.lines() {
         let Some((key, value)) = line.split_once(' ') else {
             continue;
@@ -288,6 +294,12 @@ pub(crate) fn parse_ssh_g(text: &str) -> Result<ResolvedFull, RemoteError> {
             "user" => user = Some(value.to_owned()).filter(|user| !user.is_empty()),
             "port" => port = value.parse().unwrap_or(22),
             "proxyjump" | "proxycommand" => proxied |= value != "none",
+            "hostkeyalias" => {
+                host_key_alias = Some(value.to_owned()).filter(|alias| alias != "none");
+            }
+            "userknownhostsfile" => {
+                known_hosts = value.split_whitespace().next().map(str::to_owned);
+            }
             _ => {}
         }
     }
@@ -300,6 +312,8 @@ pub(crate) fn parse_ssh_g(text: &str) -> Result<ResolvedFull, RemoteError> {
             port,
         },
         proxied,
+        host_key_alias,
+        known_hosts,
     })
 }
 
@@ -404,7 +418,8 @@ Match host foo
     #[test]
     fn parses_ssh_g_output() {
         let text = "host spark\nuser alice\nhostname dgx.example.com\nport 2222\n\
-                    proxycommand none\naddressfamily any\n";
+                    proxycommand none\naddressfamily any\nhostkeyalias none\n\
+                    userknownhostsfile ~/.ssh/known_hosts ~/.ssh/known_hosts2\n";
         let full = parse_ssh_g(text).unwrap();
         assert_eq!(
             full,
@@ -415,6 +430,8 @@ Match host foo
                     port: 2222,
                 },
                 proxied: false,
+                host_key_alias: None,
+                known_hosts: Some("~/.ssh/known_hosts".into()),
             }
         );
         let jumped = parse_ssh_g("hostname h\nport 22\nproxyjump bastion\n").unwrap();

@@ -85,6 +85,8 @@ impl Colors {
 
 pub struct DiffView {
     cwd: PathBuf,
+    /// Where the folder lives (this computer or an SSH host).
+    location: workspace::Location,
     model: DiffModel,
     /// Row heights for the virtual list, rebuilt whenever the rows change.
     sizes: Rc<Vec<Size<Pixels>>>,
@@ -98,9 +100,10 @@ pub struct DiffView {
 
 impl DiffView {
     /// Creates the view without loading anything; call [`Self::refresh`].
-    pub fn new(cwd: PathBuf) -> Self {
+    pub fn new(cwd: PathBuf, location: workspace::Location) -> Self {
         Self {
             cwd,
+            location,
             model: DiffModel::default(),
             sizes: Rc::default(),
             scroll: VirtualListScrollHandle::new(),
@@ -115,8 +118,8 @@ impl DiffView {
     }
 
     /// Switches to another folder, dropping all state and loads in flight.
-    pub fn set_cwd(&mut self, cwd: PathBuf, cx: &mut Context<Self>) {
-        *self = Self::new(cwd);
+    pub fn set_cwd(&mut self, cwd: PathBuf, location: workspace::Location, cx: &mut Context<Self>) {
+        *self = Self::new(cwd, location);
         cx.notify();
     }
 
@@ -127,11 +130,12 @@ impl DiffView {
             return;
         }
         let cwd = self.cwd.clone();
+        let location = self.location.clone();
         self.status_task = Some(cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    workspace::git::status(&cwd)
+                    workspace::git::status_at(&location, &cwd)
                         .map(|repo| repo.map(LoadedStatus::new))
                         .map_err(|error| error.to_string())
                 })
@@ -183,11 +187,12 @@ impl DiffView {
             return;
         };
         let key = path.clone();
+        let location = self.location.clone();
         let task = cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    workspace::git::change_diff(&request.repo, &request.change)
+                    workspace::git::change_diff_at(&location, &request.repo, &request.change)
                         .map(|patch| ParsedDiff::parse(&patch, diff_lines::MAX_LINES))
                         .map_err(|error| error.to_string())
                 })

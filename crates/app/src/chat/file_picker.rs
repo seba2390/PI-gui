@@ -33,6 +33,8 @@ type OnPick = Rc<dyn Fn(Pick, &mut Window, &mut App)>;
 
 pub struct FilePicker {
     root: PathBuf,
+    /// Where `root` lives (this computer or an SSH host).
+    location: workspace::Location,
     files: Arc<Vec<String>>,
     /// Indices into `files`, best match first.
     matches: Vec<usize>,
@@ -44,9 +46,14 @@ pub struct FilePicker {
 }
 
 impl FilePicker {
-    pub fn new(root: PathBuf, on_pick: impl Fn(Pick, &mut Window, &mut App) + 'static) -> Self {
+    pub fn new(
+        root: PathBuf,
+        location: workspace::Location,
+        on_pick: impl Fn(Pick, &mut Window, &mut App) + 'static,
+    ) -> Self {
         Self {
             root,
+            location,
             files: Arc::default(),
             matches: Vec::new(),
             query: String::new(),
@@ -73,11 +80,12 @@ impl FilePicker {
 /// Loads the index for `picker`'s folder on a background thread.
 pub fn refresh_index(picker: &Entity<ListState<FilePicker>>, cx: &mut App) {
     let root = picker.read(cx).delegate().root.clone();
+    let location = picker.read(cx).delegate().location.clone();
     let picker = picker.downgrade();
     cx.spawn(async move |cx| {
         let (files, truncated) = cx
             .background_executor()
-            .spawn(async move { workspace::files::list_files(&root, INDEX_LIMIT) })
+            .spawn(async move { workspace::files::list_files_at(&location, &root, INDEX_LIMIT) })
             .await;
         let _ = picker.update(cx, |state, cx| {
             state.delegate_mut().set_files(files, truncated);

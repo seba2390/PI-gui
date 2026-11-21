@@ -19,11 +19,10 @@ pub enum RemoteError {
     )]
     HostKeyChanged,
 
-    /// The server refused every key on offer. Batch mode rules out password and passphrase
-    /// prompts, so the key must be usable without one. Holds ssh's own message.
+    /// The server accepted none of the keys or passwords on offer. Holds ssh's own message.
     #[error(
-        "Authentication failed. Use a key without a passphrase, or add it to ssh-agent \
-         (ssh-add --apple-use-keychain <key>)."
+        "Authentication failed: the server accepted none of your keys or passwords. Connect \
+         again to enter a password or key passphrase."
     )]
     AuthFailed(String),
 
@@ -160,7 +159,7 @@ Host key verification failed.
             detail,
             "me@dgx.example.com: Permission denied (publickey,password)."
         );
-        assert!(error.to_string().starts_with("Authentication failed."));
+        assert!(error.to_string().starts_with("Authentication failed:"));
 
         assert!(matches!(
             classify(

@@ -3,7 +3,9 @@
 //! The list comes from pi's session files (read-only, via `pi-sessions`) and is refreshed by
 //! a filesystem watcher, so sessions created by the terminal `pi` appear here too. Chat mode
 //! lists chats by date; Code mode groups sessions under their working folder, with groups that
-//! can be collapsed (remembered in [`UiState`]).
+//! can be collapsed (remembered in [`UiState`]). Below them, Code mode lists each saved SSH
+//! host's sessions (fetched over the host's shared connection by [`crate::hosts`]), grouped by
+//! host and then folder, with the host's status dot on its header.
 
 mod rows;
 
@@ -16,6 +18,7 @@ use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use pi_sessions::{Mode, SessionSummary};
+use remote::HostId;
 
 use crate::config::{AppConfig, RECENT_FOLDERS, RecentFolders};
 use crate::theme::palette;
@@ -23,24 +26,28 @@ use crate::ui::QuietButton as _;
 use crate::ui::{AppIcon, TOP_BAR_HEIGHT, TRAFFIC_LIGHT_INSET, WindowDrag};
 use crate::ui_state::UiState;
 
+/// Session events carry the SSH host the session lives on (`None`: this computer).
 #[derive(Debug, Clone)]
 pub enum SidebarEvent {
-    Open(SessionSummary),
+    Open(Option<HostId>, SessionSummary),
     /// A new conversation in the current mode.
     NewChat,
     /// A new Code session in this folder.
-    NewInFolder(PathBuf),
+    NewInFolder(Option<HostId>, PathBuf),
     /// The user switched between Chat and Code.
     ModeChanged(Mode),
     Collapse,
-    Delete(SessionSummary),
-    Rename(SessionSummary),
+    Delete(Option<HostId>, SessionSummary),
+    Rename(Option<HostId>, SessionSummary),
+    /// Connect to a host / start a session there (its header's button).
+    ConnectHost(HostId),
 }
 
 pub struct Sidebar {
     mode: Mode,
     sessions: Vec<SessionSummary>,
-    active: Option<PathBuf>,
+    /// The open session: its host (`None`: this computer) and file.
+    active: Option<(Option<HostId>, PathBuf)>,
     filter: Entity<InputState>,
     loaded: bool,
     drag: WindowDrag,
@@ -56,11 +63,15 @@ impl Sidebar {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mode = cx.default_global::<UiState>().mode;
         let filter = cx.new(|cx| InputState::new(window, cx).placeholder(search_placeholder(mode)));
-        let subscriptions = vec![cx.subscribe(&filter, |_, _, event: &InputEvent, cx| {
-            if matches!(event, InputEvent::Change) {
-                cx.notify();
-            }
-        })];
+        let subscriptions = vec![
+            cx.subscribe(&filter, |_, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                }
+            }),
+            // Remote session lists and host status dots.
+            cx.observe(&crate::hosts::hosts(cx), |_, _, cx| cx.notify()),
+        ];
         let mut this = Self {
             mode,
             sessions: Vec::new(),
@@ -117,11 +128,23 @@ impl Sidebar {
         }
     }
 
-    pub fn set_active(&mut self, path: Option<PathBuf>, cx: &mut Context<Self>) {
-        if self.active != path {
-            self.active = path;
+    pub fn set_active(
+        &mut self,
+        path: Option<PathBuf>,
+        host: Option<HostId>,
+        cx: &mut Context<Self>,
+    ) {
+        let active = path.map(|path| (host, path));
+        if self.active != active {
+            self.active = active;
             cx.notify();
         }
+    }
+
+    fn is_active(&self, host: Option<&HostId>, path: &Path) -> bool {
+        self.active
+            .as_ref()
+            .is_some_and(|(active_host, active)| active_host.as_ref() == host && active == path)
     }
 
     /// The summary of a listed session, if known.
@@ -224,6 +247,56 @@ impl Sidebar {
             .collect()
     }
 
+    fn toggle_host(&mut self, host: &HostId, cx: &mut Context<Self>) {
+        let key = crate::ui_state::remote_key(&host.0, None);
+        self.toggle_folder(&key, cx);
+    }
+
+    /// The saved hosts' session groups for Code mode (hosts with nothing to show and no
+    /// connection are left out), as `(host, label, status, sessions matching the search)`.
+    fn remote_groups(
+        &self,
+        cx: &App,
+    ) -> Vec<(
+        HostId,
+        String,
+        crate::hosts::HostStatus,
+        Vec<SessionSummary>,
+    )> {
+        let query = self.filter.read(cx).value().to_lowercase();
+        let hosts = crate::hosts::hosts(cx);
+        let hosts = hosts.read(cx);
+        hosts
+            .hosts()
+            .iter()
+            .filter_map(|host| {
+                let status = hosts.status(&host.id);
+                let all = hosts.sessions(&host.id);
+                if all.is_empty() && !status.is_connected() {
+                    return None;
+                }
+                let matching: Vec<SessionSummary> = all
+                    .iter()
+                    .filter(|session| {
+                        query.is_empty()
+                            || session.title().to_lowercase().contains(&query)
+                            || session
+                                .cwd
+                                .to_string_lossy()
+                                .to_lowercase()
+                                .contains(&query)
+                            || host.label.to_lowercase().contains(&query)
+                    })
+                    .cloned()
+                    .collect();
+                if !query.is_empty() && matching.is_empty() {
+                    return None;
+                }
+                Some((host.id.clone(), host.label.clone(), status, matching))
+            })
+            .collect()
+    }
+
     fn toggle_folder(&mut self, folder: &Path, cx: &mut Context<Self>) {
         let folder = folder.to_path_buf();
         UiState::update(cx, |state| {
@@ -305,8 +378,13 @@ impl Sidebar {
         let searching = !self.filter.read(cx).value().is_empty();
         let sessions = self.visible_sessions(cx);
         let mut list = v_flex().w_full().gap_0p5().px_2().pb_3();
+        let remote = if self.mode == Mode::Code {
+            self.remote_groups(cx)
+        } else {
+            Vec::new()
+        };
 
-        if sessions.is_empty() {
+        if sessions.is_empty() && remote.is_empty() {
             if self.loaded {
                 let text = match (searching, self.mode) {
                     (true, _) => "No matches",
@@ -335,7 +413,7 @@ impl Sidebar {
                                 .child(group),
                         );
                     }
-                    list = list.child(rows::session_row(self, session, false, now, cx));
+                    list = list.child(rows::session_row(self, session, 0, None, now, cx));
                 }
             }
             Mode::Code => {
@@ -348,6 +426,7 @@ impl Sidebar {
                     let open = searching || !collapsed.contains(group.cwd);
                     list = list.child(rows::folder_row(
                         group.cwd,
+                        None,
                         label,
                         group.sessions.len(),
                         open,
@@ -355,8 +434,83 @@ impl Sidebar {
                     ));
                     if open {
                         for session in group.sessions {
-                            list = list.child(rows::session_row(self, session, true, now, cx));
+                            list = list.child(rows::session_row(self, session, 1, None, now, cx));
                         }
+                    }
+                }
+                list = self.render_remote(list, remote, searching, now, cx);
+            }
+        }
+        list
+    }
+
+    /// Appends each SSH host's header, its folders and their sessions.
+    fn render_remote(
+        &self,
+        mut list: Div,
+        remote: Vec<(
+            HostId,
+            String,
+            crate::hosts::HostStatus,
+            Vec<SessionSummary>,
+        )>,
+        searching: bool,
+        now: SystemTime,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let muted = cx.theme().muted_foreground;
+        let collapsed = cx.default_global::<UiState>().collapsed.clone();
+        for (host, label, status, sessions) in remote {
+            let host_open =
+                searching || !collapsed.contains(&crate::ui_state::remote_key(&host.0, None));
+            list = list.child(rows::host_row(
+                &host,
+                label,
+                &status,
+                sessions.len(),
+                host_open,
+                cx,
+            ));
+            if !host_open {
+                continue;
+            }
+            if sessions.is_empty() {
+                let hosts = crate::hosts::hosts(cx);
+                let hosts = hosts.read(cx);
+                let text = match (hosts.sessions_loaded(&host), hosts.sessions_error(&host)) {
+                    (_, Some(error)) => format!("Could not list sessions: {error}"),
+                    (false, None) if status.is_connected() => "Loading sessions…".to_owned(),
+                    _ => "No sessions on this host yet".to_owned(),
+                };
+                list = list.child(
+                    div()
+                        .pl(px(30.))
+                        .py_1()
+                        .text_xs()
+                        .text_color(muted)
+                        .truncate()
+                        .child(text),
+                );
+                continue;
+            }
+            let groups = pi_sessions::group_by_folder(sessions.iter());
+            // Remote paths are never shortened with this computer's home folder.
+            let labels = folder_labels(groups.iter().map(|group| group.cwd), None);
+            for (group, folder_label) in groups.into_iter().zip(labels) {
+                let key = crate::ui_state::remote_key(&host.0, Some(group.cwd));
+                let open = searching || !collapsed.contains(&key);
+                list = list.child(rows::folder_row(
+                    group.cwd,
+                    Some(&host),
+                    folder_label,
+                    group.sessions.len(),
+                    open,
+                    cx,
+                ));
+                if open {
+                    for session in group.sessions {
+                        list =
+                            list.child(rows::session_row(self, session, 2, Some(&host), now, cx));
                     }
                 }
             }

@@ -6,19 +6,29 @@
 //! * [`host`] — saved connections (`<agent dir>/pi-gui/hosts.json`).
 //! * [`ssh`] — talking to one host: a shared (`ControlMaster`) connection, remote shell scripts,
 //!   probing for pi, listing remote folders, and the command line that starts pi remotely.
+//!   Also: installing pi automatically (`Ssh::install_pi`), interactive connections with
+//!   in-app prompts ([`askpass`]), remote terminals, uploads and changed host keys, and the
+//!   [`workspace::RemoteShell`] the diff / files panels run their scripts through.
+//! * [`sessions`] — pi's session files on a host, listed incrementally, and remote trash.
 //!
 //! Everything goes through the system `ssh` binary so the user's `~/.ssh/config`, keys,
 //! `ssh-agent`, `known_hosts` and `ProxyJump` all behave exactly as in a terminal. All functions
 //! are synchronous and may block on process I/O; callers are expected to run them on a
 //! background executor.
 
+pub mod askpass;
 pub mod config;
 mod error;
+mod extras;
 pub mod host;
+mod install;
 mod process;
+pub mod sessions;
 pub mod ssh;
 
+pub use askpass::{AskpassServer, Prompt};
 pub use config::{ConfigHost, Resolved, discover_hosts, parse_config, resolve};
 pub use error::{RemoteError, classify};
 pub use host::{HostId, HostStore, SavedHost, Target};
-pub use ssh::{DirListing, Probe, Ssh, sh_quote};
+pub use sessions::SessionIndex;
+pub use ssh::{DirListing, MANAGED_DIR, Probe, Ssh, remote_word, sh_quote};

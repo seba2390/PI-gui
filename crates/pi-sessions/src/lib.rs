@@ -206,7 +206,43 @@ pub fn recent_folders(sessions: &[SessionSummary], limit: usize) -> Vec<PathBuf>
 pub fn read_summary(path: &Path) -> std::io::Result<Option<SessionSummary>> {
     let modified = fs::metadata(path)?.modified()?;
     let mut lines = BufReader::new(fs::File::open(path)?).lines();
+    let Some(first) = lines.next().transpose()? else {
+        return Ok(None);
+    };
+    let mut info = None;
+    let mut user = None;
+    for line in lines {
+        let line = line?;
+        // Cheap prefilters before parsing; pi writes `type` first.
+        if line.starts_with(SESSION_INFO_PREFIX) {
+            info = Some(line);
+        } else if user.is_none() && line.contains(USER_ROLE) {
+            user = user_prompt(&line);
+        }
+    }
+    let mut summary = summary_from_lines(path, modified, &first, info.as_deref(), None);
+    if let Some(summary) = &mut summary {
+        summary.first_prompt = user;
+    }
+    Ok(summary)
+}
 
+/// Lines starting with this are `session_info` entries (pi writes `type` first).
+pub const SESSION_INFO_PREFIX: &str = r#"{"type":"session_info""#;
+/// Lines containing this may be the first user message.
+pub const USER_ROLE: &str = r#""role":"user""#;
+
+/// Builds a summary from the few lines that matter: the header (first line), the last
+/// `session_info` line, and the first line containing a user message. The user line may be
+/// cut off (remote listings read only its start); its text is then recovered leniently.
+/// `None` if `header` is not a session header.
+pub fn summary_from_lines(
+    path: &Path,
+    modified: SystemTime,
+    header: &str,
+    info: Option<&str>,
+    user: Option<&str>,
+) -> Option<SessionSummary> {
     #[derive(Deserialize)]
     struct Header {
         #[serde(rename = "type")]
@@ -214,42 +250,65 @@ pub fn read_summary(path: &Path) -> std::io::Result<Option<SessionSummary>> {
         id: String,
         cwd: PathBuf,
     }
-    let Some(first) = lines.next().transpose()? else {
-        return Ok(None);
-    };
-    let Ok(header) = serde_json::from_str::<Header>(&first) else {
-        return Ok(None);
-    };
+    #[derive(Deserialize)]
+    struct Info {
+        name: Option<String>,
+    }
+    let header = serde_json::from_str::<Header>(header.trim()).ok()?;
     if header.kind != "session" {
-        return Ok(None);
+        return None;
     }
-
-    let mut name = None;
-    let mut first_prompt = None;
-    for line in lines {
-        let line = line?;
-        // Cheap prefilters before parsing; pi writes `type` first.
-        if line.starts_with(r#"{"type":"session_info""#) {
-            #[derive(Deserialize)]
-            struct Info {
-                name: Option<String>,
-            }
-            if let Ok(info) = serde_json::from_str::<Info>(&line) {
-                name = info.name;
-            }
-        } else if first_prompt.is_none() && line.contains(r#""role":"user""#) {
-            first_prompt = user_prompt(&line);
-        }
-    }
-
-    Ok(Some(SessionSummary {
+    let name = info
+        .and_then(|line| serde_json::from_str::<Info>(line.trim()).ok())
+        .and_then(|info| info.name);
+    let first_prompt = user.and_then(|line| user_prompt(line).or_else(|| truncated_prompt(line)));
+    Some(SessionSummary {
         path: path.to_owned(),
         id: header.id,
         cwd: header.cwd,
         name,
         first_prompt,
         modified,
-    }))
+    })
+}
+
+/// The first text of a user message line that was cut off mid-JSON: the first `"text":"…"`
+/// string after `"content"`, decoded up to where it ends (or where the line was cut).
+fn truncated_prompt(line: &str) -> Option<String> {
+    if !line.contains(USER_ROLE) {
+        return None;
+    }
+    let content = line.find(r#""content":"#)?;
+    let rest = &line[content + 10..];
+    let start = if rest.starts_with('"') {
+        0
+    } else {
+        rest.find(r#""text":""#)? + 7
+    };
+    let body = &rest[start + 1..];
+    // Find the closing quote (skipping escapes); a cut-off string ends where the line ends.
+    let mut end = body.len();
+    let mut escaped = false;
+    for (index, c) in body.char_indices() {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' => escaped = true,
+            '"' => {
+                end = index;
+                break;
+            }
+            _ => {}
+        }
+    }
+    let mut raw = body[..end].to_owned();
+    // Drop a dangling escape left by the cut, then decode as a JSON string.
+    let trailing = raw.len() - raw.trim_end_matches('\\').len();
+    if trailing % 2 == 1 {
+        raw.pop();
+    }
+    let text: String = serde_json::from_str(&format!("\"{raw}\"")).ok()?;
+    let first_line = text.lines().map(str::trim).find(|line| !line.is_empty())?;
+    Some(first_line.chars().take(120).collect())
 }
 
 fn user_prompt(line: &str) -> Option<String> {
@@ -440,6 +499,34 @@ mod tests {
         );
         assert_eq!(groups[0].latest(), sessions[0].modified);
         assert_eq!(group_by_folder(&[]), Vec::new());
+    }
+
+    #[test]
+    fn summaries_from_cut_off_lines() {
+        let header = r#"{"type":"session","version":3,"id":"r","timestamp":"t","cwd":"/srv/app"}"#;
+        let info = r#"{"type":"session_info","id":"1","parentId":null,"timestamp":"t","name":"Remote Fix"}"#;
+        let user = r#"{"type":"message","id":"2","parentId":"1","timestamp":"t","message":{"role":"user","content":[{"type":"text","text":"Fix \"the\" build\nnow"},{"type":"image","data":"AAAA"#;
+        let summary = summary_from_lines(
+            Path::new("/r.jsonl"),
+            SystemTime::UNIX_EPOCH,
+            header,
+            Some(info),
+            Some(user),
+        )
+        .unwrap();
+        assert_eq!(summary.name.as_deref(), Some("Remote Fix"));
+        assert_eq!(summary.first_prompt.as_deref(), Some("Fix \"the\" build"));
+        assert_eq!(summary.cwd, PathBuf::from("/srv/app"));
+
+        // Cut inside the text itself, and right after a backslash.
+        let cut = r#"{"message":{"role":"user","content":[{"type":"text","text":"Hello wor"#;
+        assert_eq!(truncated_prompt(cut).as_deref(), Some("Hello wor"));
+        let cut = r#"{"message":{"role":"user","content":"tab\"#;
+        assert_eq!(truncated_prompt(cut).as_deref(), Some("tab"));
+        assert!(
+            summary_from_lines(Path::new("/x"), SystemTime::UNIX_EPOCH, "junk", None, None)
+                .is_none()
+        );
     }
 
     #[test]

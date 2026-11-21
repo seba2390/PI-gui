@@ -24,12 +24,32 @@ skills and prompt templates all come from your normal pi configuration.
 - **SSH** (Code mode): the device button next to the folder ("This computer", with a status
   light) runs pi on another machine. "Add SSH connection…" lists the hosts in your
   `~/.ssh/config` (following `Include`), or takes a custom host, user, port, key and jump host;
-  connections are saved in `~/.pi/agent/pi-gui/hosts.json`. pi runs **on the remote** (its tools,
-  `AGENTS.md`, skills and sessions all live there) through the system `ssh`, so your config,
-  keys and `known_hosts` apply. One shared connection per host (ControlMaster) makes later
-  commands ~30 ms. Unknown host keys are shown for confirmation first; if pi is missing on the
-  host you get the install command. Keys must work without a password prompt for now
-  (use ssh-agent). Remote sessions do not have the Diff/Files panels or terminal yet.
+  connections are saved in `~/.pi/agent/pi-gui/hosts.json` and "Manage SSH connections…"
+  renames them, changes the command that starts pi, copies your model settings and removes
+  them. pi runs **on the remote** (its tools, `AGENTS.md`, skills and sessions all live there)
+  through the system `ssh`, so your config, keys, ssh-agent and `known_hosts` apply.
+  - One shared connection per host (ControlMaster) makes later commands ~30 ms. Saved hosts
+    connect quietly in the background at startup; the dot shows green (ready), amber (working
+    or needs you), red (failed) or grey (not connected).
+  - **pi is installed automatically** when a host does not have it, like an editor's remote
+    server: into `~/.pi-gui/server` on the host, with no root access, using the host's
+    Node.js 22.19+ or a downloaded, checksum-verified standalone Node.js. Remove that folder
+    to undo it. If the host has no model settings, the connect dialog offers to copy your
+    `models.json` (credentials in `auth.json` only if you tick the box; an existing file is
+    kept as `*.bak-pi-gui`).
+  - Passwords, key passphrases and one-time codes are asked for in the app (ssh's
+    `SSH_ASKPASS`); nothing is stored. Unknown host keys are shown for confirmation; a changed
+    host key is explained, and you can remove the old key and confirm the new one.
+  - The folder browser takes a typed or pasted path, creates folders and can show hidden ones.
+  - Remote sessions behave like local ones: they are listed in the sidebar under the host
+    (then folder), can be opened, renamed and moved to the host's trash, and the last one
+    comes back after a restart. The Diff and Files tabs read git and the folder over SSH
+    (refreshed every 10 s while shown and after each turn), the terminal is your shell on the
+    host in the session's folder, and the attach picker indexes the remote folder.
+  - When the connection drops, the session offers to reconnect and resumes its session file.
+  - Limits: csh/tcsh login shells are not supported (bash, zsh, dash, ksh and fish are; fish
+    is untested on a real host). Windows clients are untested: the `remote` crate uses Unix
+    sockets, and Windows' OpenSSH cannot share connections.
 - Right panel: git changes and a file tree of the working folder.
 - Bottom panel: an integrated terminal in the working folder.
 - macOS and Linux (Windows best-effort). GPU-rendered with [GPUI](https://gpui.rs) via
@@ -83,7 +103,8 @@ crates/
   transcript/   pure reducer: pi events / stored messages → renderable transcript (no UI, no I/O)
   pi-sessions/  read-only index of pi's session files for the sidebar
   workspace/    git status/diff (git CLI) + gitignore-aware file listing + fs watcher
-  remote/       SSH: ~/.ssh/config discovery, saved hosts, shared connections, remote probes
+  remote/       SSH: ~/.ssh/config discovery, saved hosts, shared connections, remote probes,
+                pi auto-install, askpass prompts, remote sessions, the RemoteShell for workspace
   term/         terminal backend: alacritty_terminal + PTY, UI-agnostic snapshots
   app/          the GPUI application (binary `pi-gui`)
 ```
@@ -101,9 +122,11 @@ script/measure-memory.sh          # RSS / footprint of a running instance and it
 script/bundle-macos.sh && script/shot.sh <folder> out.png terminal,diff   # scripted screenshot (macOS)
 ```
 
-`PI_GUI_OPEN=chat|code,terminal,diff,files,no-sidebar,latest,attach,context,add-host,ssh:<alias>` opens those panels (or the
-newest session, the attach picker, the context breakdown) at startup, which is what
-`script/shot.sh` uses for layout checks without driving the mouse.
+`PI_GUI_OPEN=chat|code,terminal,diff,files,no-sidebar,latest,attach,context,add-host,manage-hosts,ssh:<alias>`
+opens those panels (or the newest session, the attach picker, the context breakdown) at
+startup, which is what `script/shot.sh` uses for layout checks without driving the mouse.
+`remote:<alias>:<folder>` (a new session there) and `remote-latest:<alias>` (the host's newest
+session) open a remote session once connected; panels listed after them apply to it.
 
 The app icon is `crates/app/assets/app-icon/icon.svg`; `script/make-icon.sh` regenerates the
 `.icns` (and a 512 px PNG for Linux launchers) from it.
@@ -123,8 +146,13 @@ The app icon is `crates/app/assets/app-icon/icon.svg`; `script/make-icon.sh` reg
 - The terminal repaints only on the emulator's coalesced wakeups and copies just the visible
   viewport into a reused buffer; a hidden terminal costs nothing.
 
-`PI_GUI_SSH_TEST_HOST=<alias> cargo test --workspace -- --ignored` runs the read-only SSH
-tests (including RPC over SSH with a scripted fake pi) against a real host.
+SSH tests against a real host (all `--ignored`, run with `PI_GUI_SSH_TEST_HOST=<alias>`):
+`cargo test -p remote --test live -- --ignored` (connection, probe, quoting, remote git /
+files / sessions / trash in a scratch folder, and `live_install`, which installs pi on the
+host), and `cargo test -p pi-gui -- --ignored` (RPC over SSH with a scripted fake pi, and
+`real_pi_over_ssh`: real pi started the way a remote session is, a shell command through pi, a
+prompt turn, the session listed from the host and resumed). `askpass_prompt_reaches_the_app`
+needs `PI_GUI_SSH_PASSWORD_HOST`, a host that offers password login (it cancels the prompt).
 
 `crates/transcript/tests/fixtures` holds sanitized recordings of real `pi --mode rpc` sessions;
 the replay tests check streaming and history rendering agree.

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use super::parse;
 use super::{ChangeKind, FileChange, RepoStatus, command, diff_base, discover_required};
-use crate::WorkspaceError;
+use crate::{Location, WorkspaceError};
 
 /// First characters of the line [`full_diff`] appends when its output was cut off.
 pub const TRUNCATION_MARKER: &str = "[diff truncated:";
@@ -32,13 +32,23 @@ const NO_INDEX_OK: &[i32] = &[0, 1];
 /// This costs three or four git invocations because it has to look the file up first; when a
 /// [`RepoStatus`] is at hand, [`change_diff`] is cheaper.
 pub fn file_diff(cwd: &Path, path: &Path) -> Result<String, WorkspaceError> {
-    let head = discover_required(cwd)?;
+    file_diff_at(&Location::Local, cwd, path)
+}
+
+/// [`file_diff`] for a folder at `loc`.
+pub fn file_diff_at(loc: &Location, cwd: &Path, path: &Path) -> Result<String, WorkspaceError> {
+    let head = discover_required(loc, cwd)?;
     let root = head.root.as_path();
-    let rel = relativize(root, path)?;
+    let rel = if loc.is_local() {
+        relativize(root, path)?
+    } else {
+        path.strip_prefix(root).unwrap_or(path).to_path_buf()
+    };
     let has_commits = head.head_short.is_some();
 
     // Tracked changes only (cheap), to learn whether the file was renamed.
     let tracked = command::run_ok(
+        loc,
         root,
         [
             "status",
@@ -55,34 +65,50 @@ pub fn file_diff(cwd: &Path, path: &Path) -> Result<String, WorkspaceError> {
         .find(|e| e.path == rel);
     let kind = match entry {
         Some(entry) => entry.kind,
-        None if is_untracked(root, &rel)? => ChangeKind::Untracked,
+        None if is_untracked(loc, root, &rel)? => ChangeKind::Untracked,
         None => ChangeKind::Modified,
     };
-    diff_one(root, has_commits, &rel, &kind)
+    diff_one(loc, root, has_commits, &rel, &kind)
 }
 
 /// Unified diff of one entry of a [`RepoStatus`]: like [`file_diff`], but a single git
 /// invocation since the change kind is already known.
 pub fn change_diff(repo: &RepoStatus, change: &FileChange) -> Result<String, WorkspaceError> {
-    diff_one(&repo.root, repo.has_commits(), &change.path, &change.kind)
+    change_diff_at(&Location::Local, repo, change)
+}
+
+/// [`change_diff`] for a repository at `loc`.
+pub fn change_diff_at(
+    loc: &Location,
+    repo: &RepoStatus,
+    change: &FileChange,
+) -> Result<String, WorkspaceError> {
+    diff_one(
+        loc,
+        &repo.root,
+        repo.has_commits(),
+        &change.path,
+        &change.kind,
+    )
 }
 
 fn diff_one(
+    loc: &Location,
     root: &Path,
     has_commits: bool,
     rel: &Path,
     kind: &ChangeKind,
 ) -> Result<String, WorkspaceError> {
     let out = if *kind == ChangeKind::Untracked {
-        command::run_ok(root, untracked_diff_args(rel), NO_INDEX_OK)?
+        command::run_ok(loc, root, untracked_diff_args(rel), NO_INDEX_OK)?
     } else {
-        let base = diff_base(root, has_commits)?;
+        let base = diff_base(loc, root, has_commits)?;
         let mut paths = vec![rel];
         if let ChangeKind::Renamed { from } = kind {
             // Both sides must be in the pathspec for git to pair them up as a rename.
             paths.insert(0, from.as_path());
         }
-        command::run_ok(root, tracked_diff_args(&base, &paths), &[0])?
+        command::run_ok(loc, root, tracked_diff_args(&base, &paths), &[0])?
     };
     Ok(String::from_utf8_lossy(&out).into_owned())
 }
@@ -94,16 +120,31 @@ fn diff_one(
 /// starting with [`TRUNCATION_MARKER`]. Git is stopped as soon as the cap is reached, so huge
 /// diffs are never fully buffered.
 pub fn full_diff(cwd: &Path, max_bytes: usize) -> Result<String, WorkspaceError> {
-    let head = discover_required(cwd)?;
+    full_diff_at(&Location::Local, cwd, max_bytes)
+}
+
+/// [`full_diff`] for a folder at `loc`.
+pub fn full_diff_at(
+    loc: &Location,
+    cwd: &Path,
+    max_bytes: usize,
+) -> Result<String, WorkspaceError> {
+    let head = discover_required(loc, cwd)?;
     let root = head.root.as_path();
-    let base = diff_base(root, head.head_short.is_some())?;
+    let base = diff_base(loc, root, head.head_short.is_some())?;
 
     let no_paths: [&Path; 0] = [];
-    let (mut buf, mut truncated) =
-        command::run_capped(root, tracked_diff_args(&base, &no_paths), max_bytes, &[0])?;
+    let (mut buf, mut truncated) = command::run_capped(
+        loc,
+        root,
+        tracked_diff_args(&base, &no_paths),
+        max_bytes,
+        &[0],
+    )?;
 
     if !truncated {
         let untracked = command::run_ok(
+            loc,
             root,
             ["ls-files", "-z", "--others", "--exclude-standard"],
             &[0],
@@ -115,7 +156,7 @@ pub fn full_diff(cwd: &Path, max_bytes: usize) -> Result<String, WorkspaceError>
                 break;
             }
             let (out, cut) =
-                command::run_capped(root, untracked_diff_args(&rel), remaining, NO_INDEX_OK)?;
+                command::run_capped(loc, root, untracked_diff_args(&rel), remaining, NO_INDEX_OK)?;
             buf.extend_from_slice(&out);
             if cut {
                 truncated = true;
@@ -157,7 +198,7 @@ fn untracked_diff_args(rel: &Path) -> Vec<OsString> {
     args
 }
 
-fn is_untracked(root: &Path, rel: &Path) -> Result<bool, WorkspaceError> {
+fn is_untracked(loc: &Location, root: &Path, rel: &Path) -> Result<bool, WorkspaceError> {
     let args: [&OsStr; 6] = [
         "ls-files".as_ref(),
         "-z".as_ref(),
@@ -166,7 +207,7 @@ fn is_untracked(root: &Path, rel: &Path) -> Result<bool, WorkspaceError> {
         "--".as_ref(),
         rel.as_os_str(),
     ];
-    let out = command::run_ok(root, args, &[0])?;
+    let out = command::run_ok(loc, root, args, &[0])?;
     Ok(!out.is_empty())
 }
 

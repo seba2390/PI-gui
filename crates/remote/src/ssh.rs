@@ -5,8 +5,10 @@
 //! handshake. The master lingers for ten minutes after its last user, and any call quietly
 //! starts a new one when needed.
 //!
-//! Remote scripts are POSIX `sh` only (the host may be Linux or macOS). The user's login shell
-//! (`$SHELL`) must accept POSIX quoting, which holds for bash, zsh, dash and ksh.
+//! Remote scripts are POSIX `sh` only (the host may be Linux or macOS). ssh hands the command
+//! line to the user's login shell, so it is quoted in a way bash, zsh, dash, ksh and fish all
+//! read the same ([`remote_word`]); the scripts themselves always run under `/bin/sh`, and a
+//! fish user's login `PATH` is taken from fish. csh/tcsh login shells are not supported.
 
 use std::ffi::OsString;
 use std::fs;
@@ -38,33 +40,74 @@ const KEYSCAN_TIMEOUT: Duration = Duration::from_secs(20);
 /// none; `~` and `~/…` expand to `$HOME`), the rest is the command. A leading `~/` in the
 /// program expands too, and an absolute program's own folder is put in front of `PATH` so a
 /// node script installed next to its `node` (nvm, Homebrew) finds it.
-const LAUNCH_SCRIPT: &str = r#"d=$1; shift; case $d in "") ;; "~") cd || exit 1 ;; "~/"*) cd -- "$HOME/${d#??}" || exit 1 ;; *) cd -- "$d" || exit 1 ;; esac; case $1 in "~/"*) p=$HOME/${1#??}; shift; set -- "$p" "$@" ;; esac; case $1 in /*) PATH=${1%/*}:$PATH; export PATH ;; esac; exec "$@""#;
+pub(crate) const LAUNCH_SCRIPT: &str = r#"d=$1; shift; case $d in "") ;; "~") cd || exit 1 ;; "~/"*) cd -- "$HOME/${d#??}" || exit 1 ;; *) cd -- "$d" || exit 1 ;; esac; case $1 in "~/"*) p=$HOME/${1#??}; shift; set -- "$p" "$@" ;; esac; case $1 in /*) PATH=${1%/*}:$PATH; export PATH ;; esac; exec "$@""#;
+
+/// Where pi-gui installs its own copy of pi on a host (relative to `$HOME`).
+pub const MANAGED_DIR: &str = ".pi-gui/server";
+
+/// Sets `PATH` to the login shell's (run through fish's own syntax when that is the login
+/// shell). Shared by the scripts below; `$s` is the login shell afterwards.
+pub(crate) const LOGIN_PATH: &str = r#"s=${SHELL:-/bin/sh}
+case ${s##*/} in
+  fish) lp=$("$s" -lc 'string join : $PATH' </dev/null 2>/dev/null | tail -n 1) ;;
+  *) lp=$("$s" -lc 'printf "%s\n" "$PATH"' </dev/null 2>/dev/null | tail -n 1) ;;
+esac
+case $lp in /*) PATH=$lp:$PATH; export PATH ;; esac"#;
 
 /// Probes the host. `$1` is the pi command. Prints `PIGUI_*=` marker lines so whatever the
-/// user's profile scripts print is ignored. pi is looked up in a login shell first, then an
-/// interactive one (where `.bashrc` additions such as nvm live).
+/// user's profile scripts print is ignored. pi is looked up on the login shell's `PATH`, then
+/// an interactive shell's (where `.bashrc` additions such as nvm live), then pi-gui's own
+/// install. Also reports pi's agent and sessions folders (honouring `PI_CODING_AGENT_DIR`,
+/// `PI_CODING_AGENT_SESSION_DIR` and an absolute `sessionDir` setting) and whether
+/// `models.json` exists there.
 const PROBE_SCRIPT: &str = r#"printf 'PIGUI_HOME=%s\n' "$HOME"
 printf 'PIGUI_SYSTEM=%s\n' "$(uname -sm)"
-s=${SHELL:-/bin/sh}
-f='c=$1; case $c in "~/"*) c=$HOME/${c#??} ;; esac; command -v "$c"'
-p=$("$s" -lc "$f" sh "$1" </dev/null 2>/dev/null | tail -n 1)
-case $p in /*) ;; *) p=$("$s" -ic "$f" sh "$1" </dev/null 2>/dev/null | tail -n 1) ;; esac
+c=$1; case $c in "~/"*) c=$HOME/${c#??} ;; esac
+ENV_SCRIPT
+p=$(command -v "$c" 2>/dev/null)
+case ${s##*/} in fish) ;; *)
+  case $p in /*) ;; *) p=$("$s" -ic 'command -v "$1"' sh "$c" </dev/null 2>/dev/null | tail -n 1) ;; esac ;;
+esac
+m=$HOME/MANAGED_DIR/bin/pi
+case $p in /*) ;; *) [ "$c" = pi ] && [ -x "$m" ] && p=$m ;; esac
 case $p in /*)
   printf 'PIGUI_PI=%s\n' "$p"
-  v=$("$s" -lc 'PATH=${1%/*}:$PATH; export PATH; "$1" --version' sh "$p" </dev/null 2>/dev/null | tail -n 1)
+  v=$(PATH=${p%/*}:$PATH "$p" --version </dev/null 2>/dev/null | tail -n 1)
   printf 'PIGUI_VERSION=%s\n' "$v" ;;
 esac
+ev() { "$s" -lc "printenv $1" </dev/null 2>/dev/null | tail -n 1; }
+a=$(ev PI_CODING_AGENT_DIR); [ -n "$a" ] || a=$HOME/.pi/agent
+case $a in "~/"*) a=$HOME/${a#??} ;; esac
+d=$(ev PI_CODING_AGENT_SESSION_DIR)
+if [ -z "$d" ] && [ -f "$a/settings.json" ]; then
+  d=$(sed -n 's/.*"sessionDir"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$a/settings.json" | head -n 1)
+  case $d in /*) ;; *) d= ;; esac
+fi
+[ -n "$d" ] || d=$a/sessions
+printf 'PIGUI_AGENT=%s\n' "$a"
+printf 'PIGUI_SESSIONS=%s\n' "$d"
+[ -f "$a/models.json" ] && printf 'PIGUI_MODELS=1\n'
 exit 0"#;
 
-/// Lists subfolders of `$1` (empty or `~` = home): the canonical path, then every
-/// non-hidden directory name, each terminated by a NUL byte.
+/// Lists subfolders of `$1` (empty or `~` = home): the canonical path, then every directory
+/// name (dot folders too when `$2` is 1), each terminated by a NUL byte.
 const LIST_SCRIPT: &str = r#"fail() { printf '%s\n' "$1" >&2; exit 1; }
 case $1 in ""|"~") d=$HOME ;; "~/"*) d=$HOME/${1#??} ;; *) d=$1 ;; esac
 [ -d "$d" ] || fail "No such folder: $d"
 cd -- "$d" 2>/dev/null || fail "Permission denied: $d"
 printf '%s\000' "$(pwd -P)"
 for e in *; do [ -d "$e" ] && printf '%s\000' "$e"; done
+if [ "$2" = 1 ]; then
+  for e in .*; do case $e in .|..) ;; *) [ -d "$e" ] && printf '%s\000' "$e" ;; esac; done
+fi
 exit 0"#;
+
+/// Creates folder `$2` inside `$1` (or `$2` itself when absolute) and prints its canonical
+/// path.
+const MKDIR_SCRIPT: &str = r#"case $1 in ""|"~") b=$HOME ;; "~/"*) b=$HOME/${1#??} ;; *) b=$1 ;; esac
+case $2 in /*) d=$2 ;; "~") d=$HOME ;; "~/"*) d=$HOME/${2#??} ;; *) d=$b/$2 ;; esac
+mkdir -p -- "$d" || exit 1
+cd -- "$d" && pwd -P"#;
 
 /// A connection to one remote host. Cheap to clone; holds no live resources itself (the shared
 /// master connection lives in a background `ssh` process).
@@ -79,6 +122,12 @@ pub struct Ssh {
 pub struct Probe {
     /// The remote `$HOME`.
     pub home: String,
+    /// pi's agent folder there (`~/.pi/agent` unless overridden).
+    pub agent_dir: String,
+    /// Where pi keeps session files there.
+    pub sessions_dir: String,
+    /// Whether `<agent dir>/models.json` exists there.
+    pub has_models: bool,
     /// Absolute path of the pi executable, if found.
     pub pi_path: Option<String>,
     /// Last line `pi --version` printed, if pi was found and printed anything.
@@ -94,8 +143,8 @@ pub struct DirListing {
     pub path: String,
     /// Its parent, or `None` at `/`.
     pub parent: Option<String>,
-    /// Names of non-hidden subfolders (symlinks to folders included), sorted
-    /// case-insensitively.
+    /// Names of subfolders (symlinks to folders included; dot folders only when asked for),
+    /// sorted case-insensitively.
     pub dirs: Vec<String>,
 }
 
@@ -254,14 +303,31 @@ impl Ssh {
             .map(|output| output.stdout_lossy())
     }
 
-    fn exec_bytes(&self, script: &str, timeout: Duration) -> Result<Output, RemoteError> {
+    pub(crate) fn exec_bytes(
+        &self,
+        script: &str,
+        timeout: Duration,
+    ) -> Result<Output, RemoteError> {
+        let output = process::run(self.script_command(script), None, timeout)?;
+        script_result(output)
+    }
+
+    /// `ssh … -- sh -c <script>`: runs a POSIX script on the host whatever the login shell.
+    pub(crate) fn script_command(&self, script: &str) -> Command {
         let mut command = self.ssh_command();
         command
             .arg("-T")
             .args(self.base_args())
             .arg("--")
-            .arg(format!("sh -c {}", sh_quote(script)));
-        let output = process::run(command, None, timeout)?;
+            .arg(format!("sh -c {}", remote_word(script)));
+        command
+    }
+}
+
+/// Turns a finished `ssh … sh -c` into its stdout, a classified ssh failure (exit 255), or
+/// [`RemoteError::Failed`] with the script's stderr.
+pub(crate) fn script_result(output: Output) -> Result<Output, RemoteError> {
+    {
         if output.status.success() {
             Ok(output)
         } else if output.status.code() == Some(255) {
@@ -276,7 +342,9 @@ impl Ssh {
             }))
         }
     }
+}
 
+impl Ssh {
     /// The program and arguments that run `argv` on the host in `cwd` with piped stdio and no
     /// TTY, for a long-running process such as `pi --mode rpc`.
     ///
@@ -299,17 +367,37 @@ impl Ssh {
     /// One round trip that reports the remote home, where `pi_command` resolves under the
     /// user's shells, its `--version`, and `uname -sm`.
     pub fn probe(&self, pi_command: &str) -> Result<Probe, RemoteError> {
-        let script = format!("set -- {}\n{PROBE_SCRIPT}", sh_quote(pi_command));
+        let script = format!("set -- {}\n{}", sh_quote(pi_command), probe_script());
         let output = self.exec_bytes(&script, PROBE_TIMEOUT)?;
         parse_probe(&output.stdout_lossy())
     }
 
-    /// Lists the non-hidden subfolders of `path` (absolute; `""` or `"~"` is the home folder,
-    /// `~/…` is relative to it).
-    pub fn list_dirs(&self, path: &str) -> Result<DirListing, RemoteError> {
-        let script = format!("set -- {}\n{LIST_SCRIPT}", sh_quote(path));
+    /// Lists the subfolders of `path` (absolute; `""` or `"~"` is the home folder, `~/…` is
+    /// relative to it), dot folders too with `show_hidden`.
+    pub fn list_dirs(&self, path: &str, show_hidden: bool) -> Result<DirListing, RemoteError> {
+        let script = format!(
+            "set -- {} {}\n{LIST_SCRIPT}",
+            sh_quote(path),
+            if show_hidden { "1" } else { "0" }
+        );
         let output = self.exec_bytes(&script, LIST_TIMEOUT)?;
         parse_listing(&output.stdout)
+    }
+
+    /// Creates folder `name` inside `parent` (`name` may also be absolute or start with `~/`)
+    /// and returns its canonical path.
+    pub fn make_dir(&self, parent: &str, name: &str) -> Result<String, RemoteError> {
+        let script = format!(
+            "set -- {} {}\n{MKDIR_SCRIPT}",
+            sh_quote(parent),
+            sh_quote(name)
+        );
+        let path = self.exec(&script)?.trim().to_owned();
+        if path.starts_with('/') {
+            Ok(path)
+        } else {
+            Err(RemoteError::Failed(format!("could not create {name}")))
+        }
     }
 
     /// The SHA256 fingerprints of the host's keys, one per line (e.g.
@@ -454,17 +542,62 @@ fn ssh_failure(output: &Output) -> RemoteError {
     classify(&output.stderr_lossy())
 }
 
+/// [`PROBE_SCRIPT`] with its placeholders filled in.
+fn probe_script() -> String {
+    PROBE_SCRIPT
+        .replace("ENV_SCRIPT", LOGIN_PATH)
+        .replace("MANAGED_DIR", MANAGED_DIR)
+}
+
+/// Run by `/bin/sh` on the host to start [`LAUNCH_SCRIPT`] in the user's login environment:
+/// through their login shell, or for fish (which cannot run POSIX scripts) under `/bin/sh`
+/// with fish's login `PATH`.
+fn outer_launch_script() -> String {
+    format!(
+        r#"L={}
+s=${{SHELL:-/bin/sh}}
+case ${{s##*/}} in
+  fish)
+    lp=$("$s" -lc 'string join : $PATH' </dev/null 2>/dev/null | tail -n 1)
+    case $lp in /*) PATH=$lp; export PATH ;; esac
+    exec /bin/sh -c "$L" pi-gui "$@" ;;
+  *) exec "$s" -lc "$L" pi-gui "$@" ;;
+esac"#,
+        sh_quote(LAUNCH_SCRIPT)
+    )
+}
+
 /// The command string ssh hands to the remote user's shell for [`Ssh::command`].
 fn remote_launch_command(cwd: Option<&str>, argv: &[String]) -> String {
-    let mut remote = String::from(r#"exec "${SHELL:-/bin/sh}" -lc "#);
-    remote.push_str(&sh_quote(LAUNCH_SCRIPT));
+    let mut remote = String::from("exec /bin/sh -c ");
+    remote.push_str(&remote_word(&outer_launch_script()));
     remote.push_str(" pi-gui ");
-    remote.push_str(&sh_quote(cwd.unwrap_or("")));
+    remote.push_str(&remote_word(cwd.unwrap_or("")));
     for arg in argv {
         remote.push(' ');
-        remote.push_str(&sh_quote(arg));
+        remote.push_str(&remote_word(arg));
     }
     remote
+}
+
+/// Quotes `s` as one word for the remote user's login shell, read the same by POSIX shells
+/// and fish: like [`sh_quote`], but a backslash is never left inside single quotes (fish
+/// would treat `\\` there as an escape), so it is written as `'\\'` outside them.
+pub fn remote_word(s: &str) -> String {
+    if !s.contains('\\') {
+        return sh_quote(s);
+    }
+    let mut quoted = String::with_capacity(s.len() + 8);
+    quoted.push('\'');
+    for c in s.chars() {
+        match c {
+            '\'' => quoted.push_str(r"'\''"),
+            '\\' => quoted.push_str(r"'\\'"),
+            c => quoted.push(c),
+        }
+    }
+    quoted.push('\'');
+    quoted
 }
 
 /// Quotes `s` as one word for a POSIX shell: words made only of safe characters stay as they
@@ -493,6 +626,9 @@ fn parse_probe(stdout: &str) -> Result<Probe, RemoteError> {
     let mut system = None;
     let mut pi_path = None;
     let mut pi_version = None;
+    let mut agent_dir = None;
+    let mut sessions_dir = None;
+    let mut has_models = false;
     for line in stdout.lines() {
         let Some((key, value)) = line.split_once('=') else {
             continue;
@@ -503,14 +639,22 @@ fn parse_probe(stdout: &str) -> Result<Probe, RemoteError> {
             "PIGUI_SYSTEM" => system = value,
             "PIGUI_PI" => pi_path = value,
             "PIGUI_VERSION" => pi_version = value,
+            "PIGUI_AGENT" => agent_dir = value,
+            "PIGUI_SESSIONS" => sessions_dir = value,
+            "PIGUI_MODELS" => has_models = value.is_some(),
             _ => {}
         }
     }
     let home = home.ok_or_else(|| {
         RemoteError::Failed(format!("unexpected reply from the host: {}", stdout.trim()))
     })?;
+    let agent_dir = agent_dir.unwrap_or_else(|| format!("{home}/.pi/agent"));
+    let sessions_dir = sessions_dir.unwrap_or_else(|| format!("{agent_dir}/sessions"));
     Ok(Probe {
         home,
+        agent_dir,
+        sessions_dir,
+        has_models,
         pi_path,
         pi_version,
         system: system.unwrap_or_default(),
@@ -587,6 +731,36 @@ mod tests {
         assert_eq!(sh_quote("~/x"), "'~/x'");
         assert_eq!(sh_quote("a=b"), "'a=b'");
         assert_eq!(sh_quote("`id`;\n"), "'`id`;\n'");
+    }
+
+    /// The words ssh hands to the login shell read the same in sh and (when installed) fish.
+    #[test]
+    fn remote_words_survive_sh_and_fish() {
+        let words = [
+            "",
+            "a b",
+            "it's",
+            "$HOME",
+            "\"q\"",
+            "\\n",
+            "a\\b",
+            "back\\\\slash'q",
+            "a\nb",
+            "*",
+        ];
+        let fish = Command::new("fish").arg("--version").output().is_ok();
+        for word in words {
+            let line = format!("printf %s {}", remote_word(word));
+            let out = Command::new("/bin/sh")
+                .args(["-c", &line])
+                .output()
+                .unwrap();
+            assert_eq!(String::from_utf8(out.stdout).unwrap(), word, "sh: {line}");
+            if fish {
+                let out = Command::new("fish").args(["-c", &line]).output().unwrap();
+                assert_eq!(String::from_utf8(out.stdout).unwrap(), word, "fish: {line}");
+            }
+        }
     }
 
     #[test]
@@ -680,8 +854,8 @@ mod tests {
         assert_eq!(
             args[args.len() - 1],
             OsString::from(format!(
-                r#"exec "${{SHELL:-/bin/sh}}" -lc {} pi-gui '/home/me/my project' pi --mode rpc"#,
-                sh_quote(LAUNCH_SCRIPT)
+                "exec /bin/sh -c {} pi-gui '/home/me/my project' pi --mode rpc",
+                remote_word(&outer_launch_script())
             ))
         );
         // The control directory is created privately on demand.
@@ -790,6 +964,31 @@ mod tests {
         assert_eq!(listing.path, home.to_str().unwrap());
         assert_eq!(listing.dirs, strings(&["A", "b", "c d", "it's"]));
 
+        let script = format!("set -- {} 1\n{LIST_SCRIPT}", sh_quote("~"));
+        let out = Command::new("/bin/sh")
+            .args(["-c", &script])
+            .env("HOME", &home)
+            .output()
+            .unwrap();
+        let listing = parse_listing(&out.stdout).unwrap();
+        assert_eq!(listing.dirs, strings(&[".hidden", "A", "b", "c d", "it's"]));
+
+        let script = format!(
+            "set -- {} {}\n{MKDIR_SCRIPT}",
+            sh_quote("~"),
+            sh_quote("new dir/x")
+        );
+        let out = Command::new("/bin/sh")
+            .args(["-c", &script])
+            .env("HOME", &home)
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        assert_eq!(
+            String::from_utf8(out.stdout).unwrap().trim(),
+            home.join("new dir/x").to_str().unwrap()
+        );
+
         let script = format!("set -- {}\n{LIST_SCRIPT}", sh_quote("/no/such"));
         let out = Command::new("/bin/sh")
             .args(["-c", &script])
@@ -812,12 +1011,15 @@ mod tests {
         fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
 
         let run = |command: &str| {
-            let script = format!("set -- {}\n{PROBE_SCRIPT}", sh_quote(command));
+            let script = format!("set -- {}\n{}", sh_quote(command), probe_script());
             let out = Command::new("/bin/sh")
                 .args(["-c", &script])
                 .env("HOME", &home)
                 .env("SHELL", "/bin/sh")
+                .env("PATH", "/usr/bin:/bin")
                 .env_remove("ENV")
+                .env_remove("PI_CODING_AGENT_DIR")
+                .env_remove("PI_CODING_AGENT_SESSION_DIR")
                 .output()
                 .unwrap();
             assert!(out.status.success());
@@ -832,16 +1034,42 @@ mod tests {
         let missing = run("definitely-not-a-command-pigui");
         assert_eq!(missing.pi_path, None);
         assert_eq!(missing.pi_version, None);
+        assert_eq!(missing.agent_dir, format!("{}/.pi/agent", home.display()));
+        assert_eq!(
+            missing.sessions_dir,
+            format!("{}/.pi/agent/sessions", home.display())
+        );
+        assert!(!missing.has_models);
+
+        // pi-gui's own install is found when `pi` is not on PATH; settings move sessions.
+        let managed = home.join(MANAGED_DIR).join("bin");
+        fs::create_dir_all(&managed).unwrap();
+        fs::copy(&tool, managed.join("pi")).unwrap();
+        fs::create_dir_all(home.join(".pi/agent")).unwrap();
+        fs::write(home.join(".pi/agent/models.json"), "{}").unwrap();
+        fs::write(
+            home.join(".pi/agent/settings.json"),
+            "{\n  \"sessionDir\": \"/data/pi sessions\"\n}\n",
+        )
+        .unwrap();
+        let found = run("pi");
+        assert_eq!(found.pi_path.as_deref(), managed.join("pi").to_str());
+        assert_eq!(found.sessions_dir, "/data/pi sessions");
+        assert!(found.has_models);
     }
 
     #[test]
     fn parses_probe_output() {
         let stdout = "Welcome to Ubuntu!\nPIGUI_HOME=/home/me\nPIGUI_SYSTEM=Linux aarch64\n\
-                      PIGUI_PI=/home/me/.nvm/versions/node/v22/bin/pi\nPIGUI_VERSION=0.45.3\n";
+                      PIGUI_PI=/home/me/.nvm/versions/node/v22/bin/pi\nPIGUI_VERSION=0.45.3\n\
+                      PIGUI_AGENT=/home/me/.pi/agent\nPIGUI_SESSIONS=/data/sessions\nPIGUI_MODELS=1\n";
         assert_eq!(
             parse_probe(stdout).unwrap(),
             Probe {
                 home: "/home/me".into(),
+                agent_dir: "/home/me/.pi/agent".into(),
+                sessions_dir: "/data/sessions".into(),
+                has_models: true,
                 pi_path: Some("/home/me/.nvm/versions/node/v22/bin/pi".into()),
                 pi_version: Some("0.45.3".into()),
                 system: "Linux aarch64".into(),
@@ -849,6 +1077,8 @@ mod tests {
         );
         let no_pi = parse_probe("PIGUI_HOME=/Users/me\nPIGUI_SYSTEM=Darwin arm64\n").unwrap();
         assert_eq!(no_pi.pi_path, None);
+        assert_eq!(no_pi.sessions_dir, "/Users/me/.pi/agent/sessions");
+        assert!(!no_pi.has_models);
         assert_eq!(no_pi.pi_version, None);
         let empty_version = parse_probe("PIGUI_HOME=/h\nPIGUI_PI=/h/pi\nPIGUI_VERSION=\n").unwrap();
         assert_eq!(empty_version.pi_version, None);

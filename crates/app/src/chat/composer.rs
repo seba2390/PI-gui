@@ -59,6 +59,8 @@ pub enum ComposerEvent {
     AddHost,
     /// Pick another folder on this session's SSH host.
     BrowseRemote(HostId),
+    /// Open "Manage SSH connections".
+    ManageHosts,
 }
 
 /// A file attached to the next prompt.
@@ -119,13 +121,17 @@ impl Composer {
         ];
         let weak = cx.weak_entity();
         let root = session.read(cx).cwd().to_path_buf();
+        let location = match session.read(cx).host().cloned() {
+            Some(host) => crate::hosts::hosts(cx).update(cx, |hosts, _| hosts.location(&host)),
+            None => workspace::Location::Local,
+        };
         let picker = cx.new(|cx| {
-            let delegate = FilePicker::new(root, move |pick, window, cx| {
+            let delegate = FilePicker::new(root, location, move |pick, window, cx| {
                 let _ = weak.update(cx, |this, cx| this.on_pick(pick, window, cx));
             });
             ListState::new(delegate, window, cx).searchable(true)
         });
-        if session.read(cx).is_local_code() {
+        if session.read(cx).has_folder_tools() {
             file_picker::refresh_index(&picker, cx);
         }
         Self {
@@ -282,6 +288,19 @@ impl Composer {
         let focus = self.focus_handle(cx);
         focus.focus(window, cx);
         match pick {
+            // A file on the SSH host: referenced as `@path` (pi reads it there).
+            Pick::File(path) if self.session.read(cx).host().is_some() => {
+                let name = path.file_name().map_or_else(
+                    || path.display().to_string(),
+                    |name| name.to_string_lossy().into_owned(),
+                );
+                self.attachments.push(Attachment {
+                    path,
+                    name: name.into(),
+                    image: None,
+                    inline: None,
+                });
+            }
             Pick::File(path) => self.attach_paths(vec![path], cx),
             Pick::Browse => self.pick_attachments(cx),
             Pick::Dismiss => {}
@@ -417,18 +436,12 @@ impl Composer {
         }
 
         if let Some(host) = session.host().cloned() {
-            // pi runs on another machine: attach from the system dialog (pasted in), and the
-            // folder button browses folders on that machine.
+            // pi runs on another machine: the picker lists files there (referenced as
+            // `@path`), "Browse other files…" pastes local ones in, and the folder button
+            // browses folders on that machine.
             let left = h_flex()
                 .gap_1()
-                .child(
-                    Button::new("attach")
-                        .quiet(cx)
-                        .small()
-                        .icon(Icon::from(AppIcon::Paperclip))
-                        .tooltip("Attach files or images")
-                        .on_click(cx.listener(|this, _, _, cx| this.pick_attachments(cx))),
-                )
+                .child(self.render_attach_popover(cx))
                 .child(self.render_device(Some(&host), cx))
                 .child(
                     Button::new("remote-folder")
@@ -449,25 +462,7 @@ impl Composer {
 
         let left = h_flex()
             .gap_1()
-            .child({
-                let picker = self.picker.clone();
-                let weak = cx.weak_entity();
-                Popover::new("attach-popover")
-                    .anchor(Anchor::BottomLeft)
-                    .open(self.picker_open)
-                    .on_open_change(move |open, window, cx| {
-                        let _ = weak.update(cx, |this, cx| this.set_picker_open(*open, window, cx));
-                    })
-                    .trigger(
-                        Button::new("attach")
-                            .quiet(cx)
-                            .small()
-                            .icon(Icon::from(AppIcon::Paperclip))
-                            .tooltip("Attach files"),
-                    )
-                    .p_0()
-                    .content(move |_, _, _| List::new(&picker).w(px(460.)).h(px(320.)))
-            })
+            .child(self.render_attach_popover(cx))
             .child(self.render_device(None, cx))
             .child(
                 Button::new(menu_id(
@@ -487,6 +482,27 @@ impl Composer {
             );
 
         self.toolbar_layout(left, cx).into_any_element()
+    }
+
+    /// The attach button with its searchable list of the working folder's files.
+    fn render_attach_popover(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let picker = self.picker.clone();
+        let weak = cx.weak_entity();
+        Popover::new("attach-popover")
+            .anchor(Anchor::BottomLeft)
+            .open(self.picker_open)
+            .on_open_change(move |open, window, cx| {
+                let _ = weak.update(cx, |this, cx| this.set_picker_open(*open, window, cx));
+            })
+            .trigger(
+                Button::new("attach")
+                    .quiet(cx)
+                    .small()
+                    .icon(Icon::from(AppIcon::Paperclip))
+                    .tooltip("Attach files"),
+            )
+            .p_0()
+            .content(move |_, _, _| List::new(&picker).w(px(460.)).h(px(320.)))
     }
 
     /// "This computer" / an SSH host, with its status dot; the menu switches machines.
@@ -1028,14 +1044,22 @@ fn device_menu(
                 }),
             );
         }
-        let composer = composer.clone();
-        menu.separator().item(
-            PopupMenuItem::new("Add SSH connection…")
-                .icon(IconName::Plus)
-                .on_click(move |_, _, cx| {
-                    let _ = composer.update(cx, |_, cx| cx.emit(ComposerEvent::AddHost));
-                }),
-        )
+        let (add, manage) = (composer.clone(), composer.clone());
+        menu.separator()
+            .item(
+                PopupMenuItem::new("Add SSH connection…")
+                    .icon(IconName::Plus)
+                    .on_click(move |_, _, cx| {
+                        let _ = add.update(cx, |_, cx| cx.emit(ComposerEvent::AddHost));
+                    }),
+            )
+            .item(
+                PopupMenuItem::new("Manage SSH connections…")
+                    .icon(IconName::Settings)
+                    .on_click(move |_, _, cx| {
+                        let _ = manage.update(cx, |_, cx| cx.emit(ComposerEvent::ManageHosts));
+                    }),
+            )
     }
 }
 

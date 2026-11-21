@@ -31,6 +31,8 @@ pub enum FilesEvent {
 }
 
 pub struct FilesView {
+    /// Where the folder lives (this computer or an SSH host).
+    location: workspace::Location,
     tree: FileTree,
     selected: Option<PathBuf>,
     /// Listings in flight by directory; a newer load for the same directory replaces (and so
@@ -43,8 +45,9 @@ impl EventEmitter<FilesEvent> for FilesView {}
 
 impl FilesView {
     /// Creates the view without loading anything; call [`Self::refresh`].
-    pub fn new(cwd: PathBuf) -> Self {
+    pub fn new(cwd: PathBuf, location: workspace::Location) -> Self {
         Self {
+            location,
             tree: FileTree::new(cwd),
             selected: None,
             loads: HashMap::new(),
@@ -53,8 +56,8 @@ impl FilesView {
     }
 
     /// Switches to another folder, dropping all state and loads in flight.
-    pub fn set_cwd(&mut self, cwd: PathBuf, cx: &mut Context<Self>) {
-        *self = Self::new(cwd);
+    pub fn set_cwd(&mut self, cwd: PathBuf, location: workspace::Location, cx: &mut Context<Self>) {
+        *self = Self::new(cwd, location);
         cx.notify();
     }
 
@@ -88,13 +91,14 @@ impl FilesView {
     fn load(&mut self, dir: PathBuf, cx: &mut Context<Self>) {
         let token = self.tree.begin_load(&dir);
         let root = self.tree.root().to_path_buf();
+        let location = self.location.clone();
         let key = dir.clone();
         let task = cx.spawn(async move |this, cx| {
             let target = dir.clone();
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    workspace::files::list_dir(&root, &target, false)
+                    workspace::files::list_dir_at(&location, &root, &target, false)
                         .map_err(|error| error.to_string())
                 })
                 .await;

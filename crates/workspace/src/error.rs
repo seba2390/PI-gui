@@ -39,6 +39,10 @@ pub enum WorkspaceError {
     #[error("file watcher error: {0}")]
     Watch(#[from] notify::Error),
 
+    /// The remote machine could not be reached, or a remote script failed.
+    #[error("{0}")]
+    Remote(String),
+
     /// Any other I/O failure (spawning processes, reading files and directories).
     #[error(transparent)]
     Io(#[from] std::io::Error),

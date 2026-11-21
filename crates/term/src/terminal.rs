@@ -89,6 +89,9 @@ pub struct TerminalConfig {
     /// back to the passwd entry) on Unix, started as a login shell on macOS like Terminal.app /
     /// iTerm / Alacritty do; `%COMSPEC%` or `powershell` on Windows.
     pub shell: Option<PathBuf>,
+    /// Arguments for `shell` (ignored when `shell` is `None`), e.g. `ssh -t host …` for a
+    /// terminal on another machine.
+    pub args: Vec<String>,
     /// Extra environment variables. `TERM=xterm-256color` and `COLORTERM=truecolor` are always
     /// set (and take precedence).
     pub env: Vec<(String, String)>,
@@ -104,6 +107,7 @@ impl TerminalConfig {
         Self {
             cwd: cwd.into(),
             shell: None,
+            args: Vec::new(),
             env: Vec::new(),
             size: TerminalSize::default(),
             scrollback_lines: DEFAULT_SCROLLBACK_LINES,
@@ -521,7 +525,7 @@ fn shell_for(config: &TerminalConfig) -> Option<tty::Shell> {
     if let Some(shell) = &config.shell {
         return Some(tty::Shell::new(
             shell.to_string_lossy().into_owned(),
-            Vec::new(),
+            config.args.clone(),
         ));
     }
     default_shell()

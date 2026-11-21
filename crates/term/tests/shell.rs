@@ -117,3 +117,29 @@ fn default_shell_starts() {
     });
     assert!(ok, "screen:\n{}", terminal.snapshot().text());
 }
+
+/// A program with arguments (how a remote terminal runs `ssh -t host …`).
+#[test]
+fn program_with_arguments() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut config = TerminalConfig::new(dir.path());
+    config.shell = Some(PathBuf::from("/bin/sh"));
+    config.args = vec![
+        "-c".into(),
+        "printf '%s|%s\\n' \"$0\" \"$1\"; exit 3".into(),
+        "a b".into(),
+        "c".into(),
+    ];
+    let (terminal, events) = Terminal::spawn(config).expect("spawn");
+    let saw = wait_until(&terminal, &events, |t, _| {
+        t.snapshot()
+            .lines
+            .iter()
+            .any(|line| line.text().trim_end() == "a b|c")
+    });
+    assert!(saw, "screen:\n{}", terminal.snapshot().text());
+    let exited = wait_until(&terminal, &events, |_, event| {
+        matches!(event, Some(TerminalEvent::Exited(Some(3))))
+    });
+    assert!(exited);
+}

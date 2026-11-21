@@ -12,6 +12,7 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::thread;
 
 use crate::WorkspaceError;
+use crate::location::{Location, RemoteShell, sh_quote};
 
 /// `-c` overrides applied to every git invocation. They pin down the output format so user
 /// configuration (e.g. `diff.noprefix`) can't break parsing in the UI.
@@ -57,6 +58,78 @@ where
         cmd.env_remove(var);
     }
     cmd
+}
+
+/// The `sh` script that runs `git <args>` in `dir` on a remote machine with the same settings
+/// as [`git_command`]. A missing folder exits with 128 and a "not a directory" message; a
+/// missing git with 127.
+pub(crate) fn remote_script<I, S>(dir: &Path, args: I) -> String
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let dir = sh_quote(&dir.to_string_lossy());
+    let mut script = format!(
+        "cd -- {dir} 2>/dev/null || {{ printf 'not a directory: %s\\n' {dir} >&2; exit 128; }}\n\
+         unset {}\n\
+         GIT_OPTIONAL_LOCKS=0 GIT_LITERAL_PATHSPECS=1 GIT_TERMINAL_PROMPT=0 GIT_PAGER=cat LC_ALL=C\n\
+         export GIT_OPTIONAL_LOCKS GIT_LITERAL_PATHSPECS GIT_TERMINAL_PROMPT GIT_PAGER LC_ALL\n\
+         command -v git >/dev/null 2>&1 || exit 127\n\
+         exec git",
+        SCRUBBED_ENV.join(" ")
+    );
+    for setting in CONFIG_OVERRIDES {
+        script.push_str(" -c ");
+        script.push_str(&sh_quote(setting));
+    }
+    for arg in args {
+        script.push(' ');
+        script.push_str(&sh_quote(&arg.as_ref().to_string_lossy()));
+    }
+    script.push_str(" </dev/null");
+    script
+}
+
+fn run_remote<I, S>(
+    shell: &dyn RemoteShell,
+    dir: &Path,
+    args: I,
+    max_bytes: Option<usize>,
+) -> Result<(GitOutput, bool), WorkspaceError>
+where
+    I: IntoIterator<Item = S> + Clone,
+    S: AsRef<OsStr>,
+{
+    let script = remote_script(dir, args.clone());
+    let output = shell
+        .run(&script, None, max_bytes)
+        .map_err(|error| WorkspaceError::Remote(error.to_string()))?;
+    if output.code == Some(127) && !output.truncated {
+        return Err(WorkspaceError::GitNotFound);
+    }
+    Ok((
+        GitOutput {
+            status: exit_status(output.code.unwrap_or(1)),
+            stdout: output.stdout,
+            stderr: output.stderr,
+            args: render_args(args),
+        },
+        output.truncated,
+    ))
+}
+
+/// An [`ExitStatus`] with exit code `code`, for results that came from another machine.
+fn exit_status(code: i32) -> ExitStatus {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt as _;
+        ExitStatus::from_raw((code & 0xff) << 8)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::ExitStatusExt as _;
+        ExitStatus::from_raw(code.cast_unsigned())
+    }
 }
 
 /// Raw result of a finished git process.
@@ -109,11 +182,14 @@ fn spawn_error(err: io::Error) -> WorkspaceError {
 ///
 /// Fails only if the process could not be spawned ([`WorkspaceError::GitNotFound`] when git is
 /// missing). Callers must make sure `dir` exists, otherwise that is reported as missing git too.
-pub(crate) fn run<I, S>(dir: &Path, args: I) -> Result<GitOutput, WorkspaceError>
+pub(crate) fn run<I, S>(loc: &Location, dir: &Path, args: I) -> Result<GitOutput, WorkspaceError>
 where
     I: IntoIterator<Item = S> + Clone,
     S: AsRef<OsStr>,
 {
+    if let Location::Remote(shell) = loc {
+        return run_remote(shell.as_ref(), dir, args, None).map(|(output, _)| output);
+    }
     let output = git_command(dir, args.clone())
         .output()
         .map_err(spawn_error)?;
@@ -126,12 +202,17 @@ where
 }
 
 /// Runs git and returns stdout, treating any exit code outside `ok_codes` as an error.
-pub(crate) fn run_ok<I, S>(dir: &Path, args: I, ok_codes: &[i32]) -> Result<Vec<u8>, WorkspaceError>
+pub(crate) fn run_ok<I, S>(
+    loc: &Location,
+    dir: &Path,
+    args: I,
+    ok_codes: &[i32],
+) -> Result<Vec<u8>, WorkspaceError>
 where
     I: IntoIterator<Item = S> + Clone,
     S: AsRef<OsStr>,
 {
-    let output = run(dir, args)?;
+    let output = run(loc, dir, args)?;
     if output.accepted(ok_codes) {
         Ok(output.stdout)
     } else {
@@ -144,6 +225,7 @@ where
 /// Returns the captured bytes and whether output was cut off. When the limit is hit the process
 /// is killed instead of buffering the rest, so huge diffs never land in memory.
 pub(crate) fn run_capped<I, S>(
+    loc: &Location,
     dir: &Path,
     args: I,
     max_bytes: usize,
@@ -153,6 +235,17 @@ where
     I: IntoIterator<Item = S> + Clone,
     S: AsRef<OsStr>,
 {
+    if let Location::Remote(shell) = loc {
+        let (output, truncated) = run_remote(shell.as_ref(), dir, args, Some(max_bytes))?;
+        if truncated {
+            return Ok((output.stdout, true));
+        }
+        return if output.accepted(ok_codes) {
+            Ok((output.stdout, false))
+        } else {
+            Err(output.into_error())
+        };
+    }
     let mut child = git_command(dir, args.clone())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

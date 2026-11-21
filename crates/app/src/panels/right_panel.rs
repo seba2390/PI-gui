@@ -4,6 +4,9 @@
 //! executor. While the panel is visible a debounced filesystem watcher on the folder keeps the
 //! active tab live; the inactive tab is only marked stale and reloads when shown. Hiding the
 //! panel (or switching folders) drops the watcher, so a hidden panel costs nothing.
+//!
+//! A folder on an SSH host has no file-change events: there the active tab is re-read every
+//! [`REMOTE_POLL`] while visible, and whenever the agent finishes a turn.
 
 mod diff_lines;
 mod diff_model;
@@ -28,6 +31,8 @@ use crate::ui::{TOP_BAR_HEIGHT, WindowDrag};
 
 /// Quiet time before a burst of filesystem events triggers a reload.
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(300);
+/// How often a visible panel re-reads a folder on an SSH host.
+const REMOTE_POLL: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RightTab {
@@ -44,6 +49,8 @@ pub enum RightPanelEvent {
 
 pub struct RightPanel {
     cwd: PathBuf,
+    /// Where `cwd` lives (this computer or an SSH host).
+    location: workspace::Location,
     tab: RightTab,
     /// Whether the panel is on screen; only then does it watch and load.
     visible: bool,
@@ -62,8 +69,9 @@ impl EventEmitter<RightPanelEvent> for RightPanel {}
 
 impl RightPanel {
     pub fn new(cwd: PathBuf, _window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let diff = cx.new(|_| DiffView::new(cwd.clone()));
-        let files = cx.new(|_| FilesView::new(cwd.clone()));
+        let location = workspace::Location::Local;
+        let diff = cx.new(|_| DiffView::new(cwd.clone(), location.clone()));
+        let files = cx.new(|_| FilesView::new(cwd.clone(), location.clone()));
         let subscriptions = vec![
             // The header shows the diff summary.
             cx.observe(&diff, |_, _, cx| cx.notify()),
@@ -75,6 +83,7 @@ impl RightPanel {
         ];
         Self {
             cwd,
+            location,
             tab: RightTab::Diff,
             visible: false,
             diff,
@@ -99,14 +108,17 @@ impl RightPanel {
         }
     }
 
-    pub fn set_cwd(&mut self, cwd: PathBuf, cx: &mut Context<Self>) {
-        if self.cwd == cwd {
+    pub fn set_cwd(&mut self, cwd: PathBuf, location: workspace::Location, cx: &mut Context<Self>) {
+        if self.cwd == cwd && self.location == location {
             return;
         }
         self.cwd.clone_from(&cwd);
+        self.location = location.clone();
+        let diff_location = location.clone();
         self.diff
-            .update(cx, |diff, cx| diff.set_cwd(cwd.clone(), cx));
-        self.files.update(cx, |files, cx| files.set_cwd(cwd, cx));
+            .update(cx, |diff, cx| diff.set_cwd(cwd.clone(), diff_location, cx));
+        self.files
+            .update(cx, |files, cx| files.set_cwd(cwd, location, cx));
         self.diff_stale = true;
         self.files_stale = true;
         if self.visible {
@@ -175,6 +187,28 @@ impl RightPanel {
     /// executor (a recursive watch can take a while on some platforms) and lives inside the
     /// task, which forwards its debounced batches to [`Self::on_fs_change`].
     fn watch(&mut self, cx: &mut Context<Self>) {
+        if !self.location.is_local() {
+            // No remote file events: poll the active tab while visible.
+            self._watch = cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor().timer(REMOTE_POLL).await;
+                    let alive = this.update(cx, |this, cx| match this.tab {
+                        RightTab::Diff => {
+                            this.files_stale = true;
+                            this.diff.update(cx, |diff, cx| diff.refresh(cx));
+                        }
+                        RightTab::Files => {
+                            this.diff_stale = true;
+                            this.files.update(cx, |files, cx| files.refresh(cx));
+                        }
+                    });
+                    if alive.is_err() {
+                        break;
+                    }
+                }
+            });
+            return;
+        }
         let root = self.cwd.clone();
         self._watch = cx.spawn(async move |this, cx| {
             let (sender, receiver) = async_channel::unbounded::<Vec<PathBuf>>();
