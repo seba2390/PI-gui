@@ -4,11 +4,14 @@
 //! The reducer never talks to pi and never renders. Time is injected (`now`) so
 //! timing behaviour ("Thought for 4s", "Worked for 1m 3s") is deterministic in tests.
 
+pub mod command;
 mod context;
+pub mod explore;
 mod format;
 mod history;
 mod model;
 mod reducer;
+pub mod shell;
 pub mod tool;
 
 pub use context::ContextEstimate;

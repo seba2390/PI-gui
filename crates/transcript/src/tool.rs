@@ -59,7 +59,19 @@ pub fn header(tool: &ToolBlock, paths: PathContext<'_>) -> ToolHeader {
         |fallback: &str| path_arg(args).map_or_else(|| fallback.to_owned(), |p| paths.display(p));
     let (title, detail) = match tool.name.as_str() {
         "read" => ("Read", format!("{}{}", path(""), line_range(args))),
-        "bash" => ("Bash", first_line(arg(args, "command").unwrap_or(""))),
+        "bash" => {
+            // Labelled once the command is complete; raw while it streams or when unsure.
+            let label = (!tool.args.is_null())
+                .then(|| arg(args, "command").and_then(crate::command::summarize))
+                .flatten();
+            if let Some(summary) = label {
+                return ToolHeader {
+                    title: summary.title(),
+                    detail: summary.detail(),
+                };
+            }
+            ("Bash", first_line(arg(args, "command").unwrap_or("")))
+        }
         "edit" => ("Edit", path("")),
         "write" => ("Write", path("")),
         "ls" => ("List", path(".")),
@@ -297,7 +309,12 @@ mod tests {
                 "Read",
                 "src/a.rs:10-14",
             ),
-            (tool("bash", json!({"command":"ls -la"})), "Bash", "ls -la"),
+            (tool("bash", json!({"command":"ls -la"})), "Listed", "files"),
+            (
+                tool("bash", json!({"command":"frobnicate -x"})),
+                "Bash",
+                "frobnicate -x",
+            ),
             (tool("edit", json!({"path":"/h/x.txt"})), "Edit", "~/x.txt"),
             (
                 tool("grep", json!({"pattern":"fn main","glob":"*.rs"})),
@@ -342,11 +359,21 @@ mod tests {
     fn multi_line_bash_header_shows_first_line() {
         let script = tool(
             "bash",
-            json!({"command":"\ncat > a.py << 'EOF'\nprint(1)\nEOF\npython3 a.py"}),
+            json!({"command":"\nfrob > a.py << 'EOF'\nprint(1)\nEOF\npython3 a.py"}),
         );
         assert_eq!(
             header(&script, PathContext::default()).detail,
-            "cat > a.py << 'EOF' …"
+            "frob > a.py << 'EOF' …"
+        );
+        // Understood commands are labelled instead.
+        let labelled = tool(
+            "bash",
+            json!({"command":"\ncat > a.py << 'EOF'\nprint(1)\nEOF\npython3 a.py"}),
+        );
+        let header = header(&labelled, PathContext::default());
+        assert_eq!(
+            (header.title.as_str(), header.detail.as_str()),
+            ("Wrote", "a.py, ran a.py")
         );
     }
 
