@@ -5480,6 +5480,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pi-config"
+version = "0.1.0"
+dependencies = [
+ "pretty_assertions",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "pi-gui"
 version = "0.1.0"
 dependencies = [
@@ -5490,6 +5499,7 @@ dependencies = [
  "futures",
  "gpui-kit",
  "log",
+ "pi-config",
  "pi-rpc",
  "pi-sessions",
  "remote",

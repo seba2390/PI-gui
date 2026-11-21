@@ -92,6 +92,27 @@ impl Ssh {
         script_result(output).map(drop)
     }
 
+    /// The contents of file `path` on the host, or `None` if there is no such file.
+    pub fn read_file(&self, path: &str) -> Result<Option<Vec<u8>>, RemoteError> {
+        let script = format!(
+            "if [ -f {0} ]; then printf 1; cat -- {0}; else printf 0; fi",
+            sh_quote(path)
+        );
+        let output = self.exec_bytes(&script, SHELL_TIMEOUT)?;
+        match output.stdout.split_first() {
+            Some((b'1', rest)) => Ok(Some(rest.to_vec())),
+            Some((b'0', _)) => Ok(None),
+            _ => Err(RemoteError::Failed(format!("could not read {path}"))),
+        }
+    }
+
+    /// Runs a POSIX script on the host with `stdin` (for secrets that must not appear on a
+    /// command line) and returns its stdout.
+    pub fn exec_with_input(&self, script: &str, stdin: Vec<u8>) -> Result<Vec<u8>, RemoteError> {
+        let output = process::run(self.script_command(script), Some(stdin), SHELL_TIMEOUT)?;
+        script_result(output).map(|output| output.stdout)
+    }
+
     /// Whether `path` exists on the host.
     pub fn exists(&self, path: &str) -> Result<bool, RemoteError> {
         let script = format!("[ -e {} ] && echo yes || echo no", sh_quote(path));

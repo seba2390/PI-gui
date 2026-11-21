@@ -201,6 +201,18 @@ fn live_workspace_and_sessions() {
             .to_vec(),
         )
         .unwrap();
+        // Reading files and sending private input (how the models dialog works remotely).
+        let read = ssh.read_file(&file).unwrap().expect("the uploaded file");
+        assert!(String::from_utf8(read).unwrap().contains("hello remote"));
+        assert_eq!(
+            ssh.read_file(&format!("{root}/missing.json")).unwrap(),
+            None
+        );
+        let echoed = ssh
+            .exec_with_input("cat", b"secret header".to_vec())
+            .unwrap();
+        assert_eq!(echoed, b"secret header");
+
         let mut index = remote::SessionIndex::default();
         let listed = index.refresh(&ssh, &sessions).unwrap();
         assert_eq!(listed.len(), 1);

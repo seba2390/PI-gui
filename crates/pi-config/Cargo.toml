@@ -1,0 +1,17 @@
+[package]
+name = "pi-config"
+description = "UI-agnostic editing of pi's models.json: parse, add providers and models, validate, presets"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+
+[lints]
+workspace = true

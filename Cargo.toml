@@ -11,6 +11,7 @@ publish = false
 
 [workspace.dependencies]
 # Internal crates
+pi-config = { path = "crates/pi-config" }
 pi-rpc = { path = "crates/pi-rpc" }
 pi-sessions = { path = "crates/pi-sessions" }
 remote = { path = "crates/remote" }
@@ -25,7 +26,8 @@ gpui-kit = { version = "=0.10.0", default-features = false, features = ["compone
 anyhow = "1"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# preserve_order keeps the key order of files the GUI rewrites (models.json).
+serde_json = { version = "1", features = ["preserve_order"] }
 async-channel = "2"
 futures = { version = "0.3", default-features = false, features = ["std", "async-await"] }
 log = "0.4"

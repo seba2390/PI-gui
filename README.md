@@ -50,6 +50,14 @@ skills and prompt templates all come from your normal pi configuration.
   - Limits: csh/tcsh login shells are not supported (bash, zsh, dash, ksh and fish are; fish
     is untested on a real host). Windows clients are untested: the `remote` crate uses Unix
     sockets, and Windows' OpenSSH cannot share connections.
+- **Add model**: the model picker under the composer ends with "Add model…" and "Edit
+  models.json…". The form adds a custom model to pi's `models.json`, to a provider already in
+  the file or a new one (presets for Ollama, LM Studio, vLLM, llama.cpp and OpenRouter; any
+  OpenAI-, Anthropic- or Gemini-compatible endpoint), and can list the server's models to pick
+  from. The other tab edits the file directly, with validation. It is the file the session's pi
+  reads (on the SSH host for remote sessions); the previous version is kept as
+  `models.json.bak-pi-gui`. pi reads the file only when it starts, so after saving it restarts
+  on the same session (after the current turn, if one is running) and selects the new model.
 - Right panel: git changes and a file tree of the working folder.
 - Bottom panel: an integrated terminal in the working folder.
 - macOS and Linux (Windows best-effort). GPU-rendered with [GPUI](https://gpui.rs) via
@@ -102,6 +110,7 @@ crates/
   pi-rpc/       typed protocol (serde mirror of pi's rpc-types), strict JSONL framing, client, process
   transcript/   pure reducer: pi events / stored messages → renderable transcript (no UI, no I/O)
   pi-sessions/  read-only index of pi's session files for the sidebar
+  pi-config/    editing pi's models.json: parse, add providers/models, validate, presets
   workspace/    git status/diff (git CLI) + gitignore-aware file listing + fs watcher
   remote/       SSH: ~/.ssh/config discovery, saved hosts, shared connections, remote probes,
                 pi auto-install, askpass prompts, remote sessions, the RemoteShell for workspace
@@ -125,6 +134,7 @@ script/bundle-macos.sh && script/shot.sh <folder> out.png terminal,diff   # scri
 `PI_GUI_OPEN=chat|code,terminal,diff,files,no-sidebar,latest,attach,context,add-host,manage-hosts,ssh:<alias>`
 opens those panels (or the newest session, the attach picker, the context breakdown) at
 startup, which is what `script/shot.sh` uses for layout checks without driving the mouse.
+`add-model`, `add-provider` and `edit-models` open the models dialog.
 `remote:<alias>:<folder>` (a new session there) and `remote-latest:<alias>` (the host's newest
 session) open a remote session once connected; panels listed after them apply to it.
 

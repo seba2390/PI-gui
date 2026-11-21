@@ -5,6 +5,7 @@ pub mod composer;
 mod context_panel;
 mod dialogs;
 mod file_picker;
+pub mod models_dialog;
 mod rows;
 pub mod session;
 

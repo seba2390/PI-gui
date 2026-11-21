@@ -63,6 +63,12 @@ fn focus_chat(chat: &Entity<ChatView>, window: &mut Window, cx: &mut App) {
     focus.focus(window, cx);
 }
 
+/// A restart of pi that waits for the agent to settle, and the model to select afterwards.
+#[derive(Debug, Clone)]
+struct PendingReload {
+    select: Option<(String, String)>,
+}
+
 /// A session on an SSH host to open once the host is connected.
 #[derive(Debug, Clone)]
 struct RemoteTarget {
@@ -89,6 +95,9 @@ pub struct MainWindow {
     after_remote: Vec<String>,
     /// `PI_GUI_OPEN=remote-latest:…`: open this host's newest session once it is listed.
     pending_latest: Option<HostId>,
+    /// models.json changed while the agent worked: restart pi (and select this model) once
+    /// it settles.
+    models_reload: Option<PendingReload>,
     sidebar_open: bool,
     right_open: bool,
     terminal_open: bool,
@@ -194,6 +203,7 @@ impl MainWindow {
             pending_remote: restore.map(|target| (target, true)),
             after_remote: Vec::new(),
             pending_latest: None,
+            models_reload: None,
             sidebar_open: true,
             right_open: false,
             terminal_open: false,
@@ -215,6 +225,12 @@ impl MainWindow {
                 "chat" => self.switch_to_mode(Mode::Chat, window, cx),
                 "add-host" => self.open_add_host(window, cx),
                 "manage-hosts" => self.open_manage_hosts(window, cx),
+                "add-model" => drop(self.open_models_dialog(false, window, cx)),
+                "add-provider" => {
+                    let dialog = self.open_models_dialog(false, window, cx);
+                    dialog.update(cx, |dialog, cx| dialog.start_with_new_provider(cx));
+                }
+                "edit-models" => drop(self.open_models_dialog(true, window, cx)),
                 other if other.starts_with("ssh:") => {
                     let alias = other.trim_start_matches("ssh:").to_owned();
                     let host = add_alias_host(alias, cx);
@@ -623,6 +639,13 @@ impl MainWindow {
         cx: &mut Context<Self>,
     ) {
         match event {
+            ChatEvent::SessionChanged
+                if self.models_reload.is_some()
+                    && !self.chat.read(cx).session().read(cx).is_running() =>
+            {
+                let select = self.models_reload.take().and_then(|reload| reload.select);
+                self.reload_models(select, window, cx);
+            }
             ChatEvent::SessionChanged => {
                 let session_file = self.chat.read(cx).session().read(cx).session_file();
                 let host = self.host(cx);
@@ -652,6 +675,9 @@ impl MainWindow {
                 }
                 ComposerEvent::AddHost => self.open_add_host(window, cx),
                 ComposerEvent::ManageHosts => self.open_manage_hosts(window, cx),
+                ComposerEvent::AddModel { edit_json } => {
+                    drop(self.open_models_dialog(*edit_json, window, cx));
+                }
             },
         }
     }
@@ -723,6 +749,84 @@ impl MainWindow {
         window.open_dialog(cx, move |dialog, _, _| {
             dialog.title(title.clone()).w(px(520.)).child(flow.clone())
         });
+    }
+
+    /// "Add model" / "Edit models.json" for the pi the visible session runs (here or on its
+    /// SSH host). After saving, pi restarts on the same session to load the file.
+    fn open_models_dialog(
+        &mut self,
+        edit_json: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<crate::chat::models_dialog::ModelsDialog> {
+        use crate::chat::models_dialog::{ModelsDialog, ModelsDialogEvent, ModelsTab};
+        let host = self.host(cx);
+        let title = match &host {
+            Some(host) => format!("Models on {}", crate::hosts::hosts(cx).read(cx).label(host)),
+            None => "Models".to_owned(),
+        };
+        let tab = if edit_json {
+            ModelsTab::Json
+        } else {
+            ModelsTab::Form
+        };
+        let dialog = cx.new(|cx| ModelsDialog::new(host, tab, window, cx));
+        self.dialog_subscription = Some(cx.subscribe_in(
+            &dialog,
+            window,
+            |this, _, event: &ModelsDialogEvent, window, cx| {
+                let ModelsDialogEvent::Saved { select } = event;
+                window.close_dialog(cx);
+                this.reload_models(select.clone(), window, cx);
+            },
+        ));
+        let view = dialog.clone();
+        window.open_dialog(cx, move |dialog_view, _, _| {
+            dialog_view
+                .title(title.clone())
+                .w(px(600.))
+                .child(view.clone())
+        });
+        dialog
+    }
+
+    /// pi reads models.json only when it starts: restart the visible session's pi (resuming
+    /// its session file) and select `select`. A working agent is not interrupted; the
+    /// restart waits until it settles.
+    fn reload_models(
+        &mut self,
+        select: Option<(String, String)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.chat.read(cx).session().read(cx).is_running() {
+            self.models_reload = Some(PendingReload { select });
+            window.push_notification(
+                "Saved models.json. pi reloads it when the current turn finishes.",
+                cx,
+            );
+            return;
+        }
+        let (cwd, file, host) = {
+            let session = self.chat.read(cx).session().read(cx);
+            (
+                session.cwd().to_path_buf(),
+                session.session_file(),
+                session.host().cloned(),
+            )
+        };
+        let chat = cx.new(|cx| ChatView::new(cwd, file, host, window, cx));
+        if let Some((provider, id)) = select {
+            let session = chat.read(cx).session().clone();
+            session.update(cx, |session, cx| {
+                session.select_model_when_ready(provider, id, cx);
+            });
+        }
+        // The old pi is idle; let it go rather than keep it in the background.
+        let previous = self.chat.clone();
+        self.show_chat(chat, window, cx);
+        self.background
+            .retain(|(chat, _)| chat.entity_id() != previous.entity_id());
     }
 
     /// "Manage SSH connections".

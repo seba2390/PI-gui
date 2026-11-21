@@ -75,6 +75,8 @@ pub struct PiSession {
     /// `setWidget` blocks from extensions, shown above the composer.
     widgets: BTreeMap<String, Vec<String>>,
     pending: VecDeque<PendingPrompt>,
+    /// `(provider, model id)` to switch to once pi has started (after adding a model).
+    pending_model: Option<(String, String)>,
     _event_pump: Task<()>,
 }
 
@@ -126,6 +128,7 @@ impl PiSession {
             extension_status: BTreeMap::new(),
             widgets: BTreeMap::new(),
             pending: VecDeque::new(),
+            pending_model: None,
             _event_pump: Task::ready(()),
         };
 
@@ -409,6 +412,42 @@ impl PiSession {
         .detach();
     }
 
+    /// Switches to `provider/model_id` as soon as pi has started and listed its models (right
+    /// away if it already has).
+    pub fn select_model_when_ready(
+        &mut self,
+        provider: String,
+        model_id: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.pending_model = Some((provider, model_id));
+        if self.lifecycle == Lifecycle::Ready {
+            self.apply_pending_model(cx);
+        }
+    }
+
+    fn apply_pending_model(&mut self, cx: &mut Context<Self>) {
+        let Some((provider, id)) = self.pending_model.take() else {
+            return;
+        };
+        match self
+            .models
+            .iter()
+            .find(|model| model.provider == provider && model.id == id)
+            .cloned()
+        {
+            Some(model) => self.set_model(&model, cx),
+            None => self.push_notice(
+                NoticeKind::Error,
+                format!(
+                    "pi did not load {provider}/{id}. Check the provider's base URL and API key \
+                     (pi lists only models it can authenticate)."
+                ),
+                cx,
+            ),
+        }
+    }
+
     pub fn set_thinking_level(&mut self, level: ThinkingLevel, cx: &mut Context<Self>) {
         if let Some(state) = &mut self.state {
             state.thinking_level = level;
@@ -570,6 +609,9 @@ impl PiSession {
                 }
                 for prompt in std::mem::take(&mut this.pending) {
                     this.submit(prompt.text, prompt.images, false, cx);
+                }
+                if this.lifecycle == Lifecycle::Ready {
+                    this.apply_pending_model(cx);
                 }
                 cx.emit(SessionEvent::TranscriptChanged);
                 cx.emit(SessionEvent::MetaChanged);
@@ -923,6 +965,90 @@ mod tests {
 
     use super::{Lifecycle, PiSession, SessionEvent};
     use crate::config::AppConfig;
+
+    /// The "Add model" flow against real pi (`pi` on PATH): pi starts without the model, the
+    /// model is added to models.json the way the dialog does it, pi is restarted (as the
+    /// window does after saving), and the new model gets selected.
+    /// `cargo test -p pi-gui -- --ignored added_model_is_loaded_and_selected`
+    #[cfg(unix)]
+    #[gpui_kit::test]
+    #[ignore = "needs pi on PATH"]
+    async fn added_model_is_loaded_and_selected(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let agent = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let mut config = AppConfig::for_tests("pi".into());
+        config.child_env = vec![("PI_CODING_AGENT_DIR".into(), agent.path().into())];
+        cx.update(|cx| cx.set_global(config));
+
+        let wait_ready = async |session: &gpui_kit::Entity<PiSession>, cx: &mut TestAppContext| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+            while cx.read(|cx| session.read(cx).lifecycle() == &Lifecycle::Starting) {
+                assert!(std::time::Instant::now() < deadline, "pi did not start");
+                cx.background_executor
+                    .timer(std::time::Duration::from_millis(50))
+                    .await;
+            }
+        };
+        let before = cx.new(|cx| PiSession::new(project.path().into(), None, None, cx));
+        wait_ready(&before, cx).await;
+        assert!(cx.read(|cx| {
+            before
+                .read(cx)
+                .models()
+                .iter()
+                .all(|m| m.provider != "pigui-test")
+        }));
+
+        let mut file = pi_config::ModelsFile::parse("").unwrap();
+        let provider = pi_config::NewProvider {
+            id: "pigui-test".into(),
+            name: "PI-gui test".into(),
+            base_url: "http://127.0.0.1:9/v1".into(),
+            api: "openai-completions".into(),
+            api_key: "none".into(),
+        };
+        let model = pi_config::ModelSpec {
+            id: "added-model".into(),
+            name: "Added model".into(),
+            context_window: Some(32_000),
+            ..pi_config::ModelSpec::default()
+        };
+        file.add_model("pigui-test", Some(&provider), &model)
+            .unwrap();
+        std::fs::write(agent.path().join("models.json"), file.to_text()).unwrap();
+        drop(before);
+
+        let after = cx.new(|cx| PiSession::new(project.path().into(), None, None, cx));
+        after.update(cx, |session, cx| {
+            session.select_model_when_ready("pigui-test".into(), "added-model".into(), cx);
+        });
+        wait_ready(&after, cx).await;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let current = cx.read(|cx| {
+                after
+                    .read(cx)
+                    .model()
+                    .map(pi_rpc::protocol::Model::qualified_id)
+            });
+            if current.as_deref() == Some("pigui-test/added-model") {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "selected: {current:?}"
+            );
+            cx.background_executor
+                .timer(std::time::Duration::from_millis(50))
+                .await;
+        }
+        cx.read(|cx| {
+            let session = after.read(cx);
+            assert_eq!(session.model().unwrap().display_name(), "Added model");
+            assert_eq!(session.model().unwrap().context_window, 32_000);
+        });
+    }
 
     /// Drives a real `PiSession` against the scripted fake pi from `pi-rpc`'s tests.
     #[cfg(unix)]

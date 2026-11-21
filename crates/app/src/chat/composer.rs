@@ -61,6 +61,10 @@ pub enum ComposerEvent {
     BrowseRemote(HostId),
     /// Open "Manage SSH connections".
     ManageHosts,
+    /// Open the "Add model" dialog (on its form, or on the models.json editor).
+    AddModel {
+        edit_json: bool,
+    },
 }
 
 /// A file attached to the next prompt.
@@ -603,13 +607,16 @@ impl Composer {
             |model| model.display_name().to_owned(),
         );
         let handle = self.session.clone();
+        let composer = cx.weak_entity();
         Button::new(menu_id("model-picker", &(&current, models.len())))
             .quiet(cx)
             .small()
             .label(label)
             .dropdown_caret(true)
-            .disabled(models.is_empty())
             .dropdown_menu_with_anchor(Anchor::BottomRight, move |mut menu, _, _| {
+                if models.is_empty() {
+                    menu = menu.label("No models available yet");
+                }
                 for model in &models {
                     let (handle, model) = (handle.clone(), model.clone());
                     let checked = current.as_deref() == Some(model.qualified_id().as_str());
@@ -625,7 +632,26 @@ impl Composer {
                         }),
                     );
                 }
-                menu
+                let (add, edit) = (composer.clone(), composer.clone());
+                menu.separator()
+                    .item(
+                        PopupMenuItem::new("Add model…")
+                            .icon(IconName::Plus)
+                            .on_click(move |_, _, cx| {
+                                let _ = add.update(cx, |_, cx| {
+                                    cx.emit(ComposerEvent::AddModel { edit_json: false });
+                                });
+                            }),
+                    )
+                    .item(
+                        PopupMenuItem::new("Edit models.json…")
+                            .icon(IconName::File)
+                            .on_click(move |_, _, cx| {
+                                let _ = edit.update(cx, |_, cx| {
+                                    cx.emit(ComposerEvent::AddModel { edit_json: true });
+                                });
+                            }),
+                    )
             })
     }
 
