@@ -18,6 +18,7 @@ static EMBEDDED: &[(&str, &[u8])] = embedded![
     "icons/files.svg",
     "icons/git-branch.svg",
     "icons/git-compare.svg",
+    "icons/globe.svg",
     "icons/image.svg",
     "icons/message-square.svg",
     "icons/paperclip.svg",

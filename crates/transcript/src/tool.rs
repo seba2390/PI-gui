@@ -74,6 +74,9 @@ pub fn header(tool: &ToolBlock, paths: PathContext<'_>) -> ToolHeader {
             "Find",
             format!("{} in {}", arg(args, "pattern").unwrap_or(""), path(".")),
         ),
+        // Deep search (pi-gui's chat extension).
+        "web_search" => ("Search", arg(args, "query").unwrap_or("").to_owned()),
+        "web_fetch" => ("Read", short_url(arg(args, "url").unwrap_or(""))),
         other => {
             return ToolHeader {
                 title: other.to_owned(),
@@ -84,6 +87,20 @@ pub fn header(tool: &ToolBlock, paths: PathContext<'_>) -> ToolHeader {
     ToolHeader {
         title: title.to_owned(),
         detail,
+    }
+}
+
+/// A URL without its scheme and `www.`, at most 80 characters.
+fn short_url(url: &str) -> String {
+    let short = url
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_start_matches("www.")
+        .trim_end_matches('/');
+    if short.chars().count() > 80 {
+        format!("{}…", short.chars().take(79).collect::<String>())
+    } else {
+        short.to_owned()
     }
 }
 
@@ -166,6 +183,26 @@ pub fn result_summary(tool: &ToolBlock) -> Option<String> {
                 "No results".to_owned()
             } else {
                 count(found, "result")
+            })
+        }
+        "web_search" => {
+            let results = tool.details.as_ref()?.get("results")?.as_array()?.len();
+            Some(if results == 0 {
+                "No results".to_owned()
+            } else {
+                count(results, "result")
+            })
+        }
+        "web_fetch" => {
+            let details = tool.details.as_ref()?;
+            let title = details.get("title")?.as_str()?;
+            let shown = details.get("sections_shown").and_then(Value::as_u64);
+            let total = details.get("sections_total").and_then(Value::as_u64);
+            Some(match (shown, total) {
+                (Some(shown), Some(total)) if shown < total => {
+                    format!("{title} ({shown} of {total} sections)")
+                }
+                _ => title.to_owned(),
             })
         }
         _ => None,
@@ -268,6 +305,16 @@ mod tests {
                 "/fn main/ in . (*.rs)",
             ),
             (tool("ls", json!({})), "List", "."),
+            (
+                tool("web_search", json!({"query":"dgx spark price"})),
+                "Search",
+                "dgx spark price",
+            ),
+            (
+                tool("web_fetch", json!({"url":"https://www.example.com/a/b/"})),
+                "Read",
+                "example.com/a/b",
+            ),
             (tool("mcp__x", json!({"q":"hi"})), "mcp__x", "q: hi"),
         ];
         for (tool, title, detail) in cases {
@@ -279,6 +326,16 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn summarizes_deep_search_results() {
+        let mut search = tool("web_search", json!({"query":"q"}));
+        search.details = Some(json!({"results": [{"url":"a"}, {"url":"b"}]}));
+        assert_eq!(result_summary(&search).unwrap(), "2 results");
+        let mut fetch = tool("web_fetch", json!({"url":"https://e.com"}));
+        fetch.details = Some(json!({"title":"Docs","sections_shown":3,"sections_total":9}));
+        assert_eq!(result_summary(&fetch).unwrap(), "Docs (3 of 9 sections)");
     }
 
     #[test]

@@ -48,12 +48,12 @@ impl SessionSummary {
 /// How a session is used in the GUI.
 ///
 /// pi has no notion of modes. The GUI runs every *chat* in one dedicated, empty folder
-/// ([`chat_dir`]) with all tools disabled (`--no-tools`, which pi records in the session and
-/// restores on resume), so a session's mode follows from its working folder alone.
+/// ([`chat_dir`]) without file or shell tools (only deep search's web tools, off until the
+/// chat turns deep search on), so a session's mode follows from its working folder alone.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
-    /// Plain conversation: no tools, no project folder.
+    /// Plain conversation: no file or shell tools, no project folder.
     Chat,
     /// The coding agent working in a project folder.
     #[default]

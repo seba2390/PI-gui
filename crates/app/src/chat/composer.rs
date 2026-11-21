@@ -27,7 +27,7 @@ use pi_rpc::protocol::ImageContent;
 
 use super::commands::{self, CommandOutcome};
 use super::file_picker::{self, FilePicker, Pick};
-use super::session::{Lifecycle, PiSession};
+use super::session::{Lifecycle, PiSession, WebMode};
 use crate::config::{AppConfig, RecentFolders};
 use crate::theme::palette;
 use crate::ui::AppIcon;
@@ -428,15 +428,21 @@ impl Composer {
         let cwd = session.cwd().to_path_buf();
 
         if session.mode() == Mode::Chat {
+            let web_mode = session.web_search_available().then(|| session.web_mode());
             // No project folder: attach straight from the system dialog, no folder picker.
-            let left = h_flex().gap_1().child(
-                Button::new("attach")
-                    .quiet(cx)
-                    .small()
-                    .icon(Icon::from(AppIcon::Paperclip))
-                    .tooltip("Attach files or images")
-                    .on_click(cx.listener(|this, _, _, cx| this.pick_attachments(cx))),
-            );
+            let left = h_flex()
+                .gap_1()
+                .child(
+                    Button::new("attach")
+                        .quiet(cx)
+                        .small()
+                        .icon(Icon::from(AppIcon::Paperclip))
+                        .tooltip("Attach files or images")
+                        .on_click(cx.listener(|this, _, _, cx| this.pick_attachments(cx))),
+                )
+                .when_some(web_mode, |left, mode| {
+                    left.child(self.render_web_mode(mode, cx))
+                });
             return self.toolbar_layout(left, cx).into_any_element();
         }
 
@@ -487,6 +493,44 @@ impl Composer {
             );
 
         self.toolbar_layout(left, cx).into_any_element()
+    }
+
+    /// The globe (chats only): a menu to choose how the model uses the web; labelled and
+    /// highlighted while search or deep search is on.
+    fn render_web_mode(
+        &self,
+        current: WebMode,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let button = Button::new(menu_id("web-mode", &current.as_str()))
+            .small()
+            .icon(Icon::from(AppIcon::Globe))
+            .toggled(current != WebMode::Off);
+        let button = match current {
+            WebMode::Off => button
+                .quiet(cx)
+                .tooltip("Web: off. Choose Search for quick lookups, Deep search for research"),
+            WebMode::Search => button
+                .label(web_mode_label(current))
+                .tooltip("Search: the model looks things up on the web when needed"),
+            WebMode::Deep => button.label(web_mode_label(current)).tooltip(
+                "Deep search: the model researches thoroughly on the web before reporting back",
+            ),
+        };
+        let handle = self.session.clone();
+        button.dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
+            for mode in [WebMode::Off, WebMode::Search, WebMode::Deep] {
+                let handle = handle.clone();
+                menu = menu.item(
+                    PopupMenuItem::new(web_mode_label(mode))
+                        .checked(current == mode)
+                        .on_click(move |_, _, cx| {
+                            handle.update(cx, |session, cx| session.set_web_mode(mode, cx));
+                        }),
+                );
+            }
+            menu
+        })
     }
 
     /// The attach button with its searchable list of the working folder's files.
@@ -838,11 +882,19 @@ impl Composer {
     }
 
     fn render_status(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        let statuses = self.session.read(cx).extension_status();
+        // Deep search's status drives its toolbar button instead.
+        let statuses = self
+            .session
+            .read(cx)
+            .extension_status()
+            .iter()
+            .filter(|(key, _)| key.as_str() != deepsearch::STATUS_KEY)
+            .map(|(_, text)| text.clone())
+            .collect::<Vec<_>>();
         if statuses.is_empty() {
             return None;
         }
-        let text = statuses.values().cloned().collect::<Vec<_>>().join("  ·  ");
+        let text = statuses.join("  ·  ");
         Some(
             div()
                 .px_3()
@@ -1109,6 +1161,14 @@ pub(crate) fn folder_label(
 /// Element id for a dropdown whose items depend on `key`. gpui-kit keeps a built menu per
 /// trigger id and only rebuilds it after certain dismissals, so a stale menu could be shown
 /// (e.g. the previous model's thinking levels); a content-derived id always gets a fresh one.
+fn web_mode_label(mode: WebMode) -> &'static str {
+    match mode {
+        WebMode::Off => "Off",
+        WebMode::Search => "Search",
+        WebMode::Deep => "Deep search",
+    }
+}
+
 fn menu_id(name: &'static str, key: &impl std::hash::Hash) -> ElementId {
     use std::hash::BuildHasher as _;
 

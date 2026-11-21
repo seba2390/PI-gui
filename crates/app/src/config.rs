@@ -16,6 +16,10 @@ pub struct AppConfig {
     pub home: Option<PathBuf>,
     /// The folder chat-mode sessions run in (see [`pi_sessions::Mode`]).
     pub chat_dir: PathBuf,
+    /// Deep search's settings, research instructions and pi extension (see [`deepsearch`]).
+    pub deepsearch_dir: PathBuf,
+    /// This executable, which runs deep search's web tools for pi.
+    pub exe: Option<PathBuf>,
     /// Panels to open at startup (`PI_GUI_OPEN=terminal,diff,files`), for scripted
     /// screenshots and responsiveness checks.
     pub open_at_startup: Vec<String>,
@@ -48,6 +52,8 @@ impl AppConfig {
             sessions_dir: None,
             home: None,
             chat_dir: std::env::temp_dir().join("pi-gui-test-chat"),
+            deepsearch_dir: std::env::temp_dir().join("pi-gui-test-deepsearch"),
+            exe: Some(PathBuf::from("/app/pi-gui")),
             open_at_startup: Vec::new(),
         }
     }
@@ -63,6 +69,9 @@ impl AppConfig {
             home,
             chat_dir: pi_sessions::chat_dir()
                 .unwrap_or_else(|| std::env::temp_dir().join("pi-gui-chat")),
+            deepsearch_dir: deepsearch::config::default_dir()
+                .unwrap_or_else(|| std::env::temp_dir().join("pi-gui-deepsearch")),
+            exe: std::env::current_exe().ok(),
             open_at_startup: std::env::var("PI_GUI_OPEN")
                 .map(|value| {
                     value

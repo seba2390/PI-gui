@@ -11,6 +11,7 @@ publish = false
 
 [workspace.dependencies]
 # Internal crates
+deepsearch = { path = "crates/deepsearch" }
 pi-config = { path = "crates/pi-config" }
 pi-rpc = { path = "crates/pi-rpc" }
 pi-sessions = { path = "crates/pi-sessions" }

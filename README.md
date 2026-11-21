@@ -14,12 +14,40 @@ skills and prompt templates all come from your normal pi configuration.
 - Left sidebar with a **Chat | Code** switch (⌘1 / ⌘2):
   - **Code**: the coding agent in a project folder; sessions are grouped under their folder
     (collapsible, "+" for a new session there), including ones started from the terminal.
-  - **Chat**: plain conversation with **no tools**: the model cannot read, write or run
-    anything. Chats run pi with `--no-tools` in a dedicated empty folder
-    (`~/.pi/agent/pi-gui/chat`); pi records the empty tool set in the session and restores it
-    on resume, so a chat stays tool-less even when reopened from the terminal. Text
+  - **Chat**: plain conversation with **no file or shell tools**: the model cannot read, write
+    or run anything on your computer. Chats run pi in a dedicated empty folder
+    (`~/.pi/agent/pi-gui/chat`) with only deep search's two web tools (`--tools
+    web_search,web_fetch --no-mcp`), which stay off until you turn web search on. Text
     attachments are pasted into the prompt instead of being referenced by path, and `!`
     shell commands are disabled.
+  - **Web search** (Chat): the globe button next to the paperclip chooses how the model uses
+    the web, per chat (remembered in the session; `/websearch off|search|deep` works too):
+    - **Search**: a quick lookup when needed (a few searches and pages), then a concise answer
+      with links.
+    - **Deep search**: a thorough investigation: the model plans sub-questions, searches from
+      several angles, reads many pages, cross-checks key facts and reports back with a
+      structured, sourced report. Takes minutes rather than seconds.
+
+    The model searches (`web_search`) and reads pages (`web_fetch`); the work is done in Rust
+    by the app itself, and a small embedded pi extension only connects the tools to pi. Pages
+    are read without JavaScript, reduced to their main text, and long pages are cut down to
+    the passages that match what the model is looking for. Only public addresses are fetched
+    (no localhost or private networks), and each message has a limit on searches and page
+    reads. Settings live in `~/.pi/agent/pi-gui/deepsearch/` and apply to the next message,
+    no restart:
+    - `config.json`: `backend` (`duckduckgo` by default, no key; `searxng` with
+      `searxng.url`, e.g. a self-hosted instance with `json` enabled in its `settings.yml`;
+      `brave` or `tavily` with an API key or `api_key_env`), `default_mode` for new chats,
+      `modes.search` / `modes.deep` limits (`max_searches`, `max_fetches` per message),
+      results per search, page text per read (`fetch.max_chars`; lower it for small context
+      windows), `fetch.allow_private_networks` and timeouts. Settings added in later versions
+      are filled in automatically.
+    - `prompt-search.md` and `prompt-deep.md`: each mode's instructions (`{{date}}`,
+      `{{max_searches}}` and `{{max_fetches}}` are filled in). Delete a file to get the
+      default back.
+    - Try settings without the GUI: `pi-gui --deepsearch-tool search <query>` and
+      `pi-gui --deepsearch-tool fetch <url> [what to look for]` print what the model would
+      see.
   - Search, rename and move to trash in both modes.
 - **SSH** (Code mode): the device button next to the folder ("This computer", with a status
   light) runs pi on another machine. "Add SSH connection…" lists the hosts in your
@@ -125,6 +153,8 @@ crates/
   remote/       SSH: ~/.ssh/config discovery, saved hosts, shared connections, remote probes,
                 pi auto-install, askpass prompts, remote sessions, the RemoteShell for workspace
   term/         terminal backend: alacritty_terminal + PTY, UI-agnostic snapshots
+  deepsearch/   chat web search (search / deep): search backends, public-only fetching, page text extraction,
+                passage ranking, settings, and the pi extension that runs them via the app
   app/          the GPUI application (binary `pi-gui`)
 ```
 

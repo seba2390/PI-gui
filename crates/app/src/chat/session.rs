@@ -4,6 +4,7 @@
 //! pumps its events into the [`Transcript`] reducer, and exposes pi's commands as
 //! methods. Views observe it and render; they never hold protocol state.
 
+pub use deepsearch::config::Mode as WebMode;
 use pi_sessions::Mode;
 use remote::HostId;
 use std::collections::{BTreeMap, VecDeque};
@@ -278,6 +279,43 @@ impl PiSession {
 
     pub fn extension_status(&self) -> &BTreeMap<String, String> {
         &self.extension_status
+    }
+
+    /// How this chat uses the web (as its pi extension reports).
+    pub fn web_mode(&self) -> WebMode {
+        self.extension_status
+            .get(deepsearch::STATUS_KEY)
+            .and_then(|text| WebMode::parse(text))
+            .unwrap_or_default()
+    }
+
+    /// Whether this chat's pi loaded web search (it offers the `/websearch` command).
+    pub fn web_search_available(&self) -> bool {
+        self.mode == Mode::Chat
+            && self
+                .commands
+                .iter()
+                .any(|command| command.name == deepsearch::COMMAND)
+    }
+
+    /// Sets this chat's web mode through the extension's `/websearch` command; the extension
+    /// remembers it in the session and confirms it with its status.
+    pub fn set_web_mode(&mut self, mode: WebMode, cx: &mut Context<Self>) {
+        if !self.web_search_available() {
+            return;
+        }
+        if mode == WebMode::Off {
+            self.extension_status.remove(deepsearch::STATUS_KEY);
+        } else {
+            self.extension_status
+                .insert(deepsearch::STATUS_KEY.into(), mode.as_str().into());
+        }
+        cx.emit(SessionEvent::MetaChanged);
+        cx.notify();
+        let command = format!("/{} {}", deepsearch::COMMAND, mode.as_str());
+        self.run(cx, async move |client| {
+            client.prompt(command, Vec::new(), None).await.map(drop)
+        });
     }
 
     pub fn session_file(&self) -> Option<PathBuf> {
@@ -778,9 +816,12 @@ impl PiSession {
     }
 }
 
-/// How to launch pi for a session in `cwd`. Chat sessions get `--no-tools`: pi records the
-/// empty tool set in the session and restores it on resume (even from the terminal), so a chat
-/// can never read or change files; passing it again on resume is belt and braces.
+/// How to launch pi for a session in `cwd`. Chat sessions get only the web tools
+/// (`--tools web_search,web_fetch`, which the extension keeps off until the chat turns web
+/// search on), no MCP, and no built-in tools: a chat can never read or change files. An
+/// explicit `--tools` list wins over the tool set pi recorded in the session, also for chats
+/// started with `--no-tools` before web search existed. If the extension cannot be written,
+/// chats fall back to `--no-tools`.
 ///
 /// On a remote `host`, pi runs there through the host's shared ssh connection, in `cwd` on the
 /// remote, via the login shell (see [`remote::Ssh::command`]); remote sessions are always Code.
@@ -797,7 +838,7 @@ fn spawn_options(
     let Some(host) = host else {
         let mode = config.mode_of(cwd);
         if mode == Mode::Chat {
-            options.extra_args.push("--no-tools".into());
+            chat_args(config, &mut options);
         }
         return (options, mode);
     };
@@ -817,19 +858,70 @@ fn spawn_options(
     (options, Mode::Code)
 }
 
+/// pi's arguments and environment for a chat: the web tools only (see [`spawn_options`]).
+fn chat_args(config: &AppConfig, options: &mut SpawnOptions) {
+    let extension = match (
+        &config.exe,
+        deepsearch::install_extension(&config.deepsearch_dir),
+    ) {
+        (Some(exe), Ok(extension)) => Some((exe, extension)),
+        (None, _) => {
+            log::warn!("web search is unavailable: the app's own executable could not be found");
+            None
+        }
+        (_, Err(error)) => {
+            log::warn!(
+                "web search is unavailable: could not write its extension to {}: {error}",
+                config.deepsearch_dir.display()
+            );
+            None
+        }
+    };
+    let Some((exe, extension)) = extension else {
+        options.extra_args.push("--no-tools".into());
+        return;
+    };
+    options.extra_args.extend([
+        "--tools".into(),
+        deepsearch::TOOL_NAMES.join(",").into(),
+        "--no-mcp".into(),
+        "--extension".into(),
+        extension.into(),
+    ]);
+    options
+        .env
+        .push((deepsearch::BIN_ENV.into(), exe.clone().into()));
+    options.env.push((
+        deepsearch::config::DIR_ENV.into(),
+        config.deepsearch_dir.clone().into(),
+    ));
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn chat_sessions_launch_without_tools() {
+    fn chat_sessions_launch_with_only_deep_search_tools() {
         let config = AppConfig::for_tests("pi".into());
         let (chat, mode) = super::spawn_options(&config, &config.chat_dir.clone(), None, None);
         assert_eq!(mode, super::Mode::Chat);
+        let extension = config.deepsearch_dir.join("extension.ts");
         assert_eq!(
             chat.extra_args,
-            vec![std::ffi::OsString::from("--no-tools")]
+            [
+                "--tools".into(),
+                "web_search,web_fetch".into(),
+                "--no-mcp".into(),
+                "--extension".into(),
+                std::ffi::OsString::from(&extension),
+            ]
         );
+        assert!(extension.exists());
+        assert!(chat.env.contains(&(
+            deepsearch::BIN_ENV.into(),
+            std::ffi::OsString::from("/app/pi-gui")
+        )));
 
         let project = std::env::temp_dir().join("some-project");
         let session = project.join("s.jsonl");
