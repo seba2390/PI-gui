@@ -1,0 +1,11 @@
+---
+source: crates/transcript/tests/replay.rs
+expression: "describe(&replay.live, true)"
+---
+USER: Write a detailed 600 word essay about the history of the Python language, with markdown headings.
+ASSISTANT (Aborted):
+  error: Request was aborted
+  thinking [11s]: The user is asking for a detailed 600-word essay about the history of the Python programming language, written with Markdown headings. This is a writing task, not a coding task per se, but I should produce the essay. Let me think about whether to write it to a file or just output it.
+
+The request is "Write a detailed 600 word essay" — this is somewhat ambiguous about whether it should be a file or just text in the response. Given the context (coding assistant), I could write it to a file. But the phrasing "Write... an essay" most naturally suggests producing the text. I'll write it to a file so it's persistent, and also present it. Actually, let me just write it to a file in the scratchpad and show it
+WORKED 14s aborted=true

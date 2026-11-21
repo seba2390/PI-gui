@@ -1,0 +1,19 @@
+[package]
+name = "transcript"
+description = "UI-agnostic reducer that turns pi RPC events and messages into a renderable transcript"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+pi-rpc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+pretty_assertions.workspace = true
+
+[lints]
+workspace = true

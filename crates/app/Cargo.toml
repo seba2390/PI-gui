@@ -1,0 +1,32 @@
+[package]
+name = "pi-gui"
+description = "A lean desktop GUI for the pi coding agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "pi-gui"
+path = "src/main.rs"
+
+[dependencies]
+gpui-kit.workspace = true
+pi-rpc.workspace = true
+pi-sessions.workspace = true
+transcript.workspace = true
+workspace.workspace = true
+term.workspace = true
+anyhow.workspace = true
+log.workspace = true
+env_logger.workspace = true
+serde_json.workspace = true
+async-channel.workspace = true
+base64 = "0.22"
+trash = "5"
+
+[dev-dependencies]
+gpui-kit = { workspace = true, features = ["test-support"] }
+
+[lints]
+workspace = true

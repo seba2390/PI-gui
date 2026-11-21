@@ -1,0 +1,23 @@
+---
+source: crates/transcript/tests/replay.rs
+expression: "describe(&replay.live, true)"
+---
+USER: Reply with a short markdown example: a heading, a bullet list with 2 items, a fenced rust code block with a hello world, and a table with 2 rows. No tools.
+ASSISTANT (Stop):
+  thinking [9s]: The user asks to reply with a short markdown example, no tools. Just answer directly.
+  text: # Hello World
+        
+        - It is a short demo
+        - It needs no tools
+        
+        ```rust
+        fn main() {
+            println!("Hello, world!");
+        }
+        ```
+        
+        | Language | Output    |
+        |----------|-----------|
+        | Rust     | Hello, world! |
+        | Markdown | Renders nicely |
+WORKED 12s aborted=false

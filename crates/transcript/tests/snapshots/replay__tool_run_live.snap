@@ -1,0 +1,18 @@
+---
+source: crates/transcript/tests/replay.rs
+expression: "describe(live, true)"
+---
+USER: Read hello.py, then change greet so it returns an exclamation mark at the end instead, then run it with python3 to verify. Keep it brief.
+ASSISTANT (ToolUse):
+  thinking [3s]: I'm looking at the hello.py file to see what's in it.
+  tool read Done args={"path":"hello.py"} -> def greet(name):⏎    return f"Hello, {name}"⏎⏎print(greet("world")) Read 4 lines
+ASSISTANT (ToolUse):
+  thinking [3s]: Change greet to add an exclamation mark, and run it.
+  tool edit Done args={"edits":[{"newText":"return f\"Hello, {name}!\"","oldText":"return f\"Hello, {name}\""}],"path":"hello.py"} -> Successfully replaced 1 block(s) in hello.py. Added 1 line, removed 1 line
+ASSISTANT (ToolUse):
+  thinking [2s]: Now let's run it with python3 to verify.
+  tool bash Done args={"command":"python3 hello.py"} -> Hello, world! 
+ASSISTANT (Stop):
+  thinking [3s]: Done. Keep it concise.
+  text: Updated `hello.py` — `greet` now returns `"Hello, world!"`. Verified output: `Hello, world!`
+WORKED 23s aborted=false

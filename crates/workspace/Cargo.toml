@@ -1,0 +1,20 @@
+[package]
+name = "workspace"
+description = "UI-agnostic backend for the diff and file-tree panels: git status/diffs, gitignore-aware directory listing, and a debounced filesystem watcher"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+log.workspace = true
+ignore.workspace = true
+notify.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+pretty_assertions.workspace = true
+
+[lints]
+workspace = true

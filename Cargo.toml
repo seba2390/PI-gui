@@ -1,0 +1,81 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+default-members = ["crates/app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+publish = false
+
+[workspace.dependencies]
+# Internal crates
+pi-rpc = { path = "crates/pi-rpc" }
+pi-sessions = { path = "crates/pi-sessions" }
+transcript = { path = "crates/transcript" }
+workspace = { path = "crates/workspace" }
+term = { path = "crates/term" }
+
+# UI. gpui-kit pins the matching `gpui-pre` snapshot; keep it exact (pre-1.0).
+gpui-kit = { version = "=0.10.0", default-features = false, features = ["component", "assets"] }
+
+# Shared
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+async-channel = "2"
+futures = { version = "0.3", default-features = false, features = ["std", "async-await"] }
+log = "0.4"
+env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }
+dirs = "6"
+ignore = "0.4"
+notify = "8"
+alacritty_terminal = "0.26"
+
+# Testing
+insta = { version = "1", features = ["json", "redactions"] }
+pretty_assertions = "1"
+tempfile = "3"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+rust_2018_idioms = { level = "warn", priority = -1 }
+unused_qualifications = "warn"
+elided_lifetimes_in_paths = "allow"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# Pedantic lints that fight GPUI's builder/closure style or add noise.
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+needless_pass_by_value = "allow"
+too_many_lines = "allow"
+similar_names = "allow"
+items_after_statements = "allow"
+wildcard_imports = "allow"         # `use gpui_kit::*` is GPUI's convention
+unused_self = "allow"              # GPUI action handlers take `&mut self`
+used_underscore_binding = "allow"  # retained `_task`/`_subscription` fields
+single_match_else = "allow"
+match_same_arms = "allow"
+redundant_closure_for_method_calls = "allow"  # `entity.update(cx, |x, cx| x.f(cx))` is GPUI idiom
+dbg_macro = "warn"
+todo = "warn"
+unwrap_used = "warn"
+
+[profile.dev]
+# Keep debug builds snappy for UI work while compiling dependencies optimised.
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"
+panic = "abort"
