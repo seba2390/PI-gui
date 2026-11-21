@@ -23,6 +23,7 @@ static EMBEDDED: &[(&str, &[u8])] = embedded![
     "icons/message-square.svg",
     "icons/paperclip.svg",
     "icons/pi-logo.svg",
+    "icons/rotate-ccw.svg",
     "icons/square-pen.svg",
     "themes/pi.json",
 ];

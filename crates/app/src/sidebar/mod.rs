@@ -9,14 +9,13 @@
 
 mod rows;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use gpui_kit::component::button::Button;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::{
-    ActiveTheme as _, Icon, IconName, Selectable as _, Sizable as _, h_flex, v_flex,
-};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use pi_sessions::{Mode, SessionSummary};
@@ -49,8 +48,27 @@ pub enum SidebarEvent {
     DeleteFolder(Option<HostId>, PathBuf),
 }
 
+/// What a session is doing, as shown next to its row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Activity {
+    /// The agent is working (spinner).
+    Working,
+    /// An extension asks something and waits for the user (amber dot).
+    NeedsYou,
+    /// Finished in the background and not looked at since (green dot).
+    Done,
+}
+
+/// How often the working spinner advances: slow enough that the sidebar's repaints cost
+/// almost nothing, and it only ticks while something works.
+const SPINNER_FRAME: Duration = Duration::from_millis(120);
+
 pub struct Sidebar {
     mode: Mode,
+    /// Sessions that are working, waiting for an answer or finished unseen, by host and file.
+    activity: HashMap<(Option<HostId>, PathBuf), Activity>,
+    spinner_frame: usize,
+    spinner: Option<Task<()>>,
     sessions: Vec<SessionSummary>,
     /// The open session: its host (`None`: this computer) and file.
     active: Option<(Option<HostId>, PathBuf)>,
@@ -82,6 +100,9 @@ impl Sidebar {
         ];
         let mut this = Self {
             mode,
+            activity: HashMap::new(),
+            spinner_frame: 0,
+            spinner: None,
             sessions: Vec::new(),
             active: None,
             skills_active: false,
@@ -148,6 +169,43 @@ impl Sidebar {
             self.active = active;
             cx.notify();
         }
+    }
+
+    /// Updates the working / needs-you / done marks; the spinner ticks only while a session
+    /// works.
+    pub fn set_activity(
+        &mut self,
+        activity: HashMap<(Option<HostId>, PathBuf), Activity>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.activity == activity {
+            return;
+        }
+        let working = activity.values().any(|state| *state == Activity::Working);
+        self.activity = activity;
+        if !working {
+            self.spinner = None;
+        } else if self.spinner.is_none() {
+            self.spinner = Some(cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor().timer(SPINNER_FRAME).await;
+                    let alive = this.update(cx, |this, cx| {
+                        this.spinner_frame = this.spinner_frame.wrapping_add(1);
+                        cx.notify();
+                    });
+                    if alive.is_err() {
+                        break;
+                    }
+                }
+            }));
+        }
+        cx.notify();
+    }
+
+    fn activity(&self, host: Option<&HostId>, path: &Path) -> Option<Activity> {
+        self.activity
+            .get(&(host.cloned(), path.to_path_buf()))
+            .copied()
     }
 
     pub fn set_skills_active(&mut self, active: bool, cx: &mut Context<Self>) {
@@ -644,32 +702,23 @@ impl Render for Sidebar {
             )
             .child(self.render_mode_switch(cx))
             .when(self.mode == Mode::Code, |this| {
-                this.child(
-                    div().px_2().child(
-                        Button::new("show-skills")
-                            .quiet(cx)
-                            .w_full()
-                            .justify_start()
-                            .icon(Icon::from(AppIcon::Sparkles))
-                            .label("Skills")
-                            .selected(self.skills_active)
-                            .tooltip("Skills pi can use in Code sessions")
-                            .on_click(cx.listener(|_, _, _, cx| cx.emit(SidebarEvent::ShowSkills))),
-                    ),
-                )
+                this.child(div().px_2().child(rows::action_row(
+                    "show-skills",
+                    AppIcon::Sparkles,
+                    "Skills",
+                    self.skills_active,
+                    SidebarEvent::ShowSkills,
+                    cx,
+                )))
             })
-            .child(
-                div().px_2().pb_2().child(
-                    Button::new("new-chat")
-                        .quiet(cx)
-                        .w_full()
-                        .justify_start()
-                        .icon(Icon::from(AppIcon::SquarePen))
-                        .label(new_label)
-                        .tooltip(format!("{new_label} (⌘N)"))
-                        .on_click(cx.listener(|_, _, _, cx| cx.emit(SidebarEvent::NewChat))),
-                ),
-            )
+            .child(div().px_2().pb_2().child(rows::action_row(
+                "new-chat",
+                AppIcon::SquarePen,
+                new_label,
+                false,
+                SidebarEvent::NewChat,
+                cx,
+            )))
             .child(
                 div()
                     .px_3()

@@ -9,8 +9,9 @@ use gpui_kit::{App, ClipboardItem, Entity, Window};
 use pi_rpc::protocol::ThinkingLevel;
 use transcript::{BlockKind, ItemKind, NoticeKind};
 
-use super::session::PiSession;
-use crate::actions::NewChat;
+use super::dialogs::{PickerItem, open_picker};
+use super::session::{AfterFork, PiSession};
+use crate::actions::{NewChat, ResumeSession};
 
 pub enum CommandOutcome {
     /// Executed; clear the composer.
@@ -33,6 +34,17 @@ pub const SUPPORTED: &[(&str, &str)] = &[
     ("thinking", "Set the thinking level"),
     ("session", "Show session information"),
     ("copy", "Copy the last assistant reply"),
+    (
+        "fork",
+        "Branch from an earlier message (opens in a new session)",
+    ),
+    ("clone", "Continue in a copy of this conversation"),
+    ("resume", "Open an earlier session"),
+    ("export", "Export the conversation as HTML (optional path)"),
+    (
+        "share",
+        "Share the conversation as a secret GitHub gist (gh)",
+    ),
     ("quit", "Quit"),
 ];
 
@@ -265,6 +277,23 @@ fn builtin(
             let text = session_summary(session.read(cx));
             notice(session, NoticeKind::Info, text, cx);
         }
+        "fork" => pick_fork(session, window, cx),
+        "clone" => session.update(cx, |session, cx| session.clone_session(cx)),
+        "resume" => window.dispatch_action(Box::new(ResumeSession), cx),
+        "export" => {
+            let path = (!args.is_empty()).then(|| args.to_owned());
+            session.update(cx, |session, cx| session.export_html(path, cx));
+        }
+        "share" => session.update(cx, |session, cx| session.share(cx)),
+        "tree" => notice(
+            session,
+            NoticeKind::Info,
+            "Branches open as their own sessions in the GUI: use /fork, or Edit, Retry and \
+             Branch from here on a message. Moving within one session's tree is only \
+             available in pi's terminal."
+                .into(),
+            cx,
+        ),
         "copy" => {
             let text = last_assistant_text(session.read(cx));
             match text {
@@ -285,6 +314,68 @@ fn builtin(
         ),
     }
     CommandOutcome::Handled
+}
+
+/// `/fork`: pick one of pi's user messages; the branch starts before it, with its text in
+/// the composer to edit and send.
+fn pick_fork(session: &Entity<PiSession>, window: &mut Window, cx: &mut App) {
+    if session.read(cx).is_busy() {
+        notice(
+            session,
+            NoticeKind::Info,
+            "Wait for the current response to finish before branching.".into(),
+            cx,
+        );
+        return;
+    }
+    let task = session.update(cx, |session, cx| session.fork_messages(cx));
+    let session = session.clone();
+    window
+        .spawn(cx, async move |cx| {
+            let messages = task.await;
+            let _ = cx.update(|window, cx| match messages {
+                Ok(messages) if messages.is_empty() => notice(
+                    &session,
+                    NoticeKind::Info,
+                    "There is no earlier message to branch from.".into(),
+                    cx,
+                ),
+                Ok(messages) => {
+                    // Newest first, as in pi's terminal picker.
+                    let messages: Vec<_> = messages.into_iter().rev().collect();
+                    let items = messages
+                        .iter()
+                        .map(|message| PickerItem {
+                            label: first_line(&message.text),
+                            detail: None,
+                        })
+                        .collect();
+                    open_picker(
+                        "Branch from a message",
+                        items,
+                        move |index, _, cx| {
+                            let entry = messages[index].entry_id.clone();
+                            session.update(cx, |session, cx| {
+                                session.fork_entry_id(entry, AfterFork::Edit, cx);
+                            });
+                        },
+                        window,
+                        cx,
+                    );
+                }
+                Err(error) => notice(&session, NoticeKind::Error, error.to_string(), cx),
+            });
+        })
+        .detach();
+}
+
+fn first_line(text: &str) -> String {
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("");
+    line.chars().take(120).collect()
 }
 
 fn session_summary(session: &PiSession) -> String {

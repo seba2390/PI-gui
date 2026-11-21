@@ -11,7 +11,7 @@ use pi_sessions::SessionSummary;
 
 use remote::HostId;
 
-use super::{Sidebar, SidebarEvent};
+use super::{Activity, Sidebar, SidebarEvent};
 use crate::config::AppConfig;
 use crate::ui::QuietButton as _;
 use crate::ui::{AppIcon, relative_time};
@@ -28,6 +28,9 @@ pub fn session_row(
     cx: &mut Context<Sidebar>,
 ) -> impl IntoElement + use<> {
     let active = sidebar.is_active(host, &session.path);
+    let activity = sidebar.activity(host, &session.path);
+    let colors = crate::theme::palette(cx);
+    let spinner = crate::chat::SPINNER[sidebar.spinner_frame % crate::chat::SPINNER.len()];
     let theme = cx.theme();
     let (hover_bg, active_bg) = (theme.secondary_hover, theme.accent);
     let host = host.cloned();
@@ -67,13 +70,42 @@ pub fn session_row(
                 .text_color(theme.foreground)
                 .child(session.title().to_owned()),
         )
-        .child(
-            div()
+        .child(match activity {
+            Some(Activity::Working) => div()
                 .flex_none()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child(relative_time(session.modified, now)),
-        )
+                .w(px(14.))
+                .text_sm()
+                .text_center()
+                .text_color(colors.accent)
+                .child(spinner)
+                .into_any_element(),
+            other => h_flex()
+                .flex_none()
+                .gap_1p5()
+                .when_some(other, |this, activity| {
+                    let (color, tip) = match activity {
+                        Activity::NeedsYou => (colors.warning, "Waiting for your answer"),
+                        _ => (colors.accent, "Finished"),
+                    };
+                    this.child(
+                        div()
+                            .id(ElementId::Name(format!("dot:{id}").into()))
+                            .size(px(7.))
+                            .rounded_full()
+                            .bg(color)
+                            .tooltip(move |window, cx| {
+                                component::tooltip::Tooltip::new(tip).build(window, cx)
+                            }),
+                    )
+                })
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(relative_time(session.modified, now)),
+                )
+                .into_any_element(),
+        })
         .child(
             h_flex()
                 .absolute()
@@ -110,6 +142,36 @@ pub fn session_row(
                         })),
                 ),
         )
+}
+
+/// A full-width action at the top of the sidebar ("Skills", "New chat"): icon and label
+/// aligned with the session rows below.
+pub fn action_row(
+    id: &'static str,
+    icon: AppIcon,
+    label: &'static str,
+    selected: bool,
+    event: SidebarEvent,
+    cx: &mut Context<Sidebar>,
+) -> impl IntoElement + use<> {
+    let theme = cx.theme();
+    let (hover_bg, active_bg) = (theme.secondary_hover, theme.accent);
+    h_flex()
+        .id(id)
+        .w_full()
+        .h(px(30.))
+        .gap_2()
+        .pl_2()
+        .pr_2()
+        .rounded_md()
+        .cursor_pointer()
+        .text_sm()
+        .text_color(theme.foreground)
+        .when(selected, |this| this.bg(active_bg))
+        .hover(|style| style.bg(hover_bg))
+        .on_click(cx.listener(move |_, _, _, cx| cx.emit(event.clone())))
+        .child(Icon::from(icon).small().text_color(theme.muted_foreground))
+        .child(label)
 }
 
 /// A Code folder header: chevron, folder name, session count, and "+" (new session here) on

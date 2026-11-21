@@ -164,3 +164,55 @@ fn open_text_dialog(
             .on_close(move |_, _, cx| on_close.send(&ExtensionUiAnswer::Cancelled, cx))
     });
 }
+
+/// One choice in a [`open_picker`] list.
+pub struct PickerItem {
+    pub label: String,
+    pub detail: Option<String>,
+}
+
+/// A dialog with a scrollable list to pick one entry from; `on_pick` gets its index.
+pub fn open_picker(
+    title: &str,
+    items: Vec<PickerItem>,
+    on_pick: impl Fn(usize, &mut Window, &mut App) + 'static,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    use gpui_kit::component::ActiveTheme as _;
+    let title = title.to_owned();
+    let items = Rc::new(items);
+    let on_pick = Rc::new(on_pick);
+    window.open_dialog(cx, move |dialog, _, cx| {
+        let (muted, hover) = (cx.theme().muted_foreground, cx.theme().secondary_hover);
+        let rows = items.iter().enumerate().map(|(index, item)| {
+            let on_pick = on_pick.clone();
+            v_flex()
+                .id(("picker-row", index))
+                .w_full()
+                .px_3()
+                .py_1p5()
+                .rounded_md()
+                .cursor_pointer()
+                .hover(move |style| style.bg(hover))
+                .on_click(move |_, window, cx| {
+                    window.close_dialog(cx);
+                    on_pick(index, window, cx);
+                })
+                .child(div().text_sm().truncate().child(item.label.clone()))
+                .children(
+                    item.detail
+                        .clone()
+                        .map(|detail| div().text_xs().truncate().text_color(muted).child(detail)),
+                )
+        });
+        dialog.title(title.clone()).w(px(560.)).child(
+            v_flex()
+                .id("picker-list")
+                .max_h(px(420.))
+                .overflow_y_scroll()
+                .gap_0p5()
+                .children(rows),
+        )
+    });
+}

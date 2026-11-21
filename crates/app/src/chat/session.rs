@@ -13,8 +13,8 @@ use std::time::Instant;
 
 use gpui_kit::{Context, EventEmitter, Task};
 use pi_rpc::protocol::{
-    ExtensionUiAnswer, ExtensionUiMethod, ExtensionUiRequest, ImageContent, Model, NotifyKind,
-    SessionState, SessionStats, SlashCommand, StreamingBehavior, ThinkingLevel,
+    Disposition, ExtensionUiAnswer, ExtensionUiMethod, ExtensionUiRequest, ImageContent, Model,
+    NotifyKind, SessionState, SessionStats, SlashCommand, StreamingBehavior, ThinkingLevel,
 };
 use pi_rpc::{ClientEvent, PiClient, PiProcess, RpcError, SpawnOptions};
 use transcript::{NoticeKind, Transcript};
@@ -52,12 +52,70 @@ pub enum SessionEvent {
         kind: NotifyKind,
         message: String,
     },
+    /// [`PiSession::is_busy`] changed.
+    BusyChanged,
+    /// pi switched to another session file in the same process (fork, clone): the transcript
+    /// was replaced, not appended to.
+    Reloaded,
 }
 
-/// A prompt typed before pi finished starting.
+/// What to do with the message a branch starts from (see [`PiSession::fork_at`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AfterFork {
+    /// Put it in the composer to edit and send.
+    Edit,
+    /// Send it again as it was (retry).
+    Resend,
+    /// Leave it out: the branch ends before it.
+    Keep,
+}
+
+/// pi's fork entry for the user message `from_end` places before the last one, if its text
+/// matches. Counting from the end keeps the match right when pi's list holds more messages
+/// than the transcript (history before a compaction).
+fn fork_entry(
+    messages: &[pi_rpc::protocol::ForkMessage],
+    from_end: usize,
+    text: &str,
+) -> Option<String> {
+    let index = messages.len().checked_sub(from_end + 1)?;
+    let message = &messages[index];
+    (message.text.trim() == text.trim()).then(|| message.entry_id.clone())
+}
+
+/// Runs `gh gist create` (secret) for `path`; returns pi's viewer link and the gist URL.
+fn create_gist(
+    path: &str,
+    env: &[(std::ffi::OsString, std::ffi::OsString)],
+) -> Result<(String, String), String> {
+    let output = std::process::Command::new("gh")
+        .args(["gist", "create", "--public=false", path])
+        .envs(env.iter().cloned())
+        .output()
+        .map_err(|_| {
+            "Sharing needs the GitHub CLI (gh): https://cli.github.com, then `gh auth login`."
+                .to_owned()
+        })?;
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("gh could not create the gist: {}", error.trim()));
+    }
+    let gist = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let id = gist.rsplit('/').next().unwrap_or_default();
+    if id.is_empty() {
+        return Err(format!("Unexpected answer from gh: {gist}"));
+    }
+    let base = std::env::var("PI_SHARE_VIEWER_URL")
+        .unwrap_or_else(|_| "https://pi.dev/session/".to_owned());
+    Ok((format!("{base}#{id}"), gist))
+}
+
+/// A prompt waiting to be sent to pi.
 struct PendingPrompt {
     text: String,
     images: Vec<ImageContent>,
+    /// Queue it behind the current run (Alt+Enter) instead of steering it (Enter).
+    follow_up: bool,
 }
 
 pub struct PiSession {
@@ -79,7 +137,21 @@ pub struct PiSession {
     extension_status: BTreeMap<String, String>,
     /// `setWidget` blocks from extensions, shown above the composer.
     widgets: BTreeMap<String, Vec<String>>,
-    pending: VecDeque<PendingPrompt>,
+    /// Prompts not yet sent: pi gets one at a time, each after the previous was accepted, so a
+    /// second message never arrives while pi still thinks it is idle (it would start a second
+    /// run or be refused as busy).
+    outbox: VecDeque<PendingPrompt>,
+    /// A prompt was sent and pi has not answered yet.
+    sending: bool,
+    /// pi said it started a run whose first event has not arrived yet (until then,
+    /// `transcript.is_running()` is still false). Responses and events travel separately, so
+    /// the run may also have started (and even ended) before the response is handled: see
+    /// `runs_started`.
+    awaiting_start: bool,
+    /// `agent_start` events seen so far.
+    runs_started: u64,
+    /// [`Self::is_busy`] as last reported with [`SessionEvent::BusyChanged`].
+    reported_busy: bool,
     /// `(provider, model id)` to switch to once pi has started (after adding a model).
     pending_model: Option<(String, String)>,
     _event_pump: Task<()>,
@@ -88,7 +160,6 @@ pub struct PiSession {
 impl EventEmitter<SessionEvent> for PiSession {}
 
 impl PiSession {
-    /// Starts pi in `cwd`, resuming `session_file` when given.
     /// Starts pi in `cwd`, resuming `session_file` when given; on `host` (a saved SSH host)
     /// pi runs on that machine and `cwd` / `session_file` are paths there.
     pub fn new(
@@ -132,7 +203,11 @@ impl PiSession {
             commands: Vec::new(),
             extension_status: BTreeMap::new(),
             widgets: BTreeMap::new(),
-            pending: VecDeque::new(),
+            outbox: VecDeque::new(),
+            sending: false,
+            awaiting_start: false,
+            runs_started: 0,
+            reported_busy: false,
             pending_model: None,
             _event_pump: Task::ready(()),
         };
@@ -160,6 +235,7 @@ impl PiSession {
                             for event in batch {
                                 this.handle(event, cx);
                             }
+                            this.report_busy(cx);
                             cx.emit(SessionEvent::TranscriptChanged);
                             cx.notify();
                         });
@@ -202,7 +278,11 @@ impl PiSession {
             commands: Vec::new(),
             extension_status: BTreeMap::new(),
             widgets: BTreeMap::new(),
-            pending: VecDeque::new(),
+            outbox: VecDeque::new(),
+            sending: false,
+            awaiting_start: false,
+            runs_started: 0,
+            reported_busy: false,
             pending_model: None,
             _event_pump: Task::ready(()),
         }
@@ -249,6 +329,14 @@ impl PiSession {
 
     pub fn is_running(&self) -> bool {
         self.transcript.is_running()
+    }
+
+    /// Whether this session has work in flight: a run, prompts waiting to be sent, or a
+    /// prompt pi accepted but has not started showing yet. A busy chat must stay alive when
+    /// the user switches away, or its messages are lost.
+    pub fn is_busy(&self) -> bool {
+        matches!(self.lifecycle, Lifecycle::Starting | Lifecycle::Ready)
+            && (self.is_running() || self.sending || self.awaiting_start || !self.outbox.is_empty())
     }
 
     pub fn model(&self) -> Option<&Model> {
@@ -304,18 +392,36 @@ impl PiSession {
         if !self.web_search_available() {
             return;
         }
-        if mode == WebMode::Off {
-            self.extension_status.remove(deepsearch::STATUS_KEY);
-        } else {
-            self.extension_status
-                .insert(deepsearch::STATUS_KEY.into(), mode.as_str().into());
-        }
-        cx.emit(SessionEvent::MetaChanged);
-        cx.notify();
+        let Some(client) = self.client.clone() else {
+            return;
+        };
+        // Shown right away; the extension confirms it with its status, and a failed command
+        // puts the previous mode back.
+        let previous = self.web_mode();
+        self.show_web_mode(mode, cx);
         let command = format!("/{} {}", deepsearch::COMMAND, mode.as_str());
-        self.run(cx, async move |client| {
-            client.prompt(command, Vec::new(), None).await.map(drop)
-        });
+        cx.spawn(async move |this, cx| {
+            let result = client
+                .prompt(command, Vec::new(), Some(StreamingBehavior::FollowUp))
+                .await;
+            let _ = this.update(cx, |this, cx| match result {
+                Ok(Disposition::Handled) => {}
+                Ok(_) => {
+                    // pi did not run the command (the extension is gone): it went to the model.
+                    this.show_web_mode(previous, cx);
+                    this.push_notice(
+                        NoticeKind::Error,
+                        "Web search is not available in this chat.",
+                        cx,
+                    );
+                }
+                Err(error) => {
+                    this.show_web_mode(previous, cx);
+                    this.report(&error, cx);
+                }
+            });
+        })
+        .detach();
     }
 
     pub fn session_file(&self) -> Option<PathBuf> {
@@ -356,7 +462,7 @@ impl PiSession {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.transcript.items().is_empty() && self.pending.is_empty()
+        self.transcript.items().is_empty() && self.outbox.is_empty()
     }
 
     /// Context-window usage as `(used tokens, window)`, live while streaming.
@@ -403,19 +509,65 @@ impl PiSession {
         follow_up: bool,
         cx: &mut Context<Self>,
     ) {
-        if self.lifecycle == Lifecycle::Starting {
-            self.pending.push_back(PendingPrompt { text, images });
-            cx.notify();
+        // Only a visible run can be steered; anything sent before it shows (typed while pi
+        // starts, or right after another message) waits its turn as a follow-up.
+        let follow_up = follow_up || !self.is_running();
+        self.outbox.push_back(PendingPrompt {
+            text,
+            images,
+            follow_up,
+        });
+        self.flush_outbox(cx);
+        self.report_busy(cx);
+        cx.notify();
+    }
+
+    /// Sends the next waiting prompt once pi is ready and has answered the previous one.
+    fn flush_outbox(&mut self, cx: &mut Context<Self>) {
+        if self.sending || self.lifecycle != Lifecycle::Ready {
             return;
         }
-        let behavior = self.is_running().then_some(if follow_up {
+        let Some(client) = self.client.clone() else {
+            return;
+        };
+        let Some(prompt) = self.outbox.pop_front() else {
+            return;
+        };
+        self.sending = true;
+        let runs_before = self.runs_started;
+        // pi ignores the behaviour while idle and queues the prompt while a run is active.
+        let behavior = Some(if prompt.follow_up {
             StreamingBehavior::FollowUp
         } else {
             StreamingBehavior::Steer
         });
-        self.run(cx, async move |client| {
-            client.prompt(text, images, behavior).await.map(drop)
-        });
+        cx.spawn(async move |this, cx| {
+            let result = client.prompt(prompt.text, prompt.images, behavior).await;
+            let _ = this.update(cx, |this, cx| {
+                this.sending = false;
+                match result {
+                    // Unless its run already showed up: then the transcript tracks it.
+                    Ok(Disposition::Started) => {
+                        this.awaiting_start = this.runs_started == runs_before;
+                    }
+                    // Joins the active run, which the transcript tracks.
+                    Ok(Disposition::Queued | Disposition::Handled) => {}
+                    Err(error) => this.report(&error, cx),
+                }
+                this.flush_outbox(cx);
+                this.report_busy(cx);
+            });
+        })
+        .detach();
+    }
+
+    /// Emits [`SessionEvent::BusyChanged`] when [`Self::is_busy`] changed since last time.
+    fn report_busy(&mut self, cx: &mut Context<Self>) {
+        let busy = self.is_busy();
+        if busy != self.reported_busy {
+            self.reported_busy = busy;
+            cx.emit(SessionEvent::BusyChanged);
+        }
     }
 
     /// Esc: restore queued messages to the editor, then abort the run.
@@ -608,6 +760,213 @@ impl PiSession {
         cx.notify();
     }
 
+    // ---- history ---------------------------------------------------------------
+
+    /// Branches the conversation at a user message: pi continues in a new session file that
+    /// holds everything before that message (the original stays as it was). `from_end` counts
+    /// the transcript's user messages from the last one (0); `text` is that message, to check
+    /// the match. Then `after` decides what happens with the message.
+    pub fn fork_at(
+        &mut self,
+        from_end: usize,
+        text: String,
+        after: AfterFork,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(client) = self.client.clone() else {
+            return;
+        };
+        if self.is_busy() {
+            self.push_notice(
+                NoticeKind::Info,
+                "Wait for the current response to finish before branching.",
+                cx,
+            );
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            let result = async {
+                let messages = client.get_fork_messages().await?;
+                let Some(entry_id) = fork_entry(&messages, from_end, &text) else {
+                    return Ok(None);
+                };
+                client.fork(entry_id).await
+            }
+            .await;
+            let _ = this.update(cx, |this, cx| match result {
+                Ok(Some(text)) => this.reload(Some((text, after)), cx),
+                Ok(None) => this.push_notice(
+                    NoticeKind::Warning,
+                    "pi could not branch from this message (it may be before a compaction).",
+                    cx,
+                ),
+                Err(error) => this.report(&error, cx),
+            });
+        })
+        .detach();
+    }
+
+    /// pi's user messages that a branch can start from, oldest first (for `/fork`).
+    pub fn fork_messages(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<Vec<pi_rpc::protocol::ForkMessage>, RpcError>> {
+        let client = self.client.clone();
+        cx.background_executor().spawn(async move {
+            match client {
+                Some(client) => client.get_fork_messages().await,
+                None => Err(RpcError::Disconnected),
+            }
+        })
+    }
+
+    /// Branches at pi's fork entry `entry_id` (from [`Self::fork_messages`]).
+    pub fn fork_entry_id(&mut self, entry_id: String, after: AfterFork, cx: &mut Context<Self>) {
+        let Some(client) = self.client.clone() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let result = client.fork(entry_id).await;
+            let _ = this.update(cx, |this, cx| match result {
+                Ok(Some(text)) => this.reload(Some((text, after)), cx),
+                Ok(None) => {}
+                Err(error) => this.report(&error, cx),
+            });
+        })
+        .detach();
+    }
+
+    /// Continues in a copy of the whole conversation (a new session file).
+    pub fn clone_session(&mut self, cx: &mut Context<Self>) {
+        let Some(client) = self.client.clone() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let result = client.clone_session().await;
+            let _ = this.update(cx, |this, cx| match result {
+                Ok(true) => this.reload(None, cx),
+                Ok(false) => {}
+                Err(error) => this.report(&error, cx),
+            });
+        })
+        .detach();
+    }
+
+    /// Exports the conversation as HTML (to `path`, or next to the session) and opens it.
+    pub fn export_html(&mut self, path: Option<String>, cx: &mut Context<Self>) {
+        let Some(client) = self.client.clone() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let result = client.export_html(path).await;
+            let _ = this.update(cx, |this, cx| match result {
+                Ok(path) => {
+                    this.push_notice(NoticeKind::Info, format!("Exported to {path}"), cx);
+                    if this.host.is_none() {
+                        cx.open_with_system(Path::new(&path));
+                    }
+                }
+                Err(error) => this.report(&error, cx),
+            });
+        })
+        .detach();
+    }
+
+    /// Uploads the conversation (as HTML) to a secret GitHub gist with `gh`, like pi's
+    /// terminal `/share`, and copies the viewer link.
+    pub fn share(&mut self, cx: &mut Context<Self>) {
+        if self.host.is_some() {
+            self.push_notice(
+                NoticeKind::Info,
+                "Sharing works for sessions on this computer; use /export on the host instead.",
+                cx,
+            );
+            return;
+        }
+        let Some(client) = self.client.clone() else {
+            return;
+        };
+        let env = cx.global::<AppConfig>().child_env.clone();
+        let dir = std::env::temp_dir().join(format!("pi-gui-share-{}", std::process::id()));
+        let file = dir.join("session.html");
+        self.push_notice(NoticeKind::Info, "Creating a secret gist…", cx);
+        cx.spawn(async move |this, cx| {
+            let _ = std::fs::create_dir_all(&dir);
+            let result = match client
+                .export_html(Some(file.to_string_lossy().into_owned()))
+                .await
+            {
+                Ok(path) => {
+                    cx.background_executor()
+                        .spawn(async move { create_gist(&path, &env) })
+                        .await
+                }
+                Err(error) => Err(error.to_string()),
+            };
+            let _ = std::fs::remove_dir_all(&dir);
+            let _ = this.update(cx, |this, cx| match result {
+                Ok((viewer, gist)) => {
+                    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(viewer.clone()));
+                    this.push_notice(
+                        NoticeKind::Info,
+                        format!("Shared (link copied): {viewer}\nGist: {gist}"),
+                        cx,
+                    );
+                }
+                Err(error) => this.push_notice(NoticeKind::Error, error, cx),
+            });
+        })
+        .detach();
+    }
+
+    /// Reads the state and history again after pi switched session files in this process,
+    /// then handles the message a fork started from.
+    fn reload(&mut self, forked: Option<(String, AfterFork)>, cx: &mut Context<Self>) {
+        let Some(client) = self.client.clone() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let state = client.get_state().await;
+            let messages = client.get_messages().await;
+            let stats = client.get_session_stats().await.ok();
+            let _ = this.update(cx, |this, cx| {
+                if let Ok(state) = state {
+                    this.state = Some(state);
+                }
+                match messages {
+                    Ok(messages) => {
+                        this.transcript = Transcript::from_messages(&messages);
+                        let name = this.state.as_ref().and_then(|s| s.session_name.clone());
+                        this.transcript.set_session_name(name);
+                    }
+                    Err(error) => this.report(&error, cx),
+                }
+                this.stats = stats;
+                cx.emit(SessionEvent::Reloaded);
+                cx.emit(SessionEvent::SessionFileChanged);
+                cx.emit(SessionEvent::MetaChanged);
+                match forked {
+                    Some((text, AfterFork::Edit)) => cx.emit(SessionEvent::SetEditorText(text)),
+                    Some((text, AfterFork::Resend)) => this.submit(text, Vec::new(), false, cx),
+                    Some((_, AfterFork::Keep)) | None => {}
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn show_web_mode(&mut self, mode: WebMode, cx: &mut Context<Self>) {
+        if mode == WebMode::Off {
+            self.extension_status.remove(deepsearch::STATUS_KEY);
+        } else {
+            self.extension_status
+                .insert(deepsearch::STATUS_KEY.into(), mode.as_str().into());
+        }
+        cx.emit(SessionEvent::MetaChanged);
+        cx.notify();
+    }
+
     // ---- internals -----------------------------------------------------------
 
     /// Runs a command, surfacing failures in the transcript.
@@ -678,9 +1037,8 @@ impl PiSession {
                         name.or_else(|| this.state.as_ref().and_then(|s| s.session_name.clone())),
                     );
                 }
-                for prompt in std::mem::take(&mut this.pending) {
-                    this.submit(prompt.text, prompt.images, false, cx);
-                }
+                this.flush_outbox(cx);
+                this.report_busy(cx);
                 if this.lifecycle == Lifecycle::Ready {
                     this.apply_pending_model(cx);
                 }
@@ -743,7 +1101,12 @@ impl PiSession {
             ClientEvent::Event(event) => {
                 self.transcript.apply(&event, Instant::now());
                 match *event {
+                    pi_rpc::protocol::Event::AgentStart => {
+                        self.runs_started += 1;
+                        self.awaiting_start = false;
+                    }
                     pi_rpc::protocol::Event::AgentSettled { .. } => {
+                        self.awaiting_start = false;
                         self.refresh_stats(cx);
                         cx.emit(SessionEvent::Settled);
                     }
@@ -769,6 +1132,8 @@ impl PiSession {
                 }
                 self.lifecycle = Lifecycle::Exited { message };
                 self.client = None;
+                self.sending = false;
+                self.awaiting_start = false;
                 cx.emit(SessionEvent::MetaChanged);
             }
         }
@@ -900,6 +1265,30 @@ fn chat_args(config: &AppConfig, options: &mut SpawnOptions) {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+
+    #[test]
+    fn fork_entries_match_from_the_end() {
+        let message = |id: &str, text: &str| pi_rpc::protocol::ForkMessage {
+            entry_id: id.into(),
+            text: text.into(),
+        };
+        // pi still lists a prompt from before a compaction that the transcript no longer has.
+        let messages = [
+            message("e0", "old"),
+            message("e1", "first"),
+            message("e2", "second"),
+        ];
+        assert_eq!(
+            super::fork_entry(&messages, 0, "second").as_deref(),
+            Some("e2")
+        );
+        assert_eq!(
+            super::fork_entry(&messages, 1, " first\n").as_deref(),
+            Some("e1")
+        );
+        assert_eq!(super::fork_entry(&messages, 1, "other"), None);
+        assert_eq!(super::fork_entry(&messages, 3, "x"), None);
+    }
 
     #[test]
     fn chat_sessions_launch_with_only_deep_search_tools() {
@@ -1177,6 +1566,50 @@ mod tests {
 
     /// Drives a real `PiSession` against the scripted fake pi from `pi-rpc`'s tests.
     #[cfg(unix)]
+    /// Messages typed while pi starts are all sent, in order, one after another, and the
+    /// session counts as busy from the first keystroke until the last run settles.
+    #[gpui_kit::test]
+    async fn prompts_typed_during_startup_are_all_sent(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let fake = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../pi-rpc/tests/fake_pi.py");
+        cx.update(|cx| {
+            cx.set_global(AppConfig::for_tests(fake));
+        });
+        let session = cx.new(|cx| PiSession::new(std::env::temp_dir(), None, None, cx));
+        let (sender, events) = async_channel::unbounded();
+        let _subscription = cx.update(|cx| {
+            cx.subscribe(&session, move |_, event: &SessionEvent, _| {
+                let _ = sender.try_send(event.clone());
+            })
+        });
+        session.update(cx, |session, cx| {
+            assert_eq!(session.lifecycle(), &Lifecycle::Starting);
+            session.submit("first".into(), Vec::new(), false, cx);
+            session.submit("second".into(), Vec::new(), false, cx);
+            assert!(session.is_busy(), "waiting messages keep the chat busy");
+        });
+
+        let mut settled = 0;
+        while settled < 2 || cx.read(|cx| session.read(cx).is_busy()) {
+            if let SessionEvent::Settled = events.recv().await.expect("session alive") {
+                settled += 1;
+            }
+        }
+        cx.read(|cx| {
+            let prompts: Vec<String> = session
+                .read(cx)
+                .transcript()
+                .items()
+                .iter()
+                .filter_map(|item| match &item.kind {
+                    ItemKind::User(user) => Some(user.text.clone()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(prompts, ["first", "second"]);
+        });
+    }
+
     #[gpui_kit::test]
     async fn prompt_round_trip_with_fake_pi(cx: &mut TestAppContext) {
         cx.executor().allow_parking();

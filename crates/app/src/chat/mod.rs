@@ -3,7 +3,7 @@
 mod commands;
 pub mod composer;
 mod context_panel;
-mod dialogs;
+pub mod dialogs;
 mod file_picker;
 pub mod models_dialog;
 mod rows;
@@ -22,6 +22,7 @@ use transcript::{BlockKind, ItemId, ItemKind};
 
 use composer::Composer;
 pub use composer::ComposerEvent;
+pub(crate) use rows::SPINNER;
 use session::{PiSession, SessionEvent};
 
 use crate::theme::palette;
@@ -64,6 +65,11 @@ pub enum ChatEvent {
     /// The session runs on an SSH host and ended (e.g. the connection dropped): connect again
     /// and resume it.
     Reconnect,
+    /// The session started or stopped having work in flight ([`PiSession::is_busy`]).
+    BusyChanged,
+    /// An extension asked something while this chat was in the background; the question
+    /// waits until the chat is shown ([`ChatView::needs_attention`]).
+    NeedsAttention,
 }
 
 #[allow(clippy::struct_excessive_bools)] // independent view flags
@@ -86,6 +92,17 @@ pub struct ChatView {
     spinner_frame: usize,
     /// The host was re-checked after this remote session ended.
     checked_host: bool,
+    /// Shown in the window (false while it works in the background).
+    visible: bool,
+    /// How each transcript item is shown: on its own, as an "Explored" group, or folded
+    /// into one.
+    roles: Vec<transcript::explore::RowRole>,
+    /// Each item's exploration calls, by item version (classifying bash commands is not
+    /// repeated for unchanged items).
+    exploration: Vec<(ItemId, u64, Option<Vec<usize>>)>,
+    /// Extension questions asked while in the background, opened when the chat is shown so
+    /// they are never answered for the wrong chat.
+    held_dialogs: Vec<pi_rpc::protocol::ExtensionUiRequest>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -151,6 +168,10 @@ impl ChatView {
             ticker: None,
             spinner_frame: 0,
             checked_host: false,
+            visible: true,
+            roles: Vec::new(),
+            exploration: Vec::new(),
+            held_dialogs: Vec::new(),
             _subscriptions: subscriptions,
         };
         this.sync(cx);
@@ -159,6 +180,34 @@ impl ChatView {
 
     pub fn session(&self) -> &Entity<PiSession> {
         &self.session
+    }
+
+    /// Whether an extension question is waiting for this chat to be shown.
+    pub fn needs_attention(&self) -> bool {
+        !self.held_dialogs.is_empty()
+    }
+
+    /// Marks the chat shown or in the background; showing it opens the questions it held.
+    pub fn set_visible(&mut self, visible: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.visible = visible;
+        if visible {
+            for request in std::mem::take(&mut self.held_dialogs) {
+                dialogs::open(request, self.session.clone(), window, cx);
+            }
+        }
+    }
+
+    /// Rebuilds every row: the transcript was replaced (a fork or clone), not appended to.
+    fn reset_rows(&mut self, cx: &mut Context<Self>) {
+        self.markdown.clear();
+        self.roles.clear();
+        self.exploration.clear();
+        self.toggled.clear();
+        self.row_versions.clear();
+        self.working_row = false;
+        self.scroller
+            .update(cx, |scroller, cx| scroller.reset(0, cx));
+        self.sync(cx);
     }
 
     /// The composer, e.g. to insert an `@path` mention from the Files tab.
@@ -197,8 +246,15 @@ impl ChatView {
                 cx.emit(ChatEvent::SessionChanged);
             }
             SessionEvent::Dialog(request) => {
-                dialogs::open(request.clone(), self.session.clone(), window, cx);
+                if self.visible {
+                    dialogs::open(request.clone(), self.session.clone(), window, cx);
+                } else {
+                    self.held_dialogs.push(request.clone());
+                    cx.emit(ChatEvent::NeedsAttention);
+                }
             }
+            SessionEvent::BusyChanged => cx.emit(ChatEvent::BusyChanged),
+            SessionEvent::Reloaded => self.reset_rows(cx),
             SessionEvent::SetEditorText(text) => {
                 let text = text.clone();
                 self.composer
@@ -206,10 +262,21 @@ impl ChatView {
             }
             SessionEvent::Notify { kind, message } => {
                 use gpui_kit::component::notification::Notification;
+                // From a chat in the background: say which one.
+                let message = if self.visible {
+                    message.clone()
+                } else {
+                    let title = self
+                        .session
+                        .read(cx)
+                        .display_title()
+                        .unwrap_or_else(|| "A background chat".to_owned());
+                    format!("{title}: {message}")
+                };
                 let notification = match kind {
-                    pi_rpc::protocol::NotifyKind::Info => Notification::info(message.clone()),
-                    pi_rpc::protocol::NotifyKind::Warning => Notification::warning(message.clone()),
-                    pi_rpc::protocol::NotifyKind::Error => Notification::error(message.clone()),
+                    pi_rpc::protocol::NotifyKind::Info => Notification::info(message),
+                    pi_rpc::protocol::NotifyKind::Warning => Notification::warning(message),
+                    pi_rpc::protocol::NotifyKind::Error => Notification::error(message),
                 };
                 window.push_notification(notification, cx);
             }
@@ -266,6 +333,43 @@ impl ChatView {
             }
         }
         let new_versions: Vec<u64> = items.iter().map(|item| item.version).collect();
+
+        // 1b. Fold runs of exploration calls into groups. A row whose role changed, or a group
+        //    that one of its folded items changed, is measured again.
+        self.exploration.truncate(items.len());
+        for (index, item) in items.iter().enumerate() {
+            let fresh = || {
+                (
+                    item.id,
+                    item.version,
+                    transcript::explore::exploration_tools(item),
+                )
+            };
+            match self.exploration.get_mut(index) {
+                Some((id, version, _)) if *id == item.id && *version == item.version => {}
+                Some(entry) => *entry = fresh(),
+                None => self.exploration.push(fresh()),
+            }
+        }
+        let members: Vec<Option<Vec<usize>>> = self
+            .exploration
+            .iter()
+            .map(|(_, _, tools)| tools.clone())
+            .collect();
+        let roles = transcript::explore::group_rows(&members);
+        for (index, role) in roles.iter().enumerate() {
+            let regrouped = self.roles.get(index) != Some(role);
+            let member_changed = match role {
+                transcript::explore::RowRole::Group(group) => changed_rows
+                    .iter()
+                    .any(|row| (index + 1..=group.last).contains(row)),
+                _ => false,
+            };
+            if (regrouped || member_changed) && !changed_rows.contains(&index) {
+                changed_rows.push(index);
+            }
+        }
+        self.roles = roles;
 
         // 2. Update retained markdown, streaming appends incrementally.
         for (key, appended_at, text) in sources {
@@ -404,6 +508,10 @@ impl ChatView {
         self.toggled.clear();
         self.scroller
             .update(cx, |scroller, cx| scroller.remeasure(cx));
+    }
+
+    pub(crate) fn role(&self, row: usize) -> Option<&transcript::explore::RowRole> {
+        self.roles.get(row)
     }
 
     pub(crate) fn markdown(&self, key: BlockKey) -> Option<&Entity<TextViewState>> {

@@ -1,11 +1,12 @@
 //! The main window: sidebar | chat (+ terminal below) | right panel.
 
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::menu::DropdownMenu as _;
-use gpui_kit::component::resizable::{h_resizable, resizable_panel, v_resizable};
+use gpui_kit::component::resizable::{h_resizable, resizable_panel};
 use gpui_kit::component::{
     ActiveTheme as _, IconName, Selectable as _, Sizable as _, TitleBar, WindowExt as _, h_flex,
     v_flex,
@@ -17,8 +18,8 @@ use pi_sessions::SessionSummary;
 use pi_sessions::Mode;
 
 use crate::actions::{
-    FocusComposer, NewChat, ShowChatMode, ShowCodeMode, ShowDiff, ShowFiles, ToggleRightPanel,
-    ToggleSidebar, ToggleTerminal, WINDOW_CONTEXT,
+    FocusComposer, NewChat, ResumeSession, ShowChatMode, ShowCodeMode, ShowDiff, ShowFiles,
+    ToggleRightPanel, ToggleSidebar, ToggleTerminal, WINDOW_CONTEXT,
 };
 use crate::chat::{ChatEvent, ChatView, ComposerEvent};
 use crate::config::AppConfig;
@@ -27,7 +28,7 @@ use crate::panels::{RightPanel, RightPanelEvent, RightTab, TerminalPanel, Termin
 use crate::remote_ui::{
     AddHost, AddHostEvent, ConnectFlow, ConnectFlowEvent, ManageHosts, ManageHostsEvent,
 };
-use crate::sidebar::{Sidebar, SidebarEvent};
+use crate::sidebar::{Activity, Sidebar, SidebarEvent};
 use crate::ui::QuietButton as _;
 use crate::ui::{AppIcon, TOP_BAR_HEIGHT, TRAFFIC_LIGHT_INSET, WindowDrag};
 use crate::ui_state::{LastSession, UiState};
@@ -84,9 +85,11 @@ struct RemoteTarget {
 pub struct MainWindow {
     sidebar: Entity<Sidebar>,
     chat: Entity<ChatView>,
-    /// Chats switched away from while their agent was still working; kept alive
-    /// until they settle so a run is never killed by navigation.
+    /// Chats switched away from while busy (a run, or messages not yet started) or waiting
+    /// for an answer; kept alive until they settle so work is never lost to navigation.
     background: Vec<(Entity<ChatView>, Subscription)>,
+    /// Sessions that finished in the background and have not been looked at since.
+    finished: HashSet<(Option<HostId>, PathBuf)>,
     right_panel: Entity<RightPanel>,
     terminal: Option<Entity<TerminalPanel>>,
     /// Events of the open SSH dialog (add host / connect flow / manage hosts).
@@ -113,6 +116,8 @@ pub struct MainWindow {
     sidebar_open: bool,
     right_open: bool,
     terminal_open: bool,
+    /// The terminal's height (dragged with its top edge; remembered across launches).
+    terminal_height: Pixels,
     drag: WindowDrag,
     focus_handle: FocusHandle,
     chat_subscription: Subscription,
@@ -218,6 +223,7 @@ impl MainWindow {
             after_remote: Vec::new(),
             pending_latest: None,
             welcome: true,
+            finished: HashSet::new(),
             pi_field: cx.new(|_| crate::ui::PiField::new()),
             models_reload: None,
             skills: None,
@@ -226,6 +232,10 @@ impl MainWindow {
             sidebar_open: true,
             right_open: false,
             terminal_open: false,
+            terminal_height: px(cx
+                .default_global::<UiState>()
+                .terminal_height
+                .map_or(DEFAULT_TERMINAL_HEIGHT, f32::from)),
             drag: WindowDrag::default(),
             focus_handle,
             chat_subscription,
@@ -471,6 +481,13 @@ impl MainWindow {
     fn show_chat(&mut self, chat: Entity<ChatView>, window: &mut Window, cx: &mut Context<Self>) {
         let previous = std::mem::replace(&mut self.chat, chat.clone());
         self.welcome = false;
+        if previous.entity_id() != chat.entity_id() {
+            previous.update(cx, |previous, cx| previous.set_visible(false, window, cx));
+        }
+        chat.update(cx, |chat, cx| chat.set_visible(true, window, cx));
+        if let Some(key) = session_key(&chat, cx) {
+            self.finished.remove(&key);
+        }
         remember(&previous, cx);
         remember(&chat, cx);
         if self.skills_open {
@@ -493,14 +510,15 @@ impl MainWindow {
                 self.set_right_open(false, cx);
             }
         }
-        if previous.read(cx).session().read(cx).is_running() {
+        if previous.entity_id() != chat.entity_id()
+            && keeps_working(&previous, cx)
+            && !self
+                .background
+                .iter()
+                .any(|(background, _)| background.entity_id() == previous.entity_id())
+        {
             // Keep it alive until it settles, then let it (and its pi process) go.
-            let subscription = cx.subscribe(&previous, |this, _, event: &ChatEvent, cx| {
-                if matches!(event, ChatEvent::SessionChanged) {
-                    this.prune_background(cx);
-                    this.sidebar.update(cx, |sidebar, cx| sidebar.refresh(cx));
-                }
-            });
+            let subscription = cx.subscribe_in(&previous, window, Self::on_background_event);
             self.background.push((previous, subscription));
         }
         self.background
@@ -537,10 +555,80 @@ impl MainWindow {
         }
     }
 
-    /// Drops background chats whose agent has finished.
+    /// Drops background chats with nothing left to do.
     fn prune_background(&mut self, cx: &mut Context<Self>) {
-        self.background
-            .retain(|(chat, _)| chat.read(cx).session().read(cx).is_running());
+        self.background.retain(|(chat, _)| keeps_working(chat, cx));
+        self.update_activity(cx);
+    }
+
+    /// A chat working in the background changed: it finished, or it asks something.
+    fn on_background_event(
+        &mut self,
+        chat: &Entity<ChatView>,
+        event: &ChatEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use gpui_kit::component::notification::Notification;
+        let title = chat
+            .read(cx)
+            .session()
+            .read(cx)
+            .display_title()
+            .unwrap_or_else(|| "A chat".to_owned());
+        match event {
+            ChatEvent::BusyChanged | ChatEvent::SessionChanged => {
+                if keeps_working(chat, cx) {
+                    self.update_activity(cx);
+                    return;
+                }
+                if let Some(key) = session_key(chat, cx) {
+                    self.finished.insert(key);
+                }
+                window.push_notification(Notification::success(format!("{title}: done")), cx);
+                if !window.is_window_active() {
+                    window.request_attention();
+                }
+                self.prune_background(cx);
+                self.sidebar.update(cx, |sidebar, cx| sidebar.refresh(cx));
+            }
+            ChatEvent::NeedsAttention => {
+                window.push_notification(
+                    Notification::warning(format!("{title} needs your input")),
+                    cx,
+                );
+                if !window.is_window_active() {
+                    window.request_attention();
+                }
+                self.update_activity(cx);
+            }
+            _ => {}
+        }
+    }
+
+    /// Tells the sidebar which sessions are working, waiting for an answer, or finished
+    /// unseen.
+    fn update_activity(&mut self, cx: &mut Context<Self>) {
+        let mut activity = HashMap::new();
+        let chats = std::iter::once(&self.chat).chain(self.background.iter().map(|(chat, _)| chat));
+        for chat in chats {
+            let Some(key) = session_key(chat, cx) else {
+                continue;
+            };
+            let state = if chat.read(cx).needs_attention() {
+                Activity::NeedsYou
+            } else if chat.read(cx).session().read(cx).is_busy() {
+                Activity::Working
+            } else {
+                continue;
+            };
+            activity.insert(key, state);
+        }
+        for key in &self.finished {
+            activity.entry(key.clone()).or_insert(Activity::Done);
+        }
+        self.sidebar
+            .update(cx, |sidebar, cx| sidebar.set_activity(activity, cx));
     }
 
     fn new_chat_in(&mut self, cwd: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
@@ -757,6 +845,7 @@ impl MainWindow {
                     sidebar.set_active(session_file, host.clone(), cx);
                     sidebar.refresh(cx);
                 });
+                self.update_activity(cx);
                 if let Some(host) = host {
                     crate::hosts::hosts(cx)
                         .update(cx, |hosts, cx| hosts.refresh_sessions(&host, cx));
@@ -765,6 +854,7 @@ impl MainWindow {
                 cx.notify();
             }
             ChatEvent::Reconnect => self.reconnect(window, cx),
+            ChatEvent::BusyChanged | ChatEvent::NeedsAttention => self.update_activity(cx),
             ChatEvent::Composer(event) => match event {
                 ComposerEvent::ChangeFolder(folder) => self.new_chat_in(folder.clone(), window, cx),
                 ComposerEvent::ChooseHost(None) => {
@@ -1339,6 +1429,7 @@ impl MainWindow {
         }
         if self.terminal_open {
             self.terminal_open = false;
+            self.save_terminal_height(cx);
             focus_chat(&self.chat, window, cx);
             cx.notify();
             return;
@@ -1415,6 +1506,81 @@ impl MainWindow {
             focus.focus(window, cx);
         }
         cx.notify();
+    }
+
+    /// `/resume`: pick an earlier session of this chat's mode and folder.
+    fn resume_session(&mut self, _: &ResumeSession, window: &mut Window, cx: &mut Context<Self>) {
+        use gpui_kit::component::notification::Notification;
+        let (folder, current, remote) = {
+            let session = self.chat.read(cx).session().read(cx);
+            (
+                session.cwd().to_path_buf(),
+                session.session_file(),
+                session.host().is_some(),
+            )
+        };
+        if remote {
+            window.push_notification(
+                Notification::info("Open this host's other sessions from the sidebar."),
+                cx,
+            );
+            return;
+        }
+        let sessions: Vec<SessionSummary> = self
+            .sidebar
+            .read(cx)
+            .sessions_in(&folder)
+            .into_iter()
+            .filter(|session| Some(&session.path) != current.as_ref())
+            .take(50)
+            .collect();
+        if sessions.is_empty() {
+            window.push_notification(Notification::info("No earlier sessions here."), cx);
+            return;
+        }
+        let now = std::time::SystemTime::now();
+        let items = sessions
+            .iter()
+            .map(|session| crate::chat::dialogs::PickerItem {
+                label: session.title().to_owned(),
+                detail: Some(crate::ui::relative_time(session.modified, now)),
+            })
+            .collect();
+        let view = cx.weak_entity();
+        crate::chat::dialogs::open_picker(
+            "Open an earlier session",
+            items,
+            move |index, window, cx| {
+                let _ = view.update(cx, |this, cx| {
+                    this.open_session(None, &sessions[index], window, cx);
+                });
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// Dragging the terminal's top edge: the terminal takes what is below the pointer, and
+    /// the chat keeps at least [`MIN_CHAT_HEIGHT`].
+    fn drag_terminal_edge(
+        &mut self,
+        event: &DragMoveEvent<TerminalEdge>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let most = (event.bounds.size.height - MIN_CHAT_HEIGHT).max(MIN_TERMINAL_HEIGHT);
+        let height =
+            (event.bounds.bottom() - event.event.position.y).clamp(MIN_TERMINAL_HEIGHT, most);
+        if height != self.terminal_height {
+            self.terminal_height = height;
+            cx.notify();
+        }
+    }
+
+    fn save_terminal_height(&mut self, cx: &mut Context<Self>) {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let height = f32::from(self.terminal_height).round().clamp(0., 10_000.) as u16;
+        UiState::update(cx, |state| state.terminal_height = Some(height));
     }
 
     fn focus_composer(&mut self, _: &FocusComposer, window: &mut Window, cx: &mut Context<Self>) {
@@ -1599,6 +1765,58 @@ impl MainWindow {
 }
 
 /// Saves `chat`'s session as the one to come back to in its mode (also across restarts).
+const DEFAULT_TERMINAL_HEIGHT: f32 = 240.;
+const MIN_TERMINAL_HEIGHT: Pixels = px(100.);
+const MIN_CHAT_HEIGHT: Pixels = px(160.);
+
+/// What is dragged while resizing the terminal (no visible drag image).
+#[derive(Clone)]
+struct TerminalEdge;
+
+impl Render for TerminalEdge {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        Empty
+    }
+}
+
+/// The terminal's top edge: a line that highlights on hover and drags to resize.
+fn render_terminal_edge(cx: &mut Context<MainWindow>) -> impl IntoElement + use<> {
+    let theme = cx.theme();
+    let (line, hover) = (theme.border, crate::theme::palette(cx).accent);
+    div()
+        .id("terminal-edge")
+        .flex_none()
+        .w_full()
+        .h(px(7.))
+        .flex()
+        .items_center()
+        .cursor(CursorStyle::ResizeUpDown)
+        .group("terminal-edge")
+        .on_drag(TerminalEdge, |edge, _, _, cx| {
+            cx.stop_propagation();
+            cx.new(|_| edge.clone())
+        })
+        .child(
+            div()
+                .w_full()
+                .h(px(1.))
+                .bg(line)
+                .group_hover("terminal-edge", move |style| style.h(px(3.)).bg(hover)),
+        )
+}
+
+/// A chat with work in flight or a question waiting: switching away must not drop it.
+fn keeps_working(chat: &Entity<ChatView>, cx: &App) -> bool {
+    let chat = chat.read(cx);
+    chat.needs_attention() || chat.session().read(cx).is_busy()
+}
+
+/// The session a chat shows, as the sidebar identifies it: its host and file.
+fn session_key(chat: &Entity<ChatView>, cx: &App) -> Option<(Option<HostId>, PathBuf)> {
+    let session = chat.read(cx).session().read(cx);
+    Some((session.host().cloned(), session.session_file()?))
+}
+
 fn remember(chat: &Entity<ChatView>, cx: &mut App) {
     let (mode, last) = {
         let session = chat.read(cx).session().read(cx);
@@ -1840,20 +2058,31 @@ impl Render for MainWindow {
                 this.child(self.render_welcome(cx))
             })
             .when(!self.skills_open && !self.welcome, |this| {
+                let terminal = self.terminal.clone().filter(|_| self.terminal_open);
                 this.child(
-                    v_resizable("chat-and-terminal")
-                        .child(resizable_panel().child(self.chat.clone().cached(full())))
+                    v_flex()
+                        .id("chat-and-terminal")
+                        .flex_1()
+                        .min_h_0()
+                        .on_drag_move(cx.listener(Self::drag_terminal_edge))
+                        .on_drop(cx.listener(|this, _: &TerminalEdge, _, cx| {
+                            this.save_terminal_height(cx);
+                        }))
                         .child(
-                            resizable_panel()
-                                .visible(self.terminal_open)
-                                .size(px(280.))
-                                .size_range(px(120.)..px(2000.))
-                                .children(
-                                    self.terminal
-                                        .clone()
-                                        .map(|terminal| terminal.cached(full())),
-                                ),
-                        ),
+                            div()
+                                .flex_1()
+                                .min_h_0()
+                                .child(self.chat.clone().cached(full())),
+                        )
+                        .when_some(terminal, |this, terminal| {
+                            this.child(
+                                v_flex()
+                                    .flex_none()
+                                    .h(self.terminal_height)
+                                    .child(render_terminal_edge(cx))
+                                    .child(div().flex_1().min_h_0().child(terminal.cached(full()))),
+                            )
+                        }),
                 )
             });
 
@@ -1869,6 +2098,7 @@ impl Render for MainWindow {
             .on_action(cx.listener(Self::focus_composer))
             .on_action(cx.listener(Self::show_chat_mode))
             .on_action(cx.listener(Self::show_code_mode))
+            .on_action(cx.listener(Self::resume_session))
             .size_full()
             .bg(background)
             .text_color(foreground)

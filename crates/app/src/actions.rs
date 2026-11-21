@@ -19,6 +19,7 @@ actions!(
         HideOthers,
         ShowAll,
         Quit,
+        ResumeSession,
     ]
 );
 

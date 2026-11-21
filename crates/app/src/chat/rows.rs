@@ -7,27 +7,33 @@ use std::time::Instant;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use transcript::explore::{Group, RowRole};
 use transcript::tool::{self, DiffKind, PathContext};
 use transcript::{
     AssistantItem, BlockKind, ItemKind, NoticeKind, RunStatus, ThinkingBlock, ToolBlock,
     ToolStatus, TranscriptItem, format_duration,
 };
 
+use super::session::{AfterFork, PiSession};
 use super::{BlockKey, CONTENT_MAX_WIDTH, ChatView, markdown_view};
 use crate::config::AppConfig;
 use crate::theme::{Palette, palette};
-use crate::ui::AppIcon;
+use crate::ui::{AppIcon, CopyButton, QuietButton as _};
 
 /// Collapsed tool output shows at most this many lines.
 const PREVIEW_LINES: usize = 3;
 /// Expanded tool output is capped to keep rows cheap; the rest is summarized.
 const MAX_OUTPUT_LINES: usize = 400;
 /// Spinner glyphs, played forwards then backwards so the star "breathes"; one per chat tick.
-const SPINNER: [&str; 10] = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"];
+pub(crate) const SPINNER: [&str; 10] = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"];
 
 /// Everything a row needs besides the item itself.
 struct RowContext<'a> {
     chat: &'a ChatView,
+    items: &'a [TranscriptItem],
+    session: Entity<PiSession>,
+    /// Nothing is in flight, so the conversation can be branched.
+    idle: bool,
     weak: WeakEntity<ChatView>,
     row: usize,
     palette: Palette,
@@ -51,8 +57,12 @@ pub fn render_row(
     let session = chat.session.read(cx);
     let config = cx.global::<AppConfig>();
     let theme = cx.theme();
+    let items = session.transcript().items();
     let context = RowContext {
         chat,
+        items,
+        session: chat.session.clone(),
+        idle: !session.is_busy(),
         weak: weak.clone(),
         row,
         palette: palette(cx),
@@ -66,10 +76,12 @@ pub fn render_row(
         mono: theme.mono_font_family.clone(),
     };
 
-    let items = session.transcript().items();
-    let content = match items.get(row) {
-        Some(item) => render_item(item, &context, theme.muted),
-        None => render_working(session.transcript().status(), &context),
+    let content = match (items.get(row), chat.role(row)) {
+        // Folded into the "Explored" group of an earlier row.
+        (Some(_), Some(RowRole::Hidden)) => return div().into_any_element(),
+        (Some(_), Some(RowRole::Group(group))) => render_group(group, &context),
+        (Some(item), _) => render_item(item, &context, theme.muted, cx),
+        (None, _) => render_working(session.transcript().status(), &context),
     };
     // Tight spacing inside a turn, more air around prompts and turn ends.
     let is_user = matches!(
@@ -103,11 +115,13 @@ pub fn render_row(
         .into_any_element()
 }
 
-fn render_item(item: &TranscriptItem, cx: &RowContext<'_>, bubble: Hsla) -> AnyElement {
+fn render_item(item: &TranscriptItem, cx: &RowContext<'_>, bubble: Hsla, app: &App) -> AnyElement {
     match &item.kind {
-        ItemKind::User(user) => h_flex()
+        ItemKind::User(user) => v_flex()
             .w_full()
-            .justify_end()
+            .items_end()
+            .gap_1()
+            .group("user-message")
             .child(
                 v_flex()
                     .min_w_0()
@@ -138,6 +152,7 @@ fn render_item(item: &TranscriptItem, cx: &RowContext<'_>, bubble: Hsla) -> AnyE
                         )
                     }),
             )
+            .child(user_actions(item.id.0, &user.text, cx, app))
             .into_any_element(),
         ItemKind::Assistant(assistant) => render_assistant(item, assistant, cx),
         ItemKind::Bash {
@@ -189,14 +204,147 @@ fn render_item(item: &TranscriptItem, cx: &RowContext<'_>, bubble: Hsla) -> AnyE
                 format!("Worked for {}", format_duration(summary.duration))
             };
             h_flex()
-                .gap_1p5()
-                .text_xs()
-                .text_color(cx.palette.subtle)
-                .child(div().text_color(cx.palette.accent).child("✻"))
-                .child(label)
+                .w_full()
+                .justify_between()
+                .group("turn-end")
+                .child(
+                    h_flex()
+                        .gap_1p5()
+                        .text_xs()
+                        .text_color(cx.palette.subtle)
+                        .child(div().text_color(cx.palette.accent).child("✻"))
+                        .child(label),
+                )
+                .child(turn_actions(item.id.0, cx, app))
                 .into_any_element()
         }
     }
+}
+
+/// Hover actions under a prompt: copy it, or edit it (the conversation continues in a new
+/// branch from just before it).
+fn user_actions(id: u64, text: &str, cx: &RowContext<'_>, app: &App) -> impl IntoElement {
+    let from_end = users_after(cx.items, cx.row);
+    let edit_text = text.to_owned();
+    h_flex()
+        .gap_0p5()
+        .invisible()
+        .group_hover("user-message", |style| style.visible())
+        .child(CopyButton::new(("copy-prompt", id), text.to_owned()).tooltip("Copy"))
+        .when(cx.idle, |this| {
+            this.child(action_button(
+                ("edit-prompt", id),
+                AppIcon::SquarePen,
+                "Edit (continues in a new branch)",
+                &cx.session,
+                move |session, cx| {
+                    session.fork_at(from_end, edit_text.clone(), AfterFork::Edit, cx);
+                },
+                app,
+            ))
+        })
+}
+
+/// Hover actions after a turn: copy the reply, retry the last prompt (the newest turn), or
+/// branch from here (a new session that ends with this turn).
+fn turn_actions(id: u64, cx: &RowContext<'_>, app: &App) -> impl IntoElement {
+    let row = cx.row;
+    let prompt = cx.items[..row]
+        .iter()
+        .rposition(|item| matches!(item.kind, ItemKind::User(_)));
+    let next_prompt = cx.items[row + 1..]
+        .iter()
+        .position(|item| matches!(item.kind, ItemKind::User(_)))
+        .map(|offset| row + 1 + offset);
+    let reply = turn_text(&cx.items[prompt.map_or(0, |index| index + 1)..row]);
+    let retry = match (prompt, next_prompt) {
+        (Some(prompt), None) => match &cx.items[prompt].kind {
+            ItemKind::User(user) => Some((users_after(cx.items, prompt), user.text.clone())),
+            _ => None,
+        },
+        _ => None,
+    };
+    let branch = next_prompt.map(|next| match &cx.items[next].kind {
+        ItemKind::User(user) => (users_after(cx.items, next), user.text.clone()),
+        _ => (0, String::new()),
+    });
+    h_flex()
+        .gap_0p5()
+        .invisible()
+        .group_hover("turn-end", |style| style.visible())
+        .when(!reply.is_empty(), |this| {
+            this.child(CopyButton::new(("copy-reply", id), reply).tooltip("Copy reply"))
+        })
+        .when(cx.idle, |this| {
+            this.when_some(retry, |this, (from_end, text)| {
+                this.child(action_button(
+                    ("retry", id),
+                    AppIcon::RotateCcw,
+                    "Retry (the new answer continues in a new branch)",
+                    &cx.session,
+                    move |session, cx| {
+                        session.fork_at(from_end, text.clone(), AfterFork::Resend, cx);
+                    },
+                    app,
+                ))
+            })
+            .child(action_button(
+                ("branch", id),
+                AppIcon::GitBranch,
+                "Branch from here (a new session up to this point)",
+                &cx.session,
+                move |session, cx| match &branch {
+                    Some((from_end, text)) => {
+                        session.fork_at(*from_end, text.clone(), AfterFork::Keep, cx);
+                    }
+                    None => session.clone_session(cx),
+                },
+                app,
+            ))
+        })
+}
+
+fn action_button(
+    id: impl Into<ElementId>,
+    icon: AppIcon,
+    tooltip: &'static str,
+    session: &Entity<PiSession>,
+    action: impl Fn(&mut PiSession, &mut Context<PiSession>) + 'static,
+    app: &App,
+) -> impl IntoElement {
+    let session = session.clone();
+    component::button::Button::new(id)
+        .quiet(app)
+        .xsmall()
+        .icon(Icon::from(icon))
+        .tooltip(tooltip)
+        .on_click(move |_, _, cx| session.update(cx, |session, cx| action(session, cx)))
+}
+
+/// How many prompts come after `row` (0 for the last one): pi's fork list is matched from
+/// its end.
+fn users_after(items: &[TranscriptItem], row: usize) -> usize {
+    items[row + 1..]
+        .iter()
+        .filter(|item| matches!(item.kind, ItemKind::User(_)))
+        .count()
+}
+
+/// The answer text of a turn's assistant items.
+fn turn_text(items: &[TranscriptItem]) -> String {
+    let mut parts = Vec::new();
+    for item in items {
+        if let ItemKind::Assistant(assistant) = &item.kind {
+            for block in &assistant.blocks {
+                if let BlockKind::Text(text) = &block.kind
+                    && !text.text.trim().is_empty()
+                {
+                    parts.push(text.text.trim());
+                }
+            }
+        }
+    }
+    parts.join("\n\n")
 }
 
 fn render_assistant(
@@ -313,9 +461,133 @@ fn render_thinking(key: BlockKey, thinking: &ThinkingBlock, cx: &RowContext<'_>)
         .into_any_element()
 }
 
+/// A run of exploration calls as one row: "Explored · 5 steps" and a line per call;
+/// expanded, every thought and call of the run as usual.
+fn render_group(group: &Group, cx: &RowContext<'_>) -> AnyElement {
+    let first = &cx.items[cx.row];
+    let key = BlockKey {
+        item: first.id,
+        block: usize::MAX,
+    };
+    let expanded = cx.chat.is_expanded(key, false);
+    let tools: Vec<&ToolBlock> = group
+        .tools
+        .iter()
+        .filter_map(|&(item, block)| match &cx.items[item].kind {
+            ItemKind::Assistant(assistant) => match &assistant.blocks.get(block)?.kind {
+                BlockKind::Tool(tool) => Some(tool),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    let active = tools.iter().any(|tool| tool.status.is_active());
+    let failed = tools
+        .iter()
+        .filter(|tool| tool.status == ToolStatus::Failed)
+        .count();
+    let dot = if active {
+        cx.palette.accent
+    } else if failed > 0 {
+        cx.palette.error
+    } else {
+        cx.palette.success
+    };
+    let mut detail = plural(tools.len(), "step");
+    if failed > 0 {
+        let _ = write!(detail, ", {failed} failed");
+    }
+
+    let header = h_flex()
+        .id(element_id("explored", key))
+        .items_start()
+        .gap_2()
+        .cursor_pointer()
+        .on_click(toggle_handler(cx, key))
+        .child(
+            div()
+                .mt(px(7.))
+                .size(px(7.))
+                .flex_none()
+                .rounded_full()
+                .bg(dot),
+        )
+        .child(
+            h_flex()
+                .flex_1()
+                .min_w_0()
+                .gap_1p5()
+                .text_sm()
+                .child(
+                    div()
+                        .flex_none()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(cx.foreground)
+                        .child(if active { "Exploring" } else { "Explored" }),
+                )
+                .child(div().text_color(cx.muted).child(detail))
+                .child(chevron(expanded).text_color(cx.muted)),
+        );
+
+    let body = if expanded {
+        let rows = (cx.row..=group.last).filter_map(|index| {
+            let item = &cx.items[index];
+            match &item.kind {
+                ItemKind::Assistant(assistant) => Some(render_assistant(item, assistant, cx)),
+                _ => None,
+            }
+        });
+        v_flex()
+            .pl(px(15.))
+            .gap_3()
+            .children(rows)
+            .into_any_element()
+    } else {
+        let lines = tools.iter().enumerate().map(|(index, tool)| {
+            let header = tool::header(tool, cx.paths);
+            let color = match tool.status {
+                ToolStatus::Failed => cx.palette.error,
+                _ => cx.muted,
+            };
+            h_flex()
+                .gap_2()
+                .text_sm()
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(10.))
+                        .text_color(cx.palette.subtle)
+                        .child(if index == 0 { "⎿" } else { "" }),
+                )
+                .child(div().flex_none().text_color(color).child(header.title))
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .font_family(cx.mono.clone())
+                        .text_xs()
+                        .text_color(color)
+                        .child(header.detail),
+                )
+        });
+        v_flex()
+            .pl(px(15.))
+            .gap_0p5()
+            .children(lines)
+            .into_any_element()
+    };
+    v_flex()
+        .gap_1()
+        .child(header)
+        .child(body)
+        .into_any_element()
+}
+
 fn render_tool(key: BlockKey, tool: &ToolBlock, cx: &RowContext<'_>) -> AnyElement {
     let expanded = cx.chat.is_expanded(key, false);
     let header = tool::header(tool, cx.paths);
+    // A labelled bash call shows its command when expanded.
+    let labelled = tool.name == "bash" && header.title != "Bash";
     let dot = match tool.status {
         ToolStatus::Done => cx.palette.success,
         ToolStatus::Failed => cx.palette.error,
@@ -409,6 +681,20 @@ fn render_tool(key: BlockKey, tool: &ToolBlock, cx: &RowContext<'_>) -> AnyEleme
             )
         })
         .when(expanded, |this| {
+            let command = (tool.name == "bash")
+                .then(|| tool.args.get("command").and_then(serde_json::Value::as_str))
+                .flatten()
+                .filter(|_| labelled);
+            let this = this.when_some(command, |this, command| {
+                this.child(
+                    div()
+                        .pl(px(15.))
+                        .font_family(cx.mono.clone())
+                        .text_xs()
+                        .text_color(cx.muted)
+                        .child(format!("$ {}", command.trim())),
+                )
+            });
             let body = match &diff {
                 Some(lines) => diff_box(
                     ("tool-diff", key.item.0 * 1_000 + key.block as u64),

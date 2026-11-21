@@ -9,6 +9,14 @@ skills and prompt templates all come from your normal pi configuration.
 
 - Chat in the centre: streaming markdown, collapsible thinking (“Thought for 4s”), tool calls with
   results and inline edit diffs, and “Worked for 1m 3s” after every turn.
+- Bash calls read as what they do (“Read Cargo.toml, src/main.rs”, “Searched “fn main” in src”,
+  “Ran cargo test”), worked out by the app from the command itself; the model writes nothing
+  extra. Runs of calls that only look around (reading, listing, searching, checking) fold into
+  one “Explored · N steps” row; expanding it shows every call. Anything not fully understood
+  (loops, `$(…)`, `xargs`, unknown programs, flags that could change files such as
+  `find -delete` or `sed -i`) is shown as the raw command, so a label never hides a change. A
+  labelled call shows its command when expanded. To check the labeller against real
+  transcripts: `cargo run --release -p transcript --example label_corpus -- <session.jsonl…>`.
 - Composer: attachments, working-folder picker, model and thinking pickers, context-window wheel,
   `/` command completion, `!cmd` shell commands.
 - Left sidebar with a **Chat | Code** switch (⌘1 / ⌘2):
@@ -49,6 +57,17 @@ skills and prompt templates all come from your normal pi configuration.
       `pi-gui --deepsearch-tool fetch <url> [what to look for]` print what the model would
       see.
   - Search, rename and move to trash in both modes.
+  - **Background work**: switching away from a chat that is working (or still has messages
+    waiting to be sent) keeps it running. Its row shows a spinner; when it finishes it gets a
+    green dot until you open it, a toast says so, and the Dock icon bounces if the app is not
+    in front. Questions from extensions (confirm, select, input) in a background chat wait
+    until you open that chat, marked with an amber dot, so they are never answered for the
+    wrong chat; its toasts name the chat.
+- **Branches**: hovering a prompt offers Copy and Edit; hovering the end of a turn offers
+  Copy reply, Retry (newest turn) and Branch from here. Edit, Retry and branching continue in
+  a new session (the original stays in the sidebar), like pi's `/fork`. Slash commands:
+  `/fork` (pick a message), `/clone`, `/resume` (pick an earlier session here), `/export
+  [path]` (HTML) and `/share` (a secret GitHub gist via `gh`, like pi's terminal).
 - **SSH** (Code mode): the device button next to the folder ("This computer", with a status
   light) runs pi on another machine. "Add SSH connection…" lists the hosts in your
   `~/.ssh/config` (following `Include`), or takes a custom host, user, port, key and jump host;
@@ -97,7 +116,8 @@ skills and prompt templates all come from your normal pi configuration.
   `models.json.bak-pi-gui`. pi reads the file only when it starts, so after saving it restarts
   on the same session (after the current turn, if one is running) and selects the new model.
 - Right panel: git changes and a file tree of the working folder.
-- Bottom panel: an integrated terminal in the working folder.
+- Bottom panel: an integrated terminal in the working folder; drag its top edge to resize it
+  (the height is remembered).
 - macOS and Linux (Windows best-effort). GPU-rendered with [GPUI](https://gpui.rs) via
   [gpui-kit](https://gpui-kit.com).
 

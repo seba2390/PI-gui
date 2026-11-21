@@ -76,7 +76,9 @@ impl AppConfig {
                 .map(|value| {
                     value
                         .split(',')
-                        .map(|panel| panel.trim().to_owned())
+                        .map(str::trim)
+                        .filter(|panel| !panel.is_empty())
+                        .map(str::to_owned)
                         .collect()
                 })
                 .unwrap_or_default(),

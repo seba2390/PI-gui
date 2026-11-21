@@ -19,6 +19,8 @@ pub struct UiState {
     pub collapsed: BTreeSet<PathBuf>,
     /// The conversation last shown in each mode.
     pub last_sessions: HashMap<Mode, LastSession>,
+    /// The terminal panel's height in pixels, as last dragged.
+    pub terminal_height: Option<u16>,
 }
 
 /// A conversation to come back to.
@@ -108,6 +110,7 @@ mod tests {
 
         let state = UiState {
             mode: Mode::Chat,
+            terminal_height: Some(300),
             collapsed: [
                 "/a".into(),
                 super::remote_key("box", Some(Path::new("/srv"))),

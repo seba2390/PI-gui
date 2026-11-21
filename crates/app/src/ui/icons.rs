@@ -14,6 +14,7 @@ pub enum AppIcon {
     MessageSquare,
     Paperclip,
     PiLogo,
+    RotateCcw,
     Sparkles,
     SquarePen,
 }
@@ -31,6 +32,7 @@ impl AppIcon {
             Self::MessageSquare => "icons/message-square.svg",
             Self::Paperclip => "icons/paperclip.svg",
             Self::PiLogo => "icons/pi-logo.svg",
+            Self::RotateCcw => "icons/rotate-ccw.svg",
             Self::Sparkles => "icons/sparkles.svg",
             Self::SquarePen => "icons/square-pen.svg",
         }

@@ -333,6 +333,18 @@ impl PiClient {
         Ok(if data.cancelled { None } else { data.text })
     }
 
+    /// Writes the session as HTML (to `output_path`, or pi's default) and returns the path.
+    pub async fn export_html(&self, output_path: Option<String>) -> Result<String, RpcError> {
+        #[derive(Deserialize)]
+        struct Data {
+            path: String,
+        }
+        Ok(self
+            .call::<Data>(Command::ExportHtml { output_path })
+            .await?
+            .path)
+    }
+
     /// Duplicates the active branch into a new session. `false` if cancelled.
     pub async fn clone_session(&self) -> Result<bool, RpcError> {
         self.call::<Cancellable>(Command::Clone)
