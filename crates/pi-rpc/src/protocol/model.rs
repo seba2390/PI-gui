@@ -165,6 +165,24 @@ pub struct SlashCommand {
     pub description: Option<String>,
     #[serde(default)]
     pub source: String,
+    /// Where it was loaded from (e.g. a skill's `SKILL.md`), when pi reports it.
+    #[serde(default)]
+    pub source_info: Option<SourceInfo>,
+}
+
+/// Where a command, prompt template or skill was loaded from.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SourceInfo {
+    /// The file (e.g. `…/skills/pdf-tools/SKILL.md`).
+    pub path: String,
+    /// `user`, `project`, or another scope pi defines.
+    pub scope: String,
+    /// `auto`, `settings`, a package, …
+    pub source: String,
+    /// `top-level` or `package`.
+    pub origin: String,
+    pub base_dir: Option<String>,
 }
 
 /// `bash` response data.

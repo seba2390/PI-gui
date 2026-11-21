@@ -30,11 +30,11 @@ fi
 exec "$s" -l"#;
 
 /// Writes stdin to `$1` atomically (mode 0600 for new files), keeping a copy of an existing
-/// file as `$1.bak-pi-gui`.
+/// file as `$1.bak-pi-gui` unless `$2` is `0`.
 const UPLOAD_SCRIPT: &str = r#"f=$1
 umask 077
 mkdir -p -- "$(dirname -- "$f")" || exit 1
-[ -f "$f" ] && cp -p -- "$f" "$f.bak-pi-gui"
+[ "$2" != 0 ] && [ -f "$f" ] && cp -p -- "$f" "$f.bak-pi-gui"
 cat > "$f.pi-gui-tmp" && mv -- "$f.pi-gui-tmp" "$f""#;
 
 impl Ssh {
@@ -87,7 +87,22 @@ impl Ssh {
     /// Writes `contents` to `path` on the host (parent folders created, an existing file kept
     /// as `<path>.bak-pi-gui`, new files private).
     pub fn upload(&self, path: &str, contents: Vec<u8>) -> Result<(), RemoteError> {
-        let script = format!("set -- {}\n{UPLOAD_SCRIPT}", sh_quote(path));
+        self.write_file(path, contents, true)
+    }
+
+    /// Writes `contents` to `path` on the host atomically (parent folders created, new files
+    /// private), keeping the previous file as `<path>.bak-pi-gui` when `backup` is set.
+    pub fn write_file(
+        &self,
+        path: &str,
+        contents: Vec<u8>,
+        backup: bool,
+    ) -> Result<(), RemoteError> {
+        let script = format!(
+            "set -- {} {}\n{UPLOAD_SCRIPT}",
+            sh_quote(path),
+            if backup { "1" } else { "0" }
+        );
         let output = process::run(self.script_command(&script), Some(contents), SHELL_TIMEOUT)?;
         script_result(output).map(drop)
     }
@@ -243,7 +258,7 @@ mod tests {
         let file = dir.path().join("a/b/models.json");
         let run = |input: &str| {
             let mut child = Command::new("/bin/sh")
-                .args(["-c", UPLOAD_SCRIPT, "sh", file.to_str().unwrap()])
+                .args(["-c", UPLOAD_SCRIPT, "sh", file.to_str().unwrap(), "1"])
                 .stdin(std::process::Stdio::piped())
                 .spawn()
                 .unwrap();

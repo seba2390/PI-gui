@@ -50,6 +50,16 @@ skills and prompt templates all come from your normal pi configuration.
   - Limits: csh/tcsh login shells are not supported (bash, zsh, dash, ksh and fish are; fish
     is untested on a real host). Windows clients are untested: the `remote` crate uses Unix
     sockets, and Windows' OpenSSH cannot share connections.
+- **Skills** (Code mode): a Skills button under the Chat | Code switch shows the skills pi loaded
+  for the session (personal ones from `~/.pi/agent/skills` and `~/.agents/skills`, project ones
+  from `.pi/skills` and `.agents/skills`), as pi itself reports them, here or on the SSH host.
+  "New skill" writes a `SKILL.md` (name checked against pi's rules, description, instructions,
+  optionally "only when I call it" via `disable-model-invocation`) into your personal skills or
+  the project's `.pi/skills`; existing skills open in an editor, with the toggle and move to
+  trash. pi loads project resources only for trusted folders, and in RPC mode it cannot ask, so
+  the page shows whether the project is trusted and can trust it, saved in pi's own
+  `trust.json` like the terminal's `/trust`. pi reads skills when it starts, so changes restart
+  it on the same session.
 - **Add model**: the model picker under the composer ends with "Add model…" and "Edit
   models.json…". The form adds a custom model to pi's `models.json`, to a provider already in
   the file or a new one (presets for Ollama, LM Studio, vLLM, llama.cpp and OpenRouter; any
@@ -110,7 +120,7 @@ crates/
   pi-rpc/       typed protocol (serde mirror of pi's rpc-types), strict JSONL framing, client, process
   transcript/   pure reducer: pi events / stored messages → renderable transcript (no UI, no I/O)
   pi-sessions/  read-only index of pi's session files for the sidebar
-  pi-config/    editing pi's models.json: parse, add providers/models, validate, presets
+  pi-config/    editing pi's config: models.json, SKILL.md front matter, the trust store
   workspace/    git status/diff (git CLI) + gitignore-aware file listing + fs watcher
   remote/       SSH: ~/.ssh/config discovery, saved hosts, shared connections, remote probes,
                 pi auto-install, askpass prompts, remote sessions, the RemoteShell for workspace
@@ -134,7 +144,8 @@ script/bundle-macos.sh && script/shot.sh <folder> out.png terminal,diff   # scri
 `PI_GUI_OPEN=chat|code,terminal,diff,files,no-sidebar,latest,attach,context,add-host,manage-hosts,ssh:<alias>`
 opens those panels (or the newest session, the attach picker, the context breakdown) at
 startup, which is what `script/shot.sh` uses for layout checks without driving the mouse.
-`add-model`, `add-provider` and `edit-models` open the models dialog.
+`add-model`, `add-provider` and `edit-models` open the models dialog; `skills`, `new-skill`
+and `open-skill:<path>` the Skills page.
 `remote:<alias>:<folder>` (a new session there) and `remote-latest:<alias>` (the host's newest
 session) open a remote session once connected; panels listed after them apply to it.
 

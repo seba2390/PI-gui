@@ -14,7 +14,9 @@ use std::time::{Duration, SystemTime};
 
 use gpui_kit::component::button::Button;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{
+    ActiveTheme as _, Icon, IconName, Selectable as _, Sizable as _, h_flex, v_flex,
+};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use pi_sessions::{Mode, SessionSummary};
@@ -41,6 +43,8 @@ pub enum SidebarEvent {
     Rename(Option<HostId>, SessionSummary),
     /// Connect to a host / start a session there (its header's button).
     ConnectHost(HostId),
+    /// Show the Skills page (Code mode).
+    ShowSkills,
 }
 
 pub struct Sidebar {
@@ -48,6 +52,8 @@ pub struct Sidebar {
     sessions: Vec<SessionSummary>,
     /// The open session: its host (`None`: this computer) and file.
     active: Option<(Option<HostId>, PathBuf)>,
+    /// The Skills page is showing (its button is highlighted).
+    skills_active: bool,
     filter: Entity<InputState>,
     loaded: bool,
     drag: WindowDrag,
@@ -76,6 +82,7 @@ impl Sidebar {
             mode,
             sessions: Vec::new(),
             active: None,
+            skills_active: false,
             filter,
             loaded: false,
             drag: WindowDrag::default(),
@@ -141,7 +148,17 @@ impl Sidebar {
         }
     }
 
+    pub fn set_skills_active(&mut self, active: bool, cx: &mut Context<Self>) {
+        if self.skills_active != active {
+            self.skills_active = active;
+            cx.notify();
+        }
+    }
+
     fn is_active(&self, host: Option<&HostId>, path: &Path) -> bool {
+        if self.skills_active {
+            return false;
+        }
         self.active
             .as_ref()
             .is_some_and(|(active_host, active)| active_host.as_ref() == host && active == path)
@@ -616,6 +633,21 @@ impl Render for Sidebar {
                 ),
             )
             .child(self.render_mode_switch(cx))
+            .when(self.mode == Mode::Code, |this| {
+                this.child(
+                    div().px_2().child(
+                        Button::new("show-skills")
+                            .quiet(cx)
+                            .w_full()
+                            .justify_start()
+                            .icon(Icon::from(AppIcon::Sparkles))
+                            .label("Skills")
+                            .selected(self.skills_active)
+                            .tooltip("Skills pi can use in Code sessions")
+                            .on_click(cx.listener(|_, _, _, cx| cx.emit(SidebarEvent::ShowSkills))),
+                    ),
+                )
+            })
             .child(
                 div().px_2().pb_2().child(
                     Button::new("new-chat")

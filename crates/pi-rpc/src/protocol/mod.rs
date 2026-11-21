@@ -23,7 +23,7 @@ pub use message::{
 };
 pub use model::{
     BashResult, ContextUsage, Disposition, ForkMessage, Model, QueueMode, SessionState,
-    SessionStats, SlashCommand, ThinkingLevel, TokenTotals,
+    SessionStats, SlashCommand, SourceInfo, ThinkingLevel, TokenTotals,
 };
 
 /// The reply to one command.

@@ -5,9 +5,6 @@
 //! the SSH host for a remote session. pi only reads it when it starts, so after saving the
 //! window restarts pi on the same session and selects the new model.
 
-use std::path::PathBuf;
-use std::sync::Arc;
-
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Editor, EditorState, Input, InputState};
@@ -19,7 +16,9 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use pi_config::{ModelSpec, ModelsFile, NewProvider, ProviderInfo};
-use remote::{HostId, Ssh};
+use remote::HostId;
+
+use crate::pi_place::PiPlace;
 
 use crate::ui::QuietButton as _;
 
@@ -35,100 +34,29 @@ pub enum ModelsTab {
     Json,
 }
 
-/// Where the file lives.
+/// The models.json pi reads, where pi runs.
 #[derive(Clone)]
-enum Place {
-    Local(PathBuf),
-    Remote {
-        label: String,
-        ssh: Arc<Ssh>,
-        path: String,
-    },
+struct Place {
+    pi: PiPlace,
+    path: String,
 }
 
 impl Place {
     fn describe(&self, home: Option<&std::path::Path>) -> String {
-        match self {
-            Self::Local(path) => crate::ui::short_path(path, home),
-            Self::Remote { label, path, .. } => format!("{label}:{path}"),
-        }
+        self.pi.describe(&self.path, home)
     }
 
     fn read(&self) -> Result<String, String> {
-        let bytes = match self {
-            Self::Local(path) => match std::fs::read(path) {
-                Ok(bytes) => Some(bytes),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-                Err(error) => return Err(format!("Could not read {}: {error}", path.display())),
-            },
-            Self::Remote { ssh, path, .. } => ssh.read_file(path).map_err(|e| e.to_string())?,
-        };
-        Ok(bytes
-            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-            .unwrap_or_default())
+        self.pi.read(&self.path).map(Option::unwrap_or_default)
     }
 
     /// Writes atomically, keeping the previous file as `models.json.bak-pi-gui`.
     fn write(&self, text: &str) -> Result<(), String> {
-        match self {
-            Self::Local(path) => {
-                let fail =
-                    |error: std::io::Error| format!("Could not save {}: {error}", path.display());
-                if let Some(dir) = path.parent() {
-                    std::fs::create_dir_all(dir).map_err(fail)?;
-                }
-                if path.is_file() {
-                    std::fs::copy(path, path.with_extension("json.bak-pi-gui")).map_err(fail)?;
-                }
-                let tmp = path.with_extension("json.pi-gui-tmp");
-                std::fs::write(&tmp, text).map_err(fail)?;
-                std::fs::rename(&tmp, path).map_err(fail)
-            }
-            Self::Remote { ssh, path, .. } => ssh
-                .upload(path, text.as_bytes().to_vec())
-                .map_err(|error| error.to_string()),
-        }
+        self.pi.write(&self.path, text, true)
     }
 
-    /// GETs `url` with curl where pi runs (so `localhost` means the same machine pi uses);
-    /// the API key goes through stdin, never on a command line.
     fn fetch(&self, url: &str, key: Option<&str>) -> Result<String, String> {
-        let header = key
-            .map(|key| format!("Authorization: Bearer {key}\n"))
-            .unwrap_or_default();
-        let stdout = match self {
-            Self::Local(_) => {
-                use std::io::Write as _;
-                let mut child = std::process::Command::new("curl")
-                    .args(["-sS", "-m", "8", "-H", "@-", url])
-                    .stdin(std::process::Stdio::piped())
-                    .stdout(std::process::Stdio::piped())
-                    .stderr(std::process::Stdio::piped())
-                    .spawn()
-                    .map_err(|error| format!("Could not run curl: {error}"))?;
-                if let Some(mut stdin) = child.stdin.take() {
-                    let _ = stdin.write_all(header.as_bytes());
-                }
-                let output = child
-                    .wait_with_output()
-                    .map_err(|error| error.to_string())?;
-                if !output.status.success() {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    return Err(stderr.trim().trim_start_matches("curl: ").to_owned());
-                }
-                output.stdout
-            }
-            Self::Remote { ssh, .. } => {
-                let script = format!(
-                    "command -v curl >/dev/null 2>&1 || {{ echo 'curl is not installed on the host' >&2; exit 1; }}\n\
-                     curl -sS -m 8 -H @- {}",
-                    remote::sh_quote(url)
-                );
-                ssh.exec_with_input(&script, header.into_bytes())
-                    .map_err(|error| error.to_string().trim_start_matches("curl: ").to_owned())?
-            }
-        };
-        Ok(String::from_utf8_lossy(&stdout).into_owned())
+        self.pi.fetch(url, key)
     }
 }
 
@@ -183,21 +111,10 @@ impl ModelsDialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let place = match host {
-            None => pi_sessions::agent_dir().map(|agent| Place::Local(agent.join("models.json"))),
-            Some(host) => {
-                let hosts = crate::hosts::hosts(cx);
-                let hosts = hosts.read(cx);
-                match (hosts.ssh(&host), hosts.probe(&host)) {
-                    (Some(ssh), Some(probe)) => Some(Place::Remote {
-                        label: hosts.label(&host),
-                        ssh,
-                        path: format!("{}/models.json", probe.agent_dir),
-                    }),
-                    _ => None,
-                }
-            }
-        };
+        let place = PiPlace::for_host(host.as_ref(), cx).map(|pi| Place {
+            path: pi.agent_path("models.json"),
+            pi,
+        });
         let input = |placeholder: &'static str, window: &mut Window, cx: &mut Context<Self>| {
             cx.new(|cx| InputState::new(window, cx).placeholder(placeholder))
         };
@@ -893,6 +810,16 @@ impl Render for ModelsDialog {
 #[cfg(test)]
 mod tests {
     use super::Place;
+    use crate::pi_place::PiPlace;
+
+    fn local(agent_dir: &std::path::Path) -> Place {
+        Place {
+            pi: PiPlace::Local {
+                agent_dir: agent_dir.into(),
+            },
+            path: agent_dir.join("models.json").to_string_lossy().into_owned(),
+        }
+    }
 
     /// "List server models" against a real OpenAI-compatible server from this computer:
     /// `PI_GUI_TEST_MODELS_BASE_URL=http://host:port/v1 cargo test -p pi-gui -- --ignored lists_server_models`
@@ -902,7 +829,7 @@ mod tests {
         let Ok(base) = std::env::var("PI_GUI_TEST_MODELS_BASE_URL") else {
             return;
         };
-        let place = Place::Local(std::env::temp_dir().join("models.json"));
+        let place = local(&std::env::temp_dir());
         let body = place
             .fetch(&pi_config::models_url(&base), Some("none"))
             .expect("fetch");
@@ -920,7 +847,7 @@ mod tests {
     #[test]
     fn local_file_round_trip_keeps_a_backup() {
         let dir = tempfile::tempdir().unwrap();
-        let place = Place::Local(dir.path().join("agent/models.json"));
+        let place = local(&dir.path().join("agent"));
         assert_eq!(place.read().unwrap(), "");
         place.write("{\"a\": 1}\n").unwrap();
         place.write("{\"b\": 2}\n").unwrap();

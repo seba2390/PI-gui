@@ -1,8 +1,12 @@
-//! Editing pi's `models.json` (custom providers and models) for the GUI's "Add model" dialog.
+//! Editing pi's configuration files for the GUI: `models.json` (custom providers and models,
+//! for the "Add model" dialog), skills ([`skills`]) and the project trust store ([`trust`]).
 //!
 //! The file is kept as a JSON value with its key order preserved, so adding a model changes
 //! only what was added. See pi's `docs/models.md` and `docs/models-configuration.md` for the
 //! format: `{"providers": {"<id>": {baseUrl, api, apiKey, models: [{id, …}]}}}`.
+
+pub mod skills;
+pub mod trust;
 
 use serde_json::{Map, Value, json};
 use thiserror::Error;

@@ -13,6 +13,7 @@ macro_rules! embedded {
 /// Files bundled into the binary, by asset path.
 static EMBEDDED: &[(&str, &[u8])] = embedded![
     "icons/brain.svg",
+    "icons/sparkles.svg",
     "icons/code-xml.svg",
     "icons/files.svg",
     "icons/git-branch.svg",

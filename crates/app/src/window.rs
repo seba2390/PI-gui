@@ -6,7 +6,8 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::resizable::{h_resizable, resizable_panel, v_resizable};
 use gpui_kit::component::{
-    ActiveTheme as _, IconName, Selectable as _, TitleBar, WindowExt as _, h_flex, v_flex,
+    ActiveTheme as _, IconName, Selectable as _, Sizable as _, TitleBar, WindowExt as _, h_flex,
+    v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -78,6 +79,7 @@ struct RemoteTarget {
     file: Option<PathBuf>,
 }
 
+#[allow(clippy::struct_excessive_bools)] // independent layout flags
 pub struct MainWindow {
     sidebar: Entity<Sidebar>,
     chat: Entity<ChatView>,
@@ -98,6 +100,11 @@ pub struct MainWindow {
     /// models.json changed while the agent worked: restart pi (and select this model) once
     /// it settles.
     models_reload: Option<PendingReload>,
+    /// The Skills page, shown in the chat column instead of the chat while `skills_open`.
+    skills: Option<(Entity<crate::skills::SkillsView>, Subscription)>,
+    skills_open: bool,
+    /// Set while pi restarts for the Skills page, so showing the new chat keeps the page.
+    keep_skills: bool,
     sidebar_open: bool,
     right_open: bool,
     terminal_open: bool,
@@ -204,6 +211,9 @@ impl MainWindow {
             after_remote: Vec::new(),
             pending_latest: None,
             models_reload: None,
+            skills: None,
+            skills_open: false,
+            keep_skills: false,
             sidebar_open: true,
             right_open: false,
             terminal_open: false,
@@ -225,6 +235,20 @@ impl MainWindow {
                 "chat" => self.switch_to_mode(Mode::Chat, window, cx),
                 "add-host" => self.open_add_host(window, cx),
                 "manage-hosts" => self.open_manage_hosts(window, cx),
+                "skills" => self.toggle_skills(window, cx),
+                other if other.starts_with("open-skill:") => {
+                    let path = other.trim_start_matches("open-skill:").to_owned();
+                    self.toggle_skills(window, cx);
+                    if let Some((skills, _)) = &self.skills {
+                        skills.update(cx, |skills, cx| skills.open_skill(path, window, cx));
+                    }
+                }
+                "new-skill" => {
+                    self.toggle_skills(window, cx);
+                    if let Some((skills, _)) = &self.skills {
+                        skills.update(cx, |skills, cx| skills.start_new(window, cx));
+                    }
+                }
                 "add-model" => drop(self.open_models_dialog(false, window, cx)),
                 "add-provider" => {
                     let dialog = self.open_models_dialog(false, window, cx);
@@ -335,6 +359,9 @@ impl MainWindow {
         if mode == Mode::Chat {
             self.terminal_open = false;
             self.set_right_open(false, cx);
+            if self.skills_open {
+                self.close_skills(cx);
+            }
         }
         let last = cx
             .default_global::<UiState>()
@@ -384,6 +411,16 @@ impl MainWindow {
         let previous = std::mem::replace(&mut self.chat, chat.clone());
         remember(&previous, cx);
         remember(&chat, cx);
+        if self.skills_open {
+            if self.keep_skills {
+                let session = chat.read(cx).session().clone();
+                if let Some((skills, _)) = &self.skills {
+                    skills.update(cx, |skills, cx| skills.set_session(session, cx));
+                }
+            } else {
+                self.close_skills(cx);
+            }
+        }
         // Opening a conversation of the other mode (e.g. at startup) switches the sidebar too.
         let mode = chat.read(cx).session().read(cx).mode();
         self.sidebar
@@ -628,6 +665,7 @@ impl MainWindow {
                 self.prompt_rename(host.clone(), summary.clone(), window, cx);
             }
             SidebarEvent::ConnectHost(host) => self.open_connect_flow(host.clone(), window, cx),
+            SidebarEvent::ShowSkills => self.toggle_skills(window, cx),
         }
     }
 
@@ -824,9 +862,56 @@ impl MainWindow {
         }
         // The old pi is idle; let it go rather than keep it in the background.
         let previous = self.chat.clone();
+        self.keep_skills = self.skills_open;
         self.show_chat(chat, window, cx);
+        self.keep_skills = false;
         self.background
             .retain(|(chat, _)| chat.entity_id() != previous.entity_id());
+    }
+
+    /// Shows (or hides) the Skills page for the visible Code session.
+    fn toggle_skills(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.skills_open {
+            self.close_skills(cx);
+            focus_chat(&self.chat, window, cx);
+            cx.notify();
+            return;
+        }
+        if self.mode(cx) != Mode::Code {
+            return;
+        }
+        let session = self.chat.read(cx).session().clone();
+        let reuse = self.skills.as_ref().is_some_and(|(skills, _)| {
+            let current = skills.read(cx).session_entity();
+            let (a, b) = (current.read(cx), session.read(cx));
+            a.cwd() == b.cwd() && a.host() == b.host()
+        });
+        if reuse {
+            if let Some((skills, _)) = &self.skills {
+                skills.update(cx, |skills, cx| skills.set_session(session, cx));
+            }
+        } else {
+            let skills = cx.new(|cx| crate::skills::SkillsView::new(session, window, cx));
+            let subscription = cx.subscribe_in(
+                &skills,
+                window,
+                |this, _, event: &crate::skills::SkillsEvent, window, cx| match event {
+                    // pi reads skills (and project trust) only when it starts.
+                    crate::skills::SkillsEvent::Changed => this.reload_models(None, window, cx),
+                },
+            );
+            self.skills = Some((skills, subscription));
+        }
+        self.skills_open = true;
+        self.sidebar
+            .update(cx, |sidebar, cx| sidebar.set_skills_active(true, cx));
+        cx.notify();
+    }
+
+    fn close_skills(&mut self, cx: &mut Context<Self>) {
+        self.skills_open = false;
+        self.sidebar
+            .update(cx, |sidebar, cx| sidebar.set_skills_active(false, cx));
     }
 
     /// "Manage SSH connections".
@@ -1157,18 +1242,22 @@ impl MainWindow {
 
     fn render_chat_header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let session = self.chat.read(cx).session().read(cx);
-        let title = session.display_title().unwrap_or_else(|| {
-            match session.mode() {
-                Mode::Chat => "New chat",
-                Mode::Code => "New session",
-            }
-            .to_owned()
-        });
+        let title = if self.skills_open {
+            "Skills".to_owned()
+        } else {
+            session.display_title().unwrap_or_else(|| {
+                match session.mode() {
+                    Mode::Chat => "New chat",
+                    Mode::Code => "New session",
+                }
+                .to_owned()
+            })
+        };
         let home = cx.global::<AppConfig>().home.clone();
         let folder = crate::ui::short_path(session.cwd(), home.as_deref());
         // Code sessions (here or on an SSH host) have folder tools (terminal, diff, files);
         // chats have no folder, and remote folders are shown as `host:path`.
-        let code = session.has_folder_tools();
+        let code = session.has_folder_tools() && !self.skills_open;
         let folder = match session.host() {
             Some(host) => {
                 let label = crate::hosts::hosts(cx)
@@ -1251,6 +1340,18 @@ impl MainWindow {
                             )
                         }),
                 )
+                .when(self.skills_open, |this| {
+                    this.child(
+                        Button::new("close-skills")
+                            .quiet(cx)
+                            .small()
+                            .icon(IconName::ArrowLeft)
+                            .label("Back to the session")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.toggle_skills(window, cx);
+                            })),
+                    )
+                })
                 .child(
                     h_flex()
                         .flex_none()
@@ -1354,25 +1455,35 @@ impl Render for MainWindow {
             cx.theme().foreground,
             cx.theme().font_family.clone(),
         );
+        let skills = self
+            .skills
+            .as_ref()
+            .filter(|_| self.skills_open)
+            .map(|(skills, _)| skills.clone());
         let chat_column = v_flex()
             .size_full()
             .min_w_0()
             .child(self.render_chat_header(cx))
-            .child(
-                v_resizable("chat-and-terminal")
-                    .child(resizable_panel().child(self.chat.clone().cached(full())))
-                    .child(
-                        resizable_panel()
-                            .visible(self.terminal_open)
-                            .size(px(280.))
-                            .size_range(px(120.)..px(2000.))
-                            .children(
-                                self.terminal
-                                    .clone()
-                                    .map(|terminal| terminal.cached(full())),
-                            ),
-                    ),
-            );
+            .when_some(skills, |this, skills| {
+                this.child(div().flex_1().min_h_0().child(skills.cached(full())))
+            })
+            .when(!self.skills_open, |this| {
+                this.child(
+                    v_resizable("chat-and-terminal")
+                        .child(resizable_panel().child(self.chat.clone().cached(full())))
+                        .child(
+                            resizable_panel()
+                                .visible(self.terminal_open)
+                                .size(px(280.))
+                                .size_range(px(120.)..px(2000.))
+                                .children(
+                                    self.terminal
+                                        .clone()
+                                        .map(|terminal| terminal.cached(full())),
+                                ),
+                        ),
+                )
+            });
 
         div()
             .key_context(WINDOW_CONTEXT)

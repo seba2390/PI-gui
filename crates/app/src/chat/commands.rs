@@ -378,6 +378,7 @@ mod tests {
             name: "skill:commit".into(),
             description: Some("Write a commit".into()),
             source: "skill".into(),
+            source_info: None,
         }];
         let names = |text| {
             suggestions(text, &pi)
