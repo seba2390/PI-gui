@@ -16,6 +16,8 @@ pub struct AppConfig {
     /// Folder new chats start in until the user picks one.
     pub default_cwd: PathBuf,
     pub home: Option<PathBuf>,
+    /// The folder chat-mode sessions run in (see [`pi_sessions::Mode`]).
+    pub chat_dir: PathBuf,
     /// Panels to open at startup (`PI_GUI_OPEN=terminal,diff,files`), for scripted
     /// screenshots and responsiveness checks.
     pub open_at_startup: Vec<String>,
@@ -34,6 +36,25 @@ impl Global for RecentFolders {}
 pub const RECENT_FOLDERS: usize = 8;
 
 impl AppConfig {
+    /// The mode of a session running in `cwd`.
+    pub fn mode_of(&self, cwd: &std::path::Path) -> pi_sessions::Mode {
+        pi_sessions::Mode::of(cwd, &self.chat_dir)
+    }
+
+    /// A config for tests: no login-shell environment, temp-dir folders.
+    #[cfg(test)]
+    pub fn for_tests(pi_program: PathBuf) -> Self {
+        Self {
+            pi_program,
+            child_env: Vec::new(),
+            sessions_dir: None,
+            default_cwd: std::env::temp_dir(),
+            home: None,
+            chat_dir: std::env::temp_dir().join("pi-gui-test-chat"),
+            open_at_startup: Vec::new(),
+        }
+    }
+
     /// `child_env` is the result of [`crate::shell_env::login_shell_env`].
     pub fn detect(child_env: Vec<(OsString, OsString)>) -> Self {
         let home = dirs_home();
@@ -49,6 +70,8 @@ impl AppConfig {
             sessions_dir: pi_sessions::sessions_dir(),
             default_cwd,
             home,
+            chat_dir: pi_sessions::chat_dir()
+                .unwrap_or_else(|| std::env::temp_dir().join("pi-gui-chat")),
             open_at_startup: std::env::var("PI_GUI_OPEN")
                 .map(|value| {
                     value

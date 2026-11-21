@@ -334,7 +334,18 @@ impl ChatView {
     fn render_empty(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let session = self.session.read(cx);
         let home = cx.global::<crate::config::AppConfig>().home.clone();
-        let folder = crate::ui::short_path(session.cwd(), home.as_deref());
+        let chat = session.mode() == pi_sessions::Mode::Chat;
+        let (headline, subtitle) = if chat {
+            (
+                "How can I help?".to_owned(),
+                "Chat · no access to your files".to_owned(),
+            )
+        } else {
+            (
+                "What should we build?".to_owned(),
+                crate::ui::short_path(session.cwd(), home.as_deref()),
+            )
+        };
         let accent = palette(cx).accent;
         let message = match session.lifecycle() {
             session::Lifecycle::Exited { message } => Some(message.clone()),
@@ -355,13 +366,13 @@ impl ChatView {
                 div()
                     .text_xl()
                     .text_color(cx.theme().foreground)
-                    .child("What should we build?"),
+                    .child(headline),
             )
             .child(
                 div()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
-                    .child(folder),
+                    .child(subtitle),
             )
             .when_some(message, |this, message| {
                 this.child(

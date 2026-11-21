@@ -45,6 +45,75 @@ impl SessionSummary {
     }
 }
 
+/// How a session is used in the GUI.
+///
+/// pi has no notion of modes. The GUI runs every *chat* in one dedicated, empty folder
+/// ([`chat_dir`]) with all tools disabled (`--no-tools`, which pi records in the session and
+/// restores on resume), so a session's mode follows from its working folder alone.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Mode {
+    /// Plain conversation: no tools, no project folder.
+    Chat,
+    /// The coding agent working in a project folder.
+    #[default]
+    Code,
+}
+
+impl Mode {
+    /// The mode of a session that runs in `cwd`, given the GUI's chat folder.
+    pub fn of(cwd: &Path, chat_dir: &Path) -> Self {
+        if cwd == chat_dir {
+            Self::Chat
+        } else {
+            Self::Code
+        }
+    }
+}
+
+/// The folder chat-mode sessions run in: `<agent dir>/pi-gui/chat`.
+pub fn chat_dir() -> Option<PathBuf> {
+    agent_dir().map(|agent| agent.join("pi-gui").join("chat"))
+}
+
+/// Sessions sharing a working folder, for the Code sidebar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FolderGroup<'a> {
+    pub cwd: &'a Path,
+    /// Newest first (as given).
+    pub sessions: Vec<&'a SessionSummary>,
+}
+
+impl FolderGroup<'_> {
+    /// When any session in the folder last changed.
+    pub fn latest(&self) -> SystemTime {
+        self.sessions
+            .iter()
+            .map(|session| session.modified)
+            .max()
+            .unwrap_or(SystemTime::UNIX_EPOCH)
+    }
+}
+
+/// Groups `sessions` (newest first) by working folder; the folder with the most recent
+/// activity comes first, and sessions keep their order within a folder.
+pub fn group_by_folder<'a>(
+    sessions: impl IntoIterator<Item = &'a SessionSummary>,
+) -> Vec<FolderGroup<'a>> {
+    let mut groups: Vec<FolderGroup<'a>> = Vec::new();
+    for session in sessions {
+        match groups.iter_mut().find(|group| group.cwd == session.cwd) {
+            Some(group) => group.sessions.push(session),
+            None => groups.push(FolderGroup {
+                cwd: &session.cwd,
+                sessions: vec![session],
+            }),
+        }
+    }
+    groups.sort_by_key(|group| std::cmp::Reverse(group.latest()));
+    groups
+}
+
 /// pi's config dir: `PI_CODING_AGENT_DIR` or `~/.pi/agent`.
 pub fn agent_dir() -> Option<PathBuf> {
     std::env::var_os("PI_CODING_AGENT_DIR")
@@ -316,6 +385,61 @@ mod tests {
             ]
         );
         assert_eq!(recent_folders(&[], 3), Vec::<PathBuf>::new());
+    }
+
+    fn summary(cwd: &str, age_secs: u64) -> SessionSummary {
+        SessionSummary {
+            path: PathBuf::from(format!("{cwd}/{age_secs}.jsonl")),
+            id: format!("{cwd}{age_secs}"),
+            cwd: PathBuf::from(cwd),
+            name: None,
+            first_prompt: None,
+            modified: SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000 - age_secs),
+        }
+    }
+
+    #[test]
+    fn mode_follows_the_chat_folder() {
+        let chat = Path::new("/home/u/.pi/agent/pi-gui/chat");
+        assert_eq!(Mode::of(chat, chat), Mode::Chat);
+        assert_eq!(Mode::of(Path::new("/home/u/code/app"), chat), Mode::Code);
+        assert_eq!(
+            Mode::of(Path::new("/home/u/.pi/agent/pi-gui"), chat),
+            Mode::Code
+        );
+        assert_eq!(serde_json::to_string(&Mode::Chat).unwrap(), "\"chat\"");
+    }
+
+    #[test]
+    fn groups_by_folder_with_most_recent_activity_first() {
+        // Input is newest first, as `scan` returns it.
+        let sessions = [
+            summary("/b", 10),
+            summary("/a", 20),
+            summary("/b", 30),
+            summary("/c", 40),
+            summary("/a", 50),
+        ];
+        let groups = group_by_folder(&sessions);
+        let shape: Vec<(&str, Vec<&str>)> = groups
+            .iter()
+            .map(|group| {
+                (
+                    group.cwd.to_str().unwrap(),
+                    group.sessions.iter().map(|s| s.id.as_str()).collect(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            vec![
+                ("/b", vec!["/b10", "/b30"]),
+                ("/a", vec!["/a20", "/a50"]),
+                ("/c", vec!["/c40"])
+            ]
+        );
+        assert_eq!(groups[0].latest(), sessions[0].modified);
+        assert_eq!(group_by_folder(&[]), Vec::new());
     }
 
     #[test]

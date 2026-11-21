@@ -20,12 +20,14 @@ term.workspace = true
 anyhow.workspace = true
 log.workspace = true
 env_logger.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 async-channel.workspace = true
 base64 = "0.22"
 trash = "5"
 
 [dev-dependencies]
+tempfile.workspace = true
 gpui-kit = { workspace = true, features = ["test-support"] }
 
 [lints]

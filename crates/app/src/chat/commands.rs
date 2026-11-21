@@ -151,6 +151,16 @@ pub fn handle(
     match parse(text) {
         Parsed::Prompt => CommandOutcome::NotACommand,
         Parsed::Shell { command: "", .. } => CommandOutcome::Keep,
+        Parsed::Shell { .. } if session.read(cx).mode() == pi_sessions::Mode::Chat => {
+            notice(
+                session,
+                NoticeKind::Info,
+                "Shell commands are not available in chat mode. Switch to Code to work in a folder."
+                    .to_owned(),
+                cx,
+            );
+            CommandOutcome::Keep
+        }
         Parsed::Shell {
             command,
             exclude_from_context,

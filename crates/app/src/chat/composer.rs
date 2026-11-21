@@ -5,6 +5,7 @@
 //! works), Shift+Enter inserts a newline, Alt+Enter queues a follow-up, Esc
 //! interrupts, Alt+Up restores queued messages, Shift+Tab cycles thinking.
 
+use pi_sessions::Mode;
 use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -60,7 +61,18 @@ struct Attachment {
     /// Images are sent as image content; other files as `@path` references,
     /// which is how pi's terminal refers to files.
     image: Option<ImageContent>,
+    /// In chat mode the model has no `read` tool, so text files are pasted into the prompt.
+    inline: Option<InlineText>,
 }
+
+/// A text attachment's contents for chat mode, or why it could not be included.
+enum InlineText {
+    Text(String),
+    Skipped(&'static str),
+}
+
+/// Text attachments larger than this are not pasted into a chat prompt.
+const MAX_INLINE_BYTES: u64 = 256 * 1024;
 
 pub struct Composer {
     session: Entity<PiSession>,
@@ -78,11 +90,15 @@ impl EventEmitter<ComposerEvent> for Composer {}
 
 impl Composer {
     pub fn new(session: Entity<PiSession>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let placeholder = match session.read(cx).mode() {
+            Mode::Chat => "Message pi…  (/ for commands)",
+            Mode::Code => "Message pi…  (/ for commands, ! to run a shell command)",
+        };
         let input = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .auto_grow(1, 12)
                 .submit_on_enter(true)
-                .placeholder("Message pi…  (/ for commands, ! to run a shell command)")
+                .placeholder(placeholder)
         });
         let subscriptions = vec![
             cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
@@ -100,7 +116,9 @@ impl Composer {
             });
             ListState::new(delegate, window, cx).searchable(true)
         });
-        file_picker::refresh_index(&picker, cx);
+        if session.read(cx).mode() == Mode::Code {
+            file_picker::refresh_index(&picker, cx);
+        }
         Self {
             session,
             input,
@@ -153,9 +171,18 @@ impl Composer {
         let mut references = Vec::new();
         let mut images = Vec::new();
         for attachment in self.attachments.drain(..) {
-            match attachment.image {
-                Some(image) => images.push(image),
-                None => {
+            match (attachment.image, attachment.inline) {
+                (Some(image), _) => images.push(image),
+                (None, Some(InlineText::Text(text))) => {
+                    references.push(inline_file_block(&attachment.name, &text));
+                }
+                (None, Some(InlineText::Skipped(reason))) => {
+                    references.push(format!(
+                        "(Attachment `{}` was not included: {reason}.)",
+                        attachment.name
+                    ));
+                }
+                (None, None) => {
                     let path = attachment
                         .path
                         .strip_prefix(&cwd)
@@ -167,7 +194,13 @@ impl Composer {
         let message = if references.is_empty() {
             text
         } else {
-            format!("{}\n\n{text}", references.join(" "))
+            // Pasted files (chat mode) each get their own paragraph; `@path`s share a line.
+            let separator = if self.session.read(cx).mode() == Mode::Chat {
+                "\n\n"
+            } else {
+                " "
+            };
+            format!("{}\n\n{text}", references.join(separator))
                 .trim()
                 .to_owned()
         };
@@ -290,6 +323,7 @@ impl Composer {
                             base64::engine::general_purpose::STANDARD.encode(&image.bytes),
                             mime,
                         )),
+                        inline: None,
                     });
                     consumed = true;
                 }
@@ -308,10 +342,16 @@ impl Composer {
     }
 
     fn attach_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        let inline = self.session.read(cx).mode() == Mode::Chat;
         cx.spawn(async move |this, cx| {
             let attachments = cx
                 .background_executor()
-                .spawn(async move { paths.into_iter().map(load_attachment).collect::<Vec<_>>() })
+                .spawn(async move {
+                    paths
+                        .into_iter()
+                        .map(|path| load_attachment(path, inline))
+                        .collect::<Vec<_>>()
+                })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.attachments.extend(attachments);
@@ -344,18 +384,27 @@ impl Composer {
         }
     }
 
-    fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_toolbar(&self, cx: &mut Context<Self>) -> AnyElement {
         let session = self.session.read(cx);
-        let running = session.is_running();
-        let ready = matches!(session.lifecycle(), Lifecycle::Ready | Lifecycle::Starting);
-        let has_input =
-            !self.input.read(cx).value().trim().is_empty() || !self.attachments.is_empty();
         let folder = session.cwd().file_name().map_or_else(
             || session.cwd().display().to_string(),
             |name| name.to_string_lossy().into_owned(),
         );
         let folder_locked = !session.is_empty();
         let cwd = session.cwd().to_path_buf();
+
+        if session.mode() == Mode::Chat {
+            // No project folder: attach straight from the system dialog, no folder picker.
+            let left = h_flex().gap_1().child(
+                Button::new("attach")
+                    .quiet(cx)
+                    .small()
+                    .icon(Icon::from(AppIcon::Paperclip))
+                    .tooltip("Attach files or images")
+                    .on_click(cx.listener(|this, _, _, cx| this.pick_attachments(cx))),
+            );
+            return self.toolbar_layout(left, cx).into_any_element();
+        }
 
         let left = h_flex()
             .gap_1()
@@ -395,6 +444,16 @@ impl Composer {
                 .dropdown_menu_with_anchor(Anchor::BottomLeft, folder_menu(cx.weak_entity(), cwd)),
             );
 
+        self.toolbar_layout(left, cx).into_any_element()
+    }
+
+    /// The composer's bottom bar: `left` controls, then model, thinking, context and send.
+    fn toolbar_layout(&self, left: Div, cx: &mut Context<Self>) -> Div {
+        let session = self.session.read(cx);
+        let running = session.is_running();
+        let ready = matches!(session.lifecycle(), Lifecycle::Ready | Lifecycle::Starting);
+        let has_input =
+            !self.input.read(cx).value().trim().is_empty() || !self.attachments.is_empty();
         let right = h_flex()
             .gap_1()
             .child(self.render_model_picker(cx))
@@ -758,7 +817,7 @@ impl Render for Composer {
     }
 }
 
-fn load_attachment(path: PathBuf) -> Attachment {
+fn load_attachment(path: PathBuf, inline: bool) -> Attachment {
     let name: SharedString = path
         .file_name()
         .map_or_else(
@@ -785,7 +844,38 @@ fn load_attachment(path: PathBuf) -> Attachment {
             mime,
         ))
     });
-    Attachment { path, name, image }
+    let inline = (inline && image.is_none()).then(|| read_inline_text(&path));
+    Attachment {
+        path,
+        name,
+        image,
+        inline,
+    }
+}
+
+fn read_inline_text(path: &std::path::Path) -> InlineText {
+    match std::fs::metadata(path) {
+        Ok(meta) if meta.len() > MAX_INLINE_BYTES => InlineText::Skipped("larger than 256 KB"),
+        Ok(_) => match std::fs::read(path).map(String::from_utf8) {
+            Ok(Ok(text)) => InlineText::Text(text),
+            Ok(Err(_)) => InlineText::Skipped("not a text file"),
+            Err(_) => InlineText::Skipped("could not be read"),
+        },
+        Err(_) => InlineText::Skipped("could not be read"),
+    }
+}
+
+/// A file pasted into a chat prompt: its name, then its contents in a fenced block whose
+/// fence is longer than any backtick run inside, so the contents can't close it early.
+fn inline_file_block(name: &str, contents: &str) -> String {
+    let longest = contents
+        .split(|c| c != '`')
+        .map(str::len)
+        .max()
+        .unwrap_or(0);
+    let fence = "`".repeat(longest.max(2) + 1);
+    let body = contents.strip_suffix('\n').unwrap_or(contents);
+    format!("`{name}`:\n{fence}\n{body}\n{fence}")
 }
 
 /// Builds the folder menu: recent working folders (instant, no disk access) and a fallback to
@@ -881,5 +971,19 @@ fn folder_menu(
                     let _ = composer.update(cx, |this, cx| this.pick_folder(cx));
                 }),
             )
+    }
+}
+
+#[cfg(test)]
+mod inline_tests {
+    use super::inline_file_block;
+
+    #[test]
+    fn inlined_files_use_a_fence_longer_than_their_backticks() {
+        assert_eq!(inline_file_block("a.txt", "hi\n"), "`a.txt`:\n```\nhi\n```");
+        assert_eq!(
+            inline_file_block("b.md", "```rust\nx\n```"),
+            "`b.md`:\n````\n```rust\nx\n```\n````"
+        );
     }
 }

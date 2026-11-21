@@ -649,14 +649,7 @@ mod tests {
         cx.update(|cx| {
             gpui_kit::component::init(cx);
             super::init(cx);
-            cx.set_global(crate::config::AppConfig {
-                pi_program: "pi".into(),
-                child_env: Vec::new(),
-                sessions_dir: None,
-                default_cwd: std::env::temp_dir(),
-                home: None,
-                open_at_startup: Vec::new(),
-            });
+            cx.set_global(crate::config::AppConfig::for_tests("pi".into()));
         });
         let dir = std::env::temp_dir();
         let (panel, cx) = cx.add_window_view(|window, cx| {

@@ -12,6 +12,7 @@ mod shell_env;
 mod sidebar;
 mod theme;
 mod ui;
+mod ui_state;
 mod window;
 
 use gpui_kit::*;
@@ -30,6 +31,9 @@ fn main() {
         theme::init(cx);
         actions::init(cx);
         cx.set_global(config);
+        cx.set_global(ui_state::UiState::load(
+            ui_state::UiState::path().as_deref(),
+        ));
         window::open_main_window(cx);
         cx.activate(true);
     });

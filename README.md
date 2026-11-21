@@ -11,7 +11,16 @@ skills and prompt templates all come from your normal pi configuration.
   results and inline edit diffs, and “Worked for 1m 3s” after every turn.
 - Composer: attachments, working-folder picker, model and thinking pickers, context-window wheel,
   `/` command completion, `!cmd` shell commands.
-- Left sidebar: previous chats (also those started from the terminal), search, rename, trash.
+- Left sidebar with a **Chat | Code** switch (⌘1 / ⌘2):
+  - **Code**: the coding agent in a project folder; sessions are grouped under their folder
+    (collapsible, "+" for a new session there), including ones started from the terminal.
+  - **Chat**: plain conversation with **no tools**: the model cannot read, write or run
+    anything. Chats run pi with `--no-tools` in a dedicated empty folder
+    (`~/.pi/agent/pi-gui/chat`); pi records the empty tool set in the session and restores it
+    on resume, so a chat stays tool-less even when reopened from the terminal. Text
+    attachments are pasted into the prompt instead of being referenced by path, and `!`
+    shell commands are disabled.
+  - Search, rename and move to trash in both modes.
 - Right panel: git changes and a file tree of the working folder.
 - Bottom panel: an integrated terminal in the working folder.
 - macOS and Linux (Windows best-effort). GPU-rendered with [GPUI](https://gpui.rs) via
@@ -46,7 +55,8 @@ Composer behaviour mirrors pi's terminal.
 | Shift+Tab | Cycle thinking level |
 | Tab | Complete a `/` command |
 | Ctrl+T / Ctrl+O | Expand all thinking / tool output |
-| ⌘N / ⌘B / ⌘⌥B | New chat / toggle sidebar / toggle right panel |
+| ⌘N / ⌘B / ⌘⌥B | New chat or session / toggle sidebar / toggle right panel |
+| ⌘1 / ⌘2 | Chat mode / Code mode |
 | ⌘⇧D / ⌘⇧E | Changes / files panel |
 | Ctrl+` | Toggle terminal |
 
@@ -81,7 +91,7 @@ script/measure-memory.sh          # RSS / footprint of a running instance and it
 script/bundle-macos.sh && script/shot.sh <folder> out.png terminal,diff   # scripted screenshot (macOS)
 ```
 
-`PI_GUI_OPEN=terminal,diff,files,no-sidebar,latest,attach,context` opens those panels (or the
+`PI_GUI_OPEN=chat|code,terminal,diff,files,no-sidebar,latest,attach,context` opens those panels (or the
 newest session, the attach picker, the context breakdown) at startup, which is what
 `script/shot.sh` uses for layout checks without driving the mouse.
 

@@ -12,9 +12,23 @@ actions!(
         ShowDiff,
         ShowFiles,
         FocusComposer,
+        ShowChatMode,
+        ShowCodeMode,
         Quit,
     ]
 );
+
+/// Shortcuts shown in the Chat | Code switch's tooltips.
+pub const CHAT_MODE_KEYS: &str = if cfg!(target_os = "macos") {
+    "⌘1"
+} else {
+    "Ctrl+1"
+};
+pub const CODE_MODE_KEYS: &str = if cfg!(target_os = "macos") {
+    "⌘2"
+} else {
+    "Ctrl+2"
+};
 
 /// Key context of the main window.
 pub const WINDOW_CONTEXT: &str = "PiWindow";
@@ -39,6 +53,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new(primary!("shift-d"), ShowDiff, Some(WINDOW_CONTEXT)),
         KeyBinding::new(primary!("shift-e"), ShowFiles, Some(WINDOW_CONTEXT)),
         KeyBinding::new(primary!("l"), FocusComposer, Some(WINDOW_CONTEXT)),
+        KeyBinding::new(primary!("1"), ShowChatMode, Some(WINDOW_CONTEXT)),
+        KeyBinding::new(primary!("2"), ShowCodeMode, Some(WINDOW_CONTEXT)),
         KeyBinding::new(primary!("q"), Quit, None),
     ]);
     cx.on_action(|_: &Quit, cx| cx.quit());
@@ -52,6 +68,8 @@ mod tests {
     #[test]
     fn bindings_parse() {
         let primary = [
+            primary!("1"),
+            primary!("2"),
             primary!("n"),
             primary!("b"),
             primary!("alt-b"),

@@ -4,6 +4,7 @@
 //! pumps its events into the [`Transcript`] reducer, and exposes pi's commands as
 //! methods. Views observe it and render; they never hold protocol state.
 
+use pi_sessions::Mode;
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -54,6 +55,7 @@ struct PendingPrompt {
 }
 
 pub struct PiSession {
+    mode: Mode,
     cwd: PathBuf,
     resumed_from: Option<PathBuf>,
     process: Option<PiProcess>,
@@ -79,12 +81,18 @@ impl PiSession {
     /// Starts pi in `cwd`, resuming `session_file` when given.
     pub fn new(cwd: PathBuf, session_file: Option<PathBuf>, cx: &mut Context<Self>) -> Self {
         let config = cx.global::<AppConfig>().clone();
-        let mut options = SpawnOptions::new(&cwd);
-        options.program.clone_from(&config.pi_program);
-        options.env.clone_from(&config.child_env);
-        options.session.clone_from(&session_file);
+        let (options, mode) = spawn_options(&config, &cwd, session_file.as_deref());
+        if mode == Mode::Chat
+            && let Err(error) = std::fs::create_dir_all(&cwd)
+        {
+            log::warn!(
+                "could not create the chat folder {}: {error}",
+                cwd.display()
+            );
+        }
 
         let mut this = Self {
+            mode,
             cwd,
             resumed_from: session_file,
             process: None,
@@ -152,6 +160,11 @@ impl PiSession {
 
     pub fn cwd(&self) -> &Path {
         &self.cwd
+    }
+
+    /// Chat sessions have no tools and no project folder.
+    pub fn mode(&self) -> Mode {
+        self.mode
     }
 
     pub fn lifecycle(&self) -> &Lifecycle {
@@ -655,9 +668,46 @@ impl PiSession {
     }
 }
 
+/// How to launch pi for a session in `cwd`. Chat sessions get `--no-tools`: pi records the
+/// empty tool set in the session and restores it on resume (even from the terminal), so a chat
+/// can never read or change files; passing it again on resume is belt and braces.
+fn spawn_options(
+    config: &AppConfig,
+    cwd: &Path,
+    session_file: Option<&Path>,
+) -> (SpawnOptions, Mode) {
+    let mut options = SpawnOptions::new(cwd);
+    options.program.clone_from(&config.pi_program);
+    options.env.clone_from(&config.child_env);
+    options.session = session_file.map(Path::to_path_buf);
+    let mode = config.mode_of(cwd);
+    if mode == Mode::Chat {
+        options.extra_args.push("--no-tools".into());
+    }
+    (options, mode)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+
+    #[test]
+    fn chat_sessions_launch_without_tools() {
+        let config = AppConfig::for_tests("pi".into());
+        let (chat, mode) = super::spawn_options(&config, &config.chat_dir.clone(), None);
+        assert_eq!(mode, super::Mode::Chat);
+        assert_eq!(
+            chat.extra_args,
+            vec![std::ffi::OsString::from("--no-tools")]
+        );
+
+        let project = std::env::temp_dir().join("some-project");
+        let session = project.join("s.jsonl");
+        let (code, mode) = super::spawn_options(&config, &project, Some(&session));
+        assert_eq!(mode, super::Mode::Code);
+        assert_eq!(code.extra_args, [] as [std::ffi::OsString; 0]);
+        assert_eq!(code.session.as_deref(), Some(session.as_path()));
+    }
 
     use gpui_kit::{AppContext as _, TestAppContext};
     use transcript::{BlockKind, ItemKind};
@@ -672,14 +722,7 @@ mod tests {
         cx.executor().allow_parking();
         let fake = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../pi-rpc/tests/fake_pi.py");
         cx.update(|cx| {
-            cx.set_global(AppConfig {
-                pi_program: fake,
-                child_env: Vec::new(),
-                sessions_dir: None,
-                default_cwd: std::env::temp_dir(),
-                home: None,
-                open_at_startup: Vec::new(),
-            });
+            cx.set_global(AppConfig::for_tests(fake));
         });
         let session = cx.new(|cx| PiSession::new(std::env::temp_dir(), None, cx));
         let (sender, events) = async_channel::unbounded();

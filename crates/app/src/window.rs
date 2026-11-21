@@ -12,9 +12,13 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use pi_sessions::SessionSummary;
 
+use std::collections::HashMap;
+
+use pi_sessions::Mode;
+
 use crate::actions::{
-    FocusComposer, NewChat, ShowDiff, ShowFiles, ToggleRightPanel, ToggleSidebar, ToggleTerminal,
-    WINDOW_CONTEXT,
+    FocusComposer, NewChat, ShowChatMode, ShowCodeMode, ShowDiff, ShowFiles, ToggleRightPanel,
+    ToggleSidebar, ToggleTerminal, WINDOW_CONTEXT,
 };
 use crate::chat::{ChatEvent, ChatView};
 use crate::config::AppConfig;
@@ -62,6 +66,8 @@ pub struct MainWindow {
     background: Vec<(Entity<ChatView>, Subscription)>,
     right_panel: Entity<RightPanel>,
     terminal: Option<Entity<TerminalPanel>>,
+    /// The conversation last shown in each mode, reopened when switching back to it.
+    last_session: HashMap<Mode, PathBuf>,
     sidebar_open: bool,
     right_open: bool,
     terminal_open: bool,
@@ -73,8 +79,14 @@ pub struct MainWindow {
 
 impl MainWindow {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let cwd = cx.global::<AppConfig>().default_cwd.clone();
         let sidebar = cx.new(|cx| Sidebar::new(window, cx));
+        let cwd = {
+            let config = cx.global::<AppConfig>();
+            match sidebar.read(cx).mode() {
+                Mode::Chat => config.chat_dir.clone(),
+                Mode::Code => config.default_cwd.clone(),
+            }
+        };
         let chat = cx.new(|cx| ChatView::new(cwd.clone(), None, window, cx));
         let right_panel = cx.new(|cx| RightPanel::new(cwd, window, cx));
         let chat_subscription = cx.subscribe_in(&chat, window, Self::on_chat_event);
@@ -111,6 +123,8 @@ impl MainWindow {
                         "diff" => this.show_diff(&ShowDiff, window, cx),
                         "files" => this.show_files(&ShowFiles, window, cx),
                         "no-sidebar" => this.toggle_sidebar(&ToggleSidebar, window, cx),
+                        "chat" => this.switch_to_mode(Mode::Chat, window, cx),
+                        "code" => this.switch_to_mode(Mode::Code, window, cx),
                         "latest" => {
                             let dir = cx.global::<AppConfig>().sessions_dir.clone();
                             if let Some(latest) =
@@ -139,6 +153,7 @@ impl MainWindow {
             background: Vec::new(),
             right_panel,
             terminal: None,
+            last_session: HashMap::new(),
             sidebar_open: true,
             right_open: false,
             terminal_open: false,
@@ -153,9 +168,78 @@ impl MainWindow {
         self.chat.read(cx).session().read(cx).cwd().to_owned()
     }
 
+    /// The mode of the visible conversation.
+    fn mode(&self, cx: &App) -> Mode {
+        self.chat.read(cx).session().read(cx).mode()
+    }
+
+    /// Where a new conversation in `mode` starts: the chat folder, or for Code the current
+    /// project, else the most recent one, else the launch folder.
+    fn default_folder(&self, mode: Mode, cx: &App) -> PathBuf {
+        let config = cx.global::<AppConfig>();
+        match mode {
+            Mode::Chat => config.chat_dir.clone(),
+            Mode::Code if self.mode(cx) == Mode::Code => self.cwd(cx),
+            Mode::Code => self
+                .sidebar
+                .read(cx)
+                .latest_code_folder(cx)
+                .unwrap_or_else(|| config.default_cwd.clone()),
+        }
+    }
+
+    /// Shows `mode`: the conversation last open in it, or a new one. Chat has no project
+    /// folder, so the terminal and side panel close.
+    fn switch_to_mode(&mut self, mode: Mode, window: &mut Window, cx: &mut Context<Self>) {
+        self.sidebar
+            .update(cx, |sidebar, cx| sidebar.set_mode(mode, window, cx));
+        if self.mode(cx) == mode {
+            return;
+        }
+        if mode == Mode::Chat {
+            self.terminal_open = false;
+            self.set_right_open(false, cx);
+        }
+        let last = self
+            .last_session
+            .get(&mode)
+            .and_then(|path| self.sidebar.read(cx).summary(path));
+        match last {
+            Some(summary) => drop(self.open_session(&summary, window, cx)),
+            None => {
+                let folder = self.default_folder(mode, cx);
+                self.new_chat_in(folder, window, cx);
+            }
+        }
+    }
+
+    fn show_chat_mode(&mut self, _: &ShowChatMode, window: &mut Window, cx: &mut Context<Self>) {
+        self.switch_to_mode(Mode::Chat, window, cx);
+    }
+
+    fn show_code_mode(&mut self, _: &ShowCodeMode, window: &mut Window, cx: &mut Context<Self>) {
+        self.switch_to_mode(Mode::Code, window, cx);
+    }
+
     /// Replaces the visible chat, keeping the old one alive if it is still working.
     fn show_chat(&mut self, chat: Entity<ChatView>, window: &mut Window, cx: &mut Context<Self>) {
         let previous = std::mem::replace(&mut self.chat, chat.clone());
+        {
+            let session = previous.read(cx).session().read(cx);
+            if let Some(file) = session.session_file() {
+                self.last_session.insert(session.mode(), file);
+            }
+        }
+        // Opening a conversation of the other mode (e.g. at startup) switches the sidebar too.
+        let mode = chat.read(cx).session().read(cx).mode();
+        self.sidebar
+            .update(cx, |sidebar, cx| sidebar.set_mode(mode, window, cx));
+        if mode == Mode::Chat {
+            self.terminal_open = false;
+            if self.right_open {
+                self.set_right_open(false, cx);
+            }
+        }
         if previous.read(cx).session().read(cx).is_running() {
             // Keep it alive until it settles, then let it (and its pi process) go.
             let subscription = cx.subscribe(&previous, |this, _, event: &ChatEvent, cx| {
@@ -224,6 +308,8 @@ impl MainWindow {
         match event {
             SidebarEvent::Open(summary) => drop(self.open_session(summary, window, cx)),
             SidebarEvent::NewChat => self.new_chat(&NewChat, window, cx),
+            SidebarEvent::NewInFolder(folder) => self.new_chat_in(folder.clone(), window, cx),
+            SidebarEvent::ModeChanged(mode) => self.switch_to_mode(*mode, window, cx),
             SidebarEvent::Collapse => self.toggle_sidebar(&ToggleSidebar, window, cx),
             SidebarEvent::Delete(summary) => self.confirm_delete(summary.clone(), window, cx),
             SidebarEvent::Rename(summary) => self.prompt_rename(summary.clone(), window, cx),
@@ -357,13 +443,14 @@ impl MainWindow {
     // ---- actions -------------------------------------------------------------
 
     fn new_chat(&mut self, _: &NewChat, window: &mut Window, cx: &mut Context<Self>) {
-        // An untouched chat is already "new": just focus it.
-        if self.chat.read(cx).session().read(cx).is_empty() {
+        // An untouched conversation of the sidebar's mode is already "new": just focus it.
+        let mode = self.sidebar.read(cx).mode();
+        if self.mode(cx) == mode && self.chat.read(cx).session().read(cx).is_empty() {
             focus_chat(&self.chat, window, cx);
             return;
         }
-        let cwd = self.cwd(cx);
-        self.new_chat_in(cwd, window, cx);
+        let folder = self.default_folder(mode, cx);
+        self.new_chat_in(folder, window, cx);
     }
 
     fn toggle_sidebar(&mut self, _: &ToggleSidebar, _: &mut Window, cx: &mut Context<Self>) {
@@ -372,6 +459,9 @@ impl MainWindow {
     }
 
     fn toggle_right_panel(&mut self, _: &ToggleRightPanel, _: &mut Window, cx: &mut Context<Self>) {
+        if self.mode(cx) == Mode::Chat {
+            return;
+        }
         self.set_right_open(!self.right_open, cx);
     }
 
@@ -384,6 +474,9 @@ impl MainWindow {
     }
 
     fn show_tab(&mut self, tab: RightTab, cx: &mut Context<Self>) {
+        if self.mode(cx) == Mode::Chat {
+            return;
+        }
         let current = self.right_panel.read(cx).tab();
         if self.right_open && current == tab {
             self.set_right_open(false, cx);
@@ -403,6 +496,9 @@ impl MainWindow {
     }
 
     fn toggle_terminal(&mut self, _: &ToggleTerminal, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mode(cx) == Mode::Chat {
+            return;
+        }
         if self.terminal_open {
             self.terminal_open = false;
             focus_chat(&self.chat, window, cx);
@@ -445,11 +541,17 @@ impl MainWindow {
 
     fn render_chat_header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let session = self.chat.read(cx).session().read(cx);
-        let title = session
-            .display_title()
-            .unwrap_or_else(|| "New chat".to_owned());
+        let title = session.display_title().unwrap_or_else(|| {
+            match session.mode() {
+                Mode::Chat => "New chat",
+                Mode::Code => "New session",
+            }
+            .to_owned()
+        });
         let home = cx.global::<AppConfig>().home.clone();
         let folder = crate::ui::short_path(session.cwd(), home.as_deref());
+        // Chat has no project folder: no path, terminal, diff or files.
+        let code = session.mode() == Mode::Code;
         let tab = self.right_panel.read(cx).tab();
         let theme = cx.theme();
 
@@ -510,19 +612,22 @@ impl MainWindow {
                                 .text_color(theme.foreground)
                                 .child(title),
                         )
-                        .child(
-                            div()
-                                .text_xs()
-                                .min_w_0()
-                                .truncate()
-                                .text_color(theme.muted_foreground)
-                                .child(folder),
-                        ),
+                        .when(code, |this| {
+                            this.child(
+                                div()
+                                    .text_xs()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_color(theme.muted_foreground)
+                                    .child(folder),
+                            )
+                        }),
                 )
                 .child(
                     h_flex()
                         .flex_none()
                         .gap_0p5()
+                        .when(!code, |this| this.hidden())
                         .child(
                             Button::new("toggle-terminal")
                                 .quiet(cx)
@@ -622,6 +727,8 @@ impl Render for MainWindow {
             .on_action(cx.listener(Self::show_diff))
             .on_action(cx.listener(Self::show_files))
             .on_action(cx.listener(Self::focus_composer))
+            .on_action(cx.listener(Self::show_chat_mode))
+            .on_action(cx.listener(Self::show_code_mode))
             .size_full()
             .bg(background)
             .text_color(foreground)

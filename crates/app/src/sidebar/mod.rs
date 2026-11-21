@@ -1,10 +1,13 @@
-//! The left sidebar: new chat, and previous sessions grouped by recency.
+//! The left sidebar: the Chat | Code switch, new chat, and previous sessions.
 //!
-//! The list comes from pi's session files (read-only, via `pi-sessions`) and is
-//! refreshed by a filesystem watcher, so sessions created by the terminal `pi`
-//! appear here too.
+//! The list comes from pi's session files (read-only, via `pi-sessions`) and is refreshed by
+//! a filesystem watcher, so sessions created by the terminal `pi` appear here too. Chat mode
+//! lists chats by date; Code mode groups sessions under their working folder, with groups that
+//! can be collapsed (remembered in [`UiState`]).
 
-use std::path::PathBuf;
+mod rows;
+
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use gpui_kit::component::button::Button;
@@ -12,23 +15,30 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use pi_sessions::SessionSummary;
+use pi_sessions::{Mode, SessionSummary};
 
 use crate::config::{AppConfig, RECENT_FOLDERS, RecentFolders};
 use crate::theme::palette;
 use crate::ui::QuietButton as _;
-use crate::ui::{AppIcon, TOP_BAR_HEIGHT, TRAFFIC_LIGHT_INSET, WindowDrag, relative_time};
+use crate::ui::{AppIcon, TOP_BAR_HEIGHT, TRAFFIC_LIGHT_INSET, WindowDrag};
+use crate::ui_state::UiState;
 
 #[derive(Debug, Clone)]
 pub enum SidebarEvent {
     Open(SessionSummary),
+    /// A new conversation in the current mode.
     NewChat,
+    /// A new Code session in this folder.
+    NewInFolder(PathBuf),
+    /// The user switched between Chat and Code.
+    ModeChanged(Mode),
     Collapse,
     Delete(SessionSummary),
     Rename(SessionSummary),
 }
 
 pub struct Sidebar {
+    mode: Mode,
     sessions: Vec<SessionSummary>,
     active: Option<PathBuf>,
     filter: Entity<InputState>,
@@ -44,13 +54,15 @@ impl EventEmitter<SidebarEvent> for Sidebar {}
 
 impl Sidebar {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let filter = cx.new(|cx| InputState::new(window, cx).placeholder("Search chats"));
+        let mode = cx.default_global::<UiState>().mode;
+        let filter = cx.new(|cx| InputState::new(window, cx).placeholder(search_placeholder(mode)));
         let subscriptions = vec![cx.subscribe(&filter, |_, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
                 cx.notify();
             }
         })];
         let mut this = Self {
+            mode,
             sessions: Vec::new(),
             active: None,
             filter,
@@ -79,6 +91,32 @@ impl Sidebar {
         this
     }
 
+    pub fn mode(&self) -> Mode {
+        self.mode
+    }
+
+    /// Switches the list (and the remembered mode) without emitting an event; the window
+    /// calls this when it opens a session of the other mode itself.
+    pub fn set_mode(&mut self, mode: Mode, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mode == mode {
+            return;
+        }
+        self.mode = mode;
+        UiState::update(cx, |state| state.mode = mode);
+        self.filter.update(cx, |filter, cx| {
+            filter.set_placeholder(search_placeholder(mode), window, cx);
+        });
+        self.scroll.set_offset(point(px(0.), px(0.)));
+        cx.notify();
+    }
+
+    fn switch_mode(&mut self, mode: Mode, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mode != mode {
+            self.set_mode(mode, window, cx);
+            cx.emit(SidebarEvent::ModeChanged(mode));
+        }
+    }
+
     pub fn set_active(&mut self, path: Option<PathBuf>, cx: &mut Context<Self>) {
         if self.active != path {
             self.active = path;
@@ -86,28 +124,50 @@ impl Sidebar {
         }
     }
 
+    /// The summary of a listed session, if known.
+    pub fn summary(&self, path: &Path) -> Option<SessionSummary> {
+        self.sessions
+            .iter()
+            .find(|session| session.path == path)
+            .cloned()
+    }
+
+    /// The working folder of the most recent Code session, if any.
+    pub fn latest_code_folder(&self, cx: &App) -> Option<PathBuf> {
+        let config = cx.global::<AppConfig>();
+        self.sessions
+            .iter()
+            .find(|session| config.mode_of(&session.cwd) == Mode::Code && session.cwd.is_dir())
+            .map(|session| session.cwd.clone())
+    }
+
     /// Rescans pi's session directory in the background.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
-        let Some(dir) = cx.global::<AppConfig>().sessions_dir.clone() else {
+        let config = cx.global::<AppConfig>();
+        let Some(dir) = config.sessions_dir.clone() else {
             self.loaded = true;
             return;
         };
+        let chat_dir = config.chat_dir.clone();
         let previous = self.sessions.clone();
         self._refresh = cx.spawn(async move |this, cx| {
-            let sessions = cx
+            let (sessions, folders) = cx
                 .background_executor()
                 .spawn(async move {
                     let sessions = pi_sessions::scan_reusing(&dir, &previous);
                     // Over-fetch so deleted folders can be dropped without shrinking the menu.
-                    let folders = pi_sessions::recent_folders(&sessions, RECENT_FOLDERS * 2)
-                        .into_iter()
-                        .filter(|folder| folder.is_dir())
-                        .take(RECENT_FOLDERS)
-                        .collect();
+                    let code = sessions.iter().filter(|session| session.cwd != chat_dir);
+                    let folders = pi_sessions::recent_folders(
+                        &code.cloned().collect::<Vec<_>>(),
+                        RECENT_FOLDERS * 2,
+                    )
+                    .into_iter()
+                    .filter(|folder| folder.is_dir())
+                    .take(RECENT_FOLDERS)
+                    .collect();
                     (sessions, folders)
                 })
                 .await;
-            let (sessions, folders) = sessions;
             let _ = this.update(cx, |this, cx| {
                 cx.set_global(RecentFolders(folders));
                 this.sessions = sessions;
@@ -144,96 +204,211 @@ impl Sidebar {
         .detach();
     }
 
+    /// Sessions of the current mode matching the search, newest first.
     fn visible_sessions(&self, cx: &App) -> Vec<&SessionSummary> {
+        let config = cx.global::<AppConfig>();
         let query = self.filter.read(cx).value().to_lowercase();
         self.sessions
             .iter()
+            .filter(|session| config.mode_of(&session.cwd) == self.mode)
             .filter(|session| {
                 query.is_empty()
                     || session.title().to_lowercase().contains(&query)
-                    || session
-                        .cwd
-                        .to_string_lossy()
-                        .to_lowercase()
-                        .contains(&query)
+                    || (self.mode == Mode::Code
+                        && session
+                            .cwd
+                            .to_string_lossy()
+                            .to_lowercase()
+                            .contains(&query))
             })
             .collect()
     }
 
-    fn render_row(
-        &self,
-        session: &SessionSummary,
-        now: SystemTime,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        let active = self.active.as_deref() == Some(session.path.as_path());
+    fn toggle_folder(&mut self, folder: &Path, cx: &mut Context<Self>) {
+        let folder = folder.to_path_buf();
+        UiState::update(cx, |state| {
+            if !state.collapsed.remove(&folder) {
+                state.collapsed.insert(folder);
+            }
+        });
+        cx.notify();
+    }
+
+    fn render_mode_switch(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = cx.theme();
-        let (open, delete, rename) = (session.clone(), session.clone(), session.clone());
-        let id = SharedString::from(session.path.to_string_lossy().into_owned());
+        let (muted_bg, active_bg) = (theme.muted, theme.background);
+        let (foreground, muted) = (theme.foreground, theme.muted_foreground);
+        let tab = |mode: Mode,
+                   label: &'static str,
+                   icon: AppIcon,
+                   shortcut: &'static str,
+                   cx: &mut Context<Self>| {
+            let selected = self.mode == mode;
+            div()
+                .id(label)
+                .flex_1()
+                .h(px(28.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .gap_1p5()
+                .rounded_md()
+                .text_sm()
+                .cursor_pointer()
+                .map(|this| {
+                    if selected {
+                        this.bg(active_bg)
+                            .shadow_xs()
+                            .text_color(foreground)
+                            .font_weight(FontWeight::MEDIUM)
+                    } else {
+                        this.text_color(muted)
+                            .hover(|style| style.text_color(foreground))
+                    }
+                })
+                .tooltip(move |window, cx| {
+                    component::tooltip::Tooltip::new(format!("{label} ({shortcut})"))
+                        .build(window, cx)
+                })
+                .on_click(
+                    cx.listener(move |this, _, window, cx| this.switch_mode(mode, window, cx)),
+                )
+                .child(Icon::from(icon).small())
+                .child(label)
+        };
         h_flex()
-            .id(ElementId::Name(id.clone()))
-            .group("session-row")
-            .w_full()
-            .gap_2()
-            .px_2()
-            .py_1p5()
-            .rounded_md()
-            .cursor_pointer()
-            .when(active, |this| this.bg(theme.accent))
-            .hover(|style| style.bg(theme.secondary_hover))
-            .on_click(cx.listener(move |_, _, _, cx| cx.emit(SidebarEvent::Open(open.clone()))))
-            .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .child(
-                        div()
-                            .text_sm()
-                            .truncate()
-                            .text_color(theme.foreground)
-                            .child(session.title().to_owned()),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .truncate()
-                            .text_color(theme.muted_foreground)
-                            .child(format!(
-                                "{} · {}",
-                                session.folder_name(),
-                                relative_time(session.modified, now)
-                            )),
-                    ),
+            .mx_2()
+            .mb_2()
+            .p_0p5()
+            .gap_0p5()
+            .rounded_lg()
+            .bg(muted_bg)
+            .child(tab(
+                Mode::Chat,
+                "Chat",
+                AppIcon::MessageSquare,
+                crate::actions::CHAT_MODE_KEYS,
+                cx,
+            ))
+            .child(tab(
+                Mode::Code,
+                "Code",
+                AppIcon::CodeXml,
+                crate::actions::CODE_MODE_KEYS,
+                cx,
+            ))
+    }
+
+    fn render_list(&self, cx: &mut Context<Self>) -> Div {
+        let now = SystemTime::now();
+        let muted = cx.theme().muted_foreground;
+        let searching = !self.filter.read(cx).value().is_empty();
+        let sessions = self.visible_sessions(cx);
+        let mut list = v_flex().w_full().gap_0p5().px_2().pb_3();
+
+        if sessions.is_empty() {
+            if self.loaded {
+                let text = match (searching, self.mode) {
+                    (true, _) => "No matches",
+                    (false, Mode::Chat) => "No chats yet",
+                    (false, Mode::Code) => "No coding sessions yet",
+                };
+                list = list.child(div().px_2().pt_4().text_sm().text_color(muted).child(text));
+            }
+            return list;
+        }
+
+        match self.mode {
+            Mode::Chat => {
+                let mut current = "";
+                for session in sessions {
+                    let group = bucket(session.modified, now);
+                    if group != current {
+                        current = group;
+                        list = list.child(
+                            div()
+                                .px_2()
+                                .pt_3()
+                                .pb_1()
+                                .text_xs()
+                                .text_color(muted)
+                                .child(group),
+                        );
+                    }
+                    list = list.child(rows::session_row(self, session, false, now, cx));
+                }
+            }
+            Mode::Code => {
+                let collapsed = cx.default_global::<UiState>().collapsed.clone();
+                let home = cx.global::<AppConfig>().home.clone();
+                let groups = pi_sessions::group_by_folder(sessions);
+                let labels = folder_labels(groups.iter().map(|group| group.cwd), home.as_deref());
+                for (group, label) in groups.into_iter().zip(labels) {
+                    // While searching, show every match regardless of collapsed folders.
+                    let open = searching || !collapsed.contains(group.cwd);
+                    list = list.child(rows::folder_row(
+                        group.cwd,
+                        label,
+                        group.sessions.len(),
+                        open,
+                        cx,
+                    ));
+                    if open {
+                        for session in group.sessions {
+                            list = list.child(rows::session_row(self, session, true, now, cx));
+                        }
+                    }
+                }
+            }
+        }
+        list
+    }
+}
+
+/// A Code folder's label: its name (`~` for home), plus its shortened parent when another
+/// listed folder has the same name, so `~/a/demo` and `/tmp/demo` can be told apart.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FolderLabel {
+    pub name: String,
+    pub hint: Option<String>,
+}
+
+fn folder_labels<'a>(
+    folders: impl Iterator<Item = &'a Path>,
+    home: Option<&Path>,
+) -> Vec<FolderLabel> {
+    let folders: Vec<&Path> = folders.collect();
+    let name = |folder: &Path| {
+        if home == Some(folder) {
+            "~".to_owned()
+        } else {
+            folder.file_name().map_or_else(
+                || crate::ui::short_path(folder, home),
+                |name| name.to_string_lossy().into_owned(),
             )
-            .child(
-                h_flex()
-                    .invisible()
-                    .group_hover("session-row", |style| style.visible())
-                    .child(
-                        Button::new(ElementId::Name(format!("rename:{id}").into()))
-                            .quiet(cx)
-                            .xsmall()
-                            .icon(Icon::from(AppIcon::SquarePen))
-                            .tooltip("Rename")
-                            .on_click(cx.listener(move |_, _, window, cx| {
-                                window.prevent_default();
-                                cx.stop_propagation();
-                                cx.emit(SidebarEvent::Rename(rename.clone()));
-                            })),
-                    )
-                    .child(
-                        Button::new(ElementId::Name(format!("delete:{id}").into()))
-                            .quiet(cx)
-                            .xsmall()
-                            .icon(IconName::Delete)
-                            .tooltip("Move to trash")
-                            .on_click(cx.listener(move |_, _, window, cx| {
-                                window.prevent_default();
-                                cx.stop_propagation();
-                                cx.emit(SidebarEvent::Delete(delete.clone()));
-                            })),
-                    ),
-            )
+        }
+    };
+    let names: Vec<String> = folders.iter().map(|folder| name(folder)).collect();
+    folders
+        .iter()
+        .zip(&names)
+        .map(|(folder, name)| FolderLabel {
+            name: name.clone(),
+            hint: (names.iter().filter(|other| *other == name).count() > 1)
+                .then(|| {
+                    folder
+                        .parent()
+                        .map(|parent| crate::ui::short_path(parent, home))
+                })
+                .flatten(),
+        })
+        .collect()
+}
+
+fn search_placeholder(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Chat => "Search chats",
+        Mode::Code => "Search sessions and folders",
     }
 }
 
@@ -254,40 +429,12 @@ fn bucket(modified: SystemTime, now: SystemTime) -> &'static str {
 
 impl Render for Sidebar {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let now = SystemTime::now();
         let colors = palette(cx);
-        let muted = cx.theme().muted_foreground;
-        let sessions = self.visible_sessions(cx);
-        let is_empty = sessions.is_empty();
-
-        let mut list = v_flex().w_full().gap_0p5().px_2().pb_3();
-        let mut current = "";
-        for session in sessions {
-            let group = bucket(session.modified, now);
-            if group != current {
-                current = group;
-                list = list.child(
-                    div()
-                        .px_2()
-                        .pt_3()
-                        .pb_1()
-                        .text_xs()
-                        .text_color(muted)
-                        .child(group),
-                );
-            }
-            list = list.child(self.render_row(session, now, cx));
-        }
-        if is_empty && self.loaded {
-            list = list.child(
-                div()
-                    .px_2()
-                    .pt_4()
-                    .text_sm()
-                    .text_color(muted)
-                    .child("No chats yet"),
-            );
-        }
+        let new_label = match self.mode {
+            Mode::Chat => "New chat",
+            Mode::Code => "New session",
+        };
+        let list = self.render_list(cx);
 
         v_flex()
             .size_full()
@@ -314,6 +461,7 @@ impl Render for Sidebar {
                         ),
                 ),
             )
+            .child(self.render_mode_switch(cx))
             .child(
                 div().px_2().pb_2().child(
                     Button::new("new-chat")
@@ -321,8 +469,8 @@ impl Render for Sidebar {
                         .w_full()
                         .justify_start()
                         .icon(Icon::from(AppIcon::SquarePen))
-                        .label("New chat")
-                        .tooltip("New chat (⌘N)")
+                        .label(new_label)
+                        .tooltip(format!("{new_label} (⌘N)"))
                         .on_click(cx.listener(|_, _, _, cx| cx.emit(SidebarEvent::NewChat))),
                 ),
             )
@@ -346,7 +494,34 @@ impl Render for Sidebar {
 
 #[cfg(test)]
 mod tests {
-    use super::bucket;
+    use std::path::Path;
+
+    use super::{FolderLabel, bucket, folder_labels};
+
+    #[test]
+    fn folder_labels_disambiguate_and_name_home() {
+        let home = Path::new("/home/u");
+        let folders = [
+            Path::new("/home/u/a/demo"),
+            Path::new("/tmp/demo"),
+            Path::new("/home/u"),
+            Path::new("/home/u/app"),
+        ];
+        let label = |name: &str, hint: Option<&str>| FolderLabel {
+            name: name.to_owned(),
+            hint: hint.map(str::to_owned),
+        };
+        assert_eq!(
+            folder_labels(folders.into_iter(), Some(home)),
+            vec![
+                label("demo", Some("~/a")),
+                label("demo", Some("/tmp")),
+                label("~", None),
+                label("app", None)
+            ]
+        );
+    }
+
     use std::time::{Duration, SystemTime};
 
     #[test]
