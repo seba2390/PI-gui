@@ -4,12 +4,14 @@ mod button;
 mod copy_button;
 mod drag;
 mod icons;
+mod pi_field;
 mod text;
 
 pub use button::QuietButton;
 pub use copy_button::CopyButton;
 pub use drag::WindowDrag;
 pub use icons::AppIcon;
+pub use pi_field::PiField;
 pub use text::{relative_time, short_path};
 
 /// Height of the top bar of every column (sidebar, chat, right panel), so their

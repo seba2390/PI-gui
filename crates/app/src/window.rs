@@ -108,6 +108,8 @@ pub struct MainWindow {
     keep_skills: bool,
     /// The welcome screen is showing (no session open yet; `chat` is an idle placeholder).
     welcome: bool,
+    /// The welcome screen's animated background.
+    pi_field: Entity<crate::ui::PiField>,
     sidebar_open: bool,
     right_open: bool,
     terminal_open: bool,
@@ -216,6 +218,7 @@ impl MainWindow {
             after_remote: Vec::new(),
             pending_latest: None,
             welcome: true,
+            pi_field: cx.new(|_| crate::ui::PiField::new()),
             models_reload: None,
             skills: None,
             skills_open: false,
@@ -397,6 +400,9 @@ impl MainWindow {
             .unwrap_or_else(std::env::temp_dir);
         let chat = cx.new(|cx| ChatView::idle(cwd, mode, window, cx));
         self.show_chat(chat, window, cx);
+        if !self.welcome {
+            self.pi_field.update(cx, |field, cx| field.replay(cx));
+        }
         self.welcome = true;
         self.terminal_open = false;
         if self.right_open {
@@ -1661,9 +1667,8 @@ impl MainWindow {
                 })
                 .into_any_element(),
         };
-        v_flex()
-            .flex_1()
-            .min_h_0()
+        let content = v_flex()
+            .size_full()
             .items_center()
             .justify_center()
             .gap_3()
@@ -1682,7 +1687,23 @@ impl MainWindow {
                     .text_color(muted)
                     .child(detail),
             )
-            .child(div().pt_2().child(button))
+            .child(div().pt_2().child(button));
+        // The field is its own cached view: its frames re-render only it, and nothing runs
+        // while it is still.
+        div()
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .overflow_hidden()
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .child(self.pi_field.clone().cached(full())),
+            )
+            .child(content)
     }
 }
 
