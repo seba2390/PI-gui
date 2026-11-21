@@ -6,8 +6,7 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::resizable::{h_resizable, resizable_panel, v_resizable};
 use gpui_kit::component::{
-    ActiveTheme as _, IconName, Selectable as _, Sizable as _, TitleBar, WindowExt as _, h_flex,
-    v_flex,
+    ActiveTheme as _, IconName, Selectable as _, TitleBar, WindowExt as _, h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -21,6 +20,7 @@ use crate::chat::{ChatEvent, ChatView};
 use crate::config::AppConfig;
 use crate::panels::{RightPanel, RightPanelEvent, RightTab, TerminalPanel, TerminalPanelEvent};
 use crate::sidebar::{Sidebar, SidebarEvent};
+use crate::ui::QuietButton as _;
 use crate::ui::{AppIcon, TOP_BAR_HEIGHT, TRAFFIC_LIGHT_INSET, WindowDrag};
 
 pub fn open_main_window(cx: &mut App) {
@@ -111,6 +111,11 @@ impl MainWindow {
                         "diff" => this.show_diff(&ShowDiff, window, cx),
                         "files" => this.show_files(&ShowFiles, window, cx),
                         "no-sidebar" => this.toggle_sidebar(&ToggleSidebar, window, cx),
+                        "attach" => {
+                            let composer = this.chat.read(cx).composer().clone();
+                            composer
+                                .update(cx, |composer, cx| composer.open_attach_picker(window, cx));
+                        }
                         other => log::warn!("PI_GUI_OPEN: unknown panel {other:?}"),
                     }
                 }
@@ -456,8 +461,7 @@ impl MainWindow {
                 .when(!self.sidebar_open, |this| {
                     this.child(
                         Button::new("open-sidebar")
-                            .ghost()
-                            .small()
+                            .quiet(cx)
                             .icon(IconName::PanelLeftOpen)
                             .tooltip("Show sidebar (⌘B)")
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -466,8 +470,7 @@ impl MainWindow {
                     )
                     .child(
                         Button::new("header-new-chat")
-                            .ghost()
-                            .small()
+                            .quiet(cx)
                             .icon(component::Icon::from(AppIcon::SquarePen))
                             .tooltip("New chat (⌘N)")
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -506,8 +509,7 @@ impl MainWindow {
                         .gap_0p5()
                         .child(
                             Button::new("toggle-terminal")
-                                .ghost()
-                                .small()
+                                .quiet(cx)
                                 .icon(IconName::SquareTerminal)
                                 .selected(self.terminal_open)
                                 .tooltip("Terminal (ctrl+`)")
@@ -517,8 +519,7 @@ impl MainWindow {
                         )
                         .child(
                             Button::new("show-diff")
-                                .ghost()
-                                .small()
+                                .quiet(cx)
                                 .icon(component::Icon::from(AppIcon::GitCompare))
                                 .selected(self.right_open && tab == RightTab::Diff)
                                 .tooltip("Changes (⌘⇧D)")
@@ -528,8 +529,7 @@ impl MainWindow {
                         )
                         .child(
                             Button::new("show-files")
-                                .ghost()
-                                .small()
+                                .quiet(cx)
                                 .icon(component::Icon::from(AppIcon::Files))
                                 .selected(self.right_open && tab == RightTab::Files)
                                 .tooltip("Files (⌘⇧E)")
@@ -539,8 +539,7 @@ impl MainWindow {
                         )
                         .child(
                             Button::new("toggle-right")
-                                .ghost()
-                                .small()
+                                .quiet(cx)
                                 .icon(if self.right_open {
                                     IconName::PanelRightClose
                                 } else {

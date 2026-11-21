@@ -14,7 +14,7 @@ mod files_view;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
-use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::button::Button;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{ActiveTheme as _, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -23,6 +23,7 @@ use gpui_kit::*;
 use self::diff_view::DiffView;
 use self::files_view::{FilesEvent, FilesView, relative_to};
 use crate::theme::palette;
+use crate::ui::QuietButton as _;
 use crate::ui::{TOP_BAR_HEIGHT, WindowDrag};
 
 /// Quiet time before a burst of filesystem events triggers a reload.
@@ -291,7 +292,7 @@ impl RightPanel {
                 )
                 .child(
                     Button::new("right-panel-refresh")
-                        .ghost()
+                        .quiet(cx)
                         .small()
                         .icon(IconName::RefreshCw)
                         .tooltip("Refresh")

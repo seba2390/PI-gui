@@ -23,6 +23,16 @@ pub struct AppConfig {
 
 impl Global for AppConfig {}
 
+/// Recently used working folders (newest first), kept current by the sidebar's session scan
+/// so the composer's folder menu opens instantly without touching the disk.
+#[derive(Debug, Clone, Default)]
+pub struct RecentFolders(pub Vec<PathBuf>);
+
+impl Global for RecentFolders {}
+
+/// How many recent folders the folder menu offers.
+pub const RECENT_FOLDERS: usize = 8;
+
 impl AppConfig {
     /// `child_env` is the result of [`crate::shell_env::login_shell_env`].
     pub fn detect(child_env: Vec<(OsString, OsString)>) -> Self {

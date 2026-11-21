@@ -108,6 +108,43 @@ pub fn list_dir(
     Ok(entries)
 }
 
+/// Every file under `root` (recursively), as `/`-separated paths relative to `root`, for quick
+/// fuzzy search. Same ignore rules as [`list_dir`] with hidden files excluded; symlinks are not
+/// followed. Stops after `limit` files; the flag reports whether the walk was cut short.
+///
+/// Order is the walker's (directory by directory), not sorted: callers rank results anyway.
+pub fn list_files(root: &Path, limit: usize) -> (Vec<String>, bool) {
+    let walker = WalkBuilder::new(root)
+        .hidden(true)
+        .parents(true)
+        .ignore(true)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .require_git(false)
+        .follow_links(false)
+        .filter_entry(|entry| entry.file_name() != ".git")
+        .build();
+    let mut files = Vec::new();
+    for entry in walker.flatten() {
+        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
+            continue;
+        }
+        if files.len() == limit {
+            return (files, true);
+        }
+        let Ok(relative) = entry.path().strip_prefix(root) else {
+            continue;
+        };
+        let mut text = relative.to_string_lossy().into_owned();
+        if std::path::MAIN_SEPARATOR != '/' {
+            text = text.replace(std::path::MAIN_SEPARATOR, "/");
+        }
+        files.push(text);
+    }
+    (files, false)
+}
+
 /// Case-insensitive comparison that orders embedded digit runs numerically.
 ///
 /// Numbers that differ only in leading zeros compare equal until the very end, where fewer

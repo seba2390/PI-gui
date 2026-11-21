@@ -1,9 +1,11 @@
 //! Small, app-specific UI building blocks shared by the views.
 
+mod button;
 mod drag;
 mod icons;
 mod text;
 
+pub use button::QuietButton;
 pub use drag::WindowDrag;
 pub use icons::AppIcon;
 pub use text::{relative_time, short_path};

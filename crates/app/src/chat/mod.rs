@@ -3,6 +3,7 @@
 mod commands;
 pub mod composer;
 mod dialogs;
+mod file_picker;
 mod rows;
 pub mod session;
 

@@ -13,7 +13,7 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::button::Button;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -24,6 +24,7 @@ use term::{
 use self::grid::{CellMetrics, GridGeometry, PaintStyle};
 use self::input::{KeyAction, ReportButton, ReportKind, TERMINAL_CONTEXT};
 use crate::config::AppConfig;
+use crate::ui::QuietButton as _;
 
 /// Height of the panel's header strip.
 const HEADER_HEIGHT: Pixels = px(30.);
@@ -404,7 +405,7 @@ impl TerminalPanel {
             .child(div().flex_1())
             .child(
                 Button::new("close-terminal")
-                    .ghost()
+                    .quiet(cx)
                     .xsmall()
                     .icon(IconName::Close)
                     .tooltip("Close terminal")

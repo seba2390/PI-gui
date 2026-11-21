@@ -7,15 +7,16 @@
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
-use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::button::Button;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use pi_sessions::SessionSummary;
 
-use crate::config::AppConfig;
+use crate::config::{AppConfig, RECENT_FOLDERS, RecentFolders};
 use crate::theme::palette;
+use crate::ui::QuietButton as _;
 use crate::ui::{AppIcon, TOP_BAR_HEIGHT, TRAFFIC_LIGHT_INSET, WindowDrag, relative_time};
 
 #[derive(Debug, Clone)]
@@ -95,9 +96,20 @@ impl Sidebar {
         self._refresh = cx.spawn(async move |this, cx| {
             let sessions = cx
                 .background_executor()
-                .spawn(async move { pi_sessions::scan_reusing(&dir, &previous) })
+                .spawn(async move {
+                    let sessions = pi_sessions::scan_reusing(&dir, &previous);
+                    // Over-fetch so deleted folders can be dropped without shrinking the menu.
+                    let folders = pi_sessions::recent_folders(&sessions, RECENT_FOLDERS * 2)
+                        .into_iter()
+                        .filter(|folder| folder.is_dir())
+                        .take(RECENT_FOLDERS)
+                        .collect();
+                    (sessions, folders)
+                })
                 .await;
+            let (sessions, folders) = sessions;
             let _ = this.update(cx, |this, cx| {
+                cx.set_global(RecentFolders(folders));
                 this.sessions = sessions;
                 this.loaded = true;
                 cx.notify();
@@ -199,7 +211,7 @@ impl Sidebar {
                     .group_hover("session-row", |style| style.visible())
                     .child(
                         Button::new(ElementId::Name(format!("rename:{id}").into()))
-                            .ghost()
+                            .quiet(cx)
                             .xsmall()
                             .icon(Icon::from(AppIcon::SquarePen))
                             .tooltip("Rename")
@@ -211,7 +223,7 @@ impl Sidebar {
                     )
                     .child(
                         Button::new(ElementId::Name(format!("delete:{id}").into()))
-                            .ghost()
+                            .quiet(cx)
                             .xsmall()
                             .icon(IconName::Delete)
                             .tooltip("Move to trash")
@@ -292,8 +304,7 @@ impl Render for Sidebar {
                         .gap_1()
                         .child(
                             Button::new("collapse-sidebar")
-                                .ghost()
-                                .small()
+                                .quiet(cx)
                                 .icon(IconName::PanelLeftClose)
                                 .tooltip("Hide sidebar (⌘B)")
                                 .on_click(
@@ -305,7 +316,7 @@ impl Render for Sidebar {
             .child(
                 div().px_2().pb_2().child(
                     Button::new("new-chat")
-                        .ghost()
+                        .quiet(cx)
                         .w_full()
                         .justify_start()
                         .icon(Icon::from(AppIcon::SquarePen))

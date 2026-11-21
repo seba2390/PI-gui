@@ -11,20 +11,25 @@ use std::path::PathBuf;
 use base64::Engine as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::list::{List, ListState};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui_kit::component::popover::Popover;
 use gpui_kit::component::progress::ProgressCircle;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, h_flex, v_flex,
+    ActiveTheme as _, Disableable as _, Icon, IconName, IndexPath, Sizable as _, h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use pi_rpc::protocol::ImageContent;
 
 use super::commands::{self, CommandOutcome};
+use super::file_picker::{self, FilePicker, Pick};
 use super::session::{Lifecycle, PiSession};
+use crate::config::{AppConfig, RecentFolders};
 use crate::theme::palette;
 use crate::ui::AppIcon;
+use crate::ui::QuietButton as _;
 
 actions!(
     composer,
@@ -61,6 +66,9 @@ pub struct Composer {
     session: Entity<PiSession>,
     input: Entity<TextareaState>,
     attachments: Vec<Attachment>,
+    /// The attach popover's file list (searchable, indexed in the background).
+    picker: Entity<ListState<FilePicker>>,
+    picker_open: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -82,10 +90,21 @@ impl Composer {
             }),
             cx.observe(&session, |_, _, cx| cx.notify()),
         ];
+        let weak = cx.weak_entity();
+        let root = session.read(cx).cwd().to_path_buf();
+        let picker = cx.new(|cx| {
+            let delegate = FilePicker::new(root, move |pick, window, cx| {
+                let _ = weak.update(cx, |this, cx| this.on_pick(pick, window, cx));
+            });
+            ListState::new(delegate, window, cx).searchable(true)
+        });
+        file_picker::refresh_index(&picker, cx);
         Self {
             session,
             input,
             attachments: Vec::new(),
+            picker,
+            picker_open: false,
             _subscriptions: subscriptions,
         }
     }
@@ -184,6 +203,42 @@ impl Composer {
             .update(cx, |session, cx| session.cycle_thinking_level(cx));
     }
 
+    pub fn open_attach_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_picker_open(true, window, cx);
+    }
+
+    fn set_picker_open(&mut self, open: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.picker_open == open {
+            return;
+        }
+        self.picker_open = open;
+        if open {
+            // Show the cached index at once; pick up new files in the background.
+            file_picker::refresh_index(&self.picker, cx);
+            self.picker.update(cx, |picker, cx| {
+                picker.set_selected_index(Some(IndexPath::default()), window, cx);
+                picker.focus(window, cx);
+            });
+        } else {
+            let focus = self.focus_handle(cx);
+            focus.focus(window, cx);
+        }
+        cx.notify();
+    }
+
+    /// Called from inside the picker's own update, so it must not touch the picker.
+    fn on_pick(&mut self, pick: Pick, window: &mut Window, cx: &mut Context<Self>) {
+        self.picker_open = false;
+        let focus = self.focus_handle(cx);
+        focus.focus(window, cx);
+        match pick {
+            Pick::File(path) => self.attach_paths(vec![path], cx),
+            Pick::Browse => self.pick_attachments(cx),
+            Pick::Dismiss => {}
+        }
+        cx.notify();
+    }
+
     fn pick_attachments(&mut self, cx: &mut Context<Self>) {
         let paths = cx.prompt_for_paths(PathPromptOptions {
             files: true,
@@ -269,10 +324,16 @@ impl Composer {
             if let Ok(Ok(Some(mut paths))) = paths.await
                 && let Some(folder) = paths.pop()
             {
-                let _ = this.update(cx, |_, cx| cx.emit(ComposerEvent::ChangeFolder(folder)));
+                let _ = this.update(cx, |this, cx| this.change_folder(folder, cx));
             }
         })
         .detach();
+    }
+
+    fn change_folder(&mut self, folder: PathBuf, cx: &mut Context<Self>) {
+        if folder != self.session.read(cx).cwd() {
+            cx.emit(ComposerEvent::ChangeFolder(folder));
+        }
     }
 
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -286,20 +347,32 @@ impl Composer {
             |name| name.to_string_lossy().into_owned(),
         );
         let folder_locked = !session.is_empty();
+        let cwd = session.cwd().to_path_buf();
 
         let left = h_flex()
             .gap_1()
-            .child(
-                Button::new("attach")
-                    .ghost()
-                    .small()
-                    .icon(Icon::from(AppIcon::Paperclip))
-                    .tooltip("Attach files")
-                    .on_click(cx.listener(|this, _, _, cx| this.pick_attachments(cx))),
-            )
+            .child({
+                let picker = self.picker.clone();
+                let weak = cx.weak_entity();
+                Popover::new("attach-popover")
+                    .anchor(Anchor::BottomLeft)
+                    .open(self.picker_open)
+                    .on_open_change(move |open, window, cx| {
+                        let _ = weak.update(cx, |this, cx| this.set_picker_open(*open, window, cx));
+                    })
+                    .trigger(
+                        Button::new("attach")
+                            .quiet(cx)
+                            .small()
+                            .icon(Icon::from(AppIcon::Paperclip))
+                            .tooltip("Attach files"),
+                    )
+                    .p_0()
+                    .content(move |_, _, _| List::new(&picker).w(px(460.)).h(px(320.)))
+            })
             .child(
                 Button::new("folder")
-                    .ghost()
+                    .quiet(cx)
                     .small()
                     .icon(IconName::Folder)
                     .label(folder)
@@ -308,7 +381,10 @@ impl Composer {
                     } else {
                         "Choose working folder"
                     })
-                    .on_click(cx.listener(|this, _, _, cx| this.pick_folder(cx))),
+                    .dropdown_menu_with_anchor(
+                        Anchor::BottomLeft,
+                        folder_menu(cx.weak_entity(), cwd),
+                    ),
             );
 
         let right = h_flex()
@@ -360,7 +436,7 @@ impl Composer {
         );
         let handle = self.session.clone();
         Button::new("model-picker")
-            .ghost()
+            .quiet(cx)
             .small()
             .label(label)
             .dropdown_caret(true)
@@ -392,7 +468,7 @@ impl Composer {
         let reasoning = session.model().is_some_and(|model| model.reasoning);
         let handle = self.session.clone();
         Button::new("thinking-picker")
-            .ghost()
+            .quiet(cx)
             .small()
             .icon(Icon::from(AppIcon::Brain))
             .label(current.map_or_else(|| "off".to_owned(), |level| level.to_string()))
@@ -478,7 +554,7 @@ impl Composer {
                     .child(attachment.name.clone())
                     .child(
                         Button::new(("remove-attachment", index))
-                            .ghost()
+                            .quiet(cx)
                             .xsmall()
                             .icon(IconName::Close)
                             .on_click(cx.listener(move |this, _, _, cx| {
@@ -681,4 +757,43 @@ fn load_attachment(path: PathBuf) -> Attachment {
         ))
     });
     Attachment { path, name, image }
+}
+
+/// Builds the folder menu: recent working folders (instant, no disk access) and a fallback to
+/// the system folder dialog, which macOS takes a noticeable moment to open.
+fn folder_menu(
+    composer: WeakEntity<Composer>,
+    cwd: PathBuf,
+) -> impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static {
+    move |mut menu, _, cx| {
+        let home = cx.global::<AppConfig>().home.clone();
+        let recent = cx
+            .try_global::<RecentFolders>()
+            .map(|recent| recent.0.clone())
+            .unwrap_or_default();
+        let mut folders = vec![cwd.clone()];
+        folders.extend(recent.into_iter().filter(|folder| *folder != cwd));
+        menu = menu.min_w(px(240.)).max_w(px(420.)).label("Working folder");
+        for folder in folders {
+            let label = crate::ui::short_path(&folder, home.as_deref());
+            let checked = folder == cwd;
+            let composer = composer.clone();
+            menu = menu.item(
+                PopupMenuItem::new(label)
+                    .icon(IconName::Folder)
+                    .checked(checked)
+                    .on_click(move |_, _, cx| {
+                        let folder = folder.clone();
+                        let _ = composer.update(cx, |this, cx| this.change_folder(folder, cx));
+                    }),
+            );
+        }
+        let composer = composer.clone();
+        menu.separator()
+            .item(
+                PopupMenuItem::new("Choose another folder…").on_click(move |_, _, cx| {
+                    let _ = composer.update(cx, |this, cx| this.pick_folder(cx));
+                }),
+            )
+    }
 }

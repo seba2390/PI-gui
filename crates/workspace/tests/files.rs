@@ -167,3 +167,27 @@ fn empty_directory() {
     let dir = TestRepo::plain();
     assert_eq!(list_dir(&dir.root, &dir.root, true).unwrap(), vec![]);
 }
+
+#[test]
+fn list_files_is_recursive_relative_ignore_aware_and_capped() {
+    let repo = TestRepo::init();
+    populate(&repo);
+    let (mut files, truncated) = workspace::files::list_files(&repo.root, 100);
+    files.sort();
+    assert!(!truncated);
+    assert_eq!(
+        files,
+        vec![
+            "A.txt",
+            "Docs/readme.md",
+            "File1.txt",
+            "b.txt",
+            "file10.txt",
+            "file2.txt",
+            "src/main.rs"
+        ]
+    );
+    let (files, truncated) = workspace::files::list_files(&repo.root, 3);
+    assert_eq!(files.len(), 3);
+    assert!(truncated);
+}

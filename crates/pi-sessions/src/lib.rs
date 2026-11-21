@@ -118,6 +118,21 @@ pub fn scan_reusing(root: &Path, previous: &[SessionSummary]) -> Vec<SessionSumm
     sessions
 }
 
+/// Distinct working folders of `sessions` (expected newest first), most recent first, at most
+/// `limit`. Feeds the composer's folder menu.
+pub fn recent_folders(sessions: &[SessionSummary], limit: usize) -> Vec<PathBuf> {
+    let mut folders: Vec<PathBuf> = Vec::new();
+    for session in sessions {
+        if folders.len() == limit {
+            break;
+        }
+        if !folders.contains(&session.cwd) {
+            folders.push(session.cwd.clone());
+        }
+    }
+    folders
+}
+
 /// Reads the summary of one session file. `Ok(None)` if it has no header.
 pub fn read_summary(path: &Path) -> std::io::Result<Option<SessionSummary>> {
     let modified = fs::metadata(path)?.modified()?;
@@ -273,6 +288,34 @@ mod tests {
             .set_modified(later)
             .unwrap();
         assert_eq!(scan_reusing(root.path(), &stale)[0].title(), "Renamed");
+    }
+
+    #[test]
+    fn recent_folders_are_distinct_newest_first_and_capped() {
+        let session = |cwd: &str| SessionSummary {
+            path: PathBuf::from(format!("{cwd}.jsonl")),
+            id: cwd.to_owned(),
+            cwd: PathBuf::from(cwd),
+            name: None,
+            first_prompt: None,
+            modified: SystemTime::UNIX_EPOCH,
+        };
+        let sessions = [
+            session("/a"),
+            session("/b"),
+            session("/a"),
+            session("/c"),
+            session("/d"),
+        ];
+        assert_eq!(
+            recent_folders(&sessions, 3),
+            vec![
+                PathBuf::from("/a"),
+                PathBuf::from("/b"),
+                PathBuf::from("/c")
+            ]
+        );
+        assert_eq!(recent_folders(&[], 3), Vec::<PathBuf>::new());
     }
 
     #[test]
