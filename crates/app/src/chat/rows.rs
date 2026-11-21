@@ -22,8 +22,8 @@ use crate::ui::AppIcon;
 const PREVIEW_LINES: usize = 3;
 /// Expanded tool output is capped to keep rows cheap; the rest is summarized.
 const MAX_OUTPUT_LINES: usize = 400;
-/// Claude-style spinner glyphs, advanced once per second by the chat ticker.
-const SPINNER: [&str; 4] = ["✻", "✽", "✶", "✳"];
+/// Spinner glyphs, played forwards then backwards so the star "breathes"; one per chat tick.
+const SPINNER: [&str; 10] = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"];
 
 /// Everything a row needs besides the item itself.
 struct RowContext<'a> {
@@ -544,14 +544,23 @@ fn render_working(status: &RunStatus, cx: &RowContext<'_>) -> AnyElement {
         RunStatus::Idle => ("Working…".to_owned(), None),
     };
     let elapsed = since.map(|since| since.elapsed());
-    #[allow(clippy::cast_possible_truncation)]
-    let glyph =
-        SPINNER[(elapsed.map_or(0, |elapsed| elapsed.as_secs()) % SPINNER.len() as u64) as usize];
+    let frame = cx.chat.spinner_frame();
+    let glyph = SPINNER[frame % SPINNER.len()];
+    // The label gently pulses (about one breath per 2 s) alongside the spinner.
+    #[allow(clippy::cast_precision_loss)]
+    let phase = (frame % 25) as f32 / 25.0 * std::f32::consts::TAU;
+    let label_color = cx.palette.accent.opacity(0.7 + 0.3 * phase.cos());
     h_flex()
         .gap_2()
         .text_sm()
-        .child(div().text_color(cx.palette.accent).child(glyph))
-        .child(div().text_color(cx.palette.accent).child(label))
+        .child(
+            div()
+                .w(px(14.))
+                .flex_none()
+                .text_color(cx.palette.accent)
+                .child(glyph),
+        )
+        .child(div().text_color(label_color).child(label))
         .when_some(elapsed, |this, elapsed| {
             this.child(
                 div()

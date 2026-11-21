@@ -2,6 +2,7 @@
 
 mod commands;
 pub mod composer;
+mod context_panel;
 mod dialogs;
 mod file_picker;
 mod rows;
@@ -11,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
+use gpui_kit::component::clipboard::Clipboard;
 use gpui_kit::component::message_scroller::{MessageScroller, MessageScrollerState};
 use gpui_kit::component::text::{TextView, TextViewState};
 use gpui_kit::component::{ActiveTheme as _, WindowExt as _, h_flex, v_flex};
@@ -29,6 +31,8 @@ actions!(chat, [ToggleThinking, ToggleToolOutput]);
 const CHAT_CONTEXT: &str = "Chat";
 /// Readable line length, like other agent UIs.
 pub const CONTENT_MAX_WIDTH: Pixels = px(780.);
+/// Frame interval of the "working" spinner.
+const SPINNER_FRAME: Duration = Duration::from_millis(80);
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
@@ -74,6 +78,8 @@ pub struct ChatView {
     expand_tools: bool,
     focus_handle: FocusHandle,
     ticker: Option<Task<()>>,
+    /// Advances every [`SPINNER_FRAME`] while the agent works.
+    spinner_frame: usize,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -112,6 +118,7 @@ impl ChatView {
             expand_tools: false,
             focus_handle: cx.focus_handle(),
             ticker: None,
+            spinner_frame: 0,
             _subscriptions: subscriptions,
         };
         this.sync(cx);
@@ -256,15 +263,18 @@ impl ChatView {
         self.row_versions = new_versions;
         self.working_row = running;
 
-        // 4. Tick once a second while working so timers advance.
+        // 4. While working, tick at the spinner's frame rate so it animates smoothly and the
+        //    timers advance. 12.5 fps keeps the redraw cost (the chat column) small; nothing
+        //    ticks while idle.
         if running && self.ticker.is_none() {
             self.ticker = Some(cx.spawn(async move |this, cx| {
                 loop {
-                    cx.background_executor().timer(Duration::from_secs(1)).await;
+                    cx.background_executor().timer(SPINNER_FRAME).await;
                     let keep = this
                         .update(cx, |this, cx| {
                             let running = this.session.read(cx).is_running();
                             if running {
+                                this.spinner_frame = this.spinner_frame.wrapping_add(1);
                                 cx.notify();
                             } else {
                                 this.ticker = None;
@@ -279,6 +289,10 @@ impl ChatView {
             }));
         }
         cx.notify();
+    }
+
+    pub(crate) fn spinner_frame(&self) -> usize {
+        self.spinner_frame
     }
 
     pub(crate) fn is_expanded(&self, key: BlockKey, is_thinking: bool) -> bool {
@@ -417,7 +431,24 @@ impl Render for ChatView {
     }
 }
 
-/// Renders a markdown view for `state` (helper so rows stay declarative).
+/// Renders a markdown view for `state` (helper so rows stay declarative). Fenced code blocks
+/// get their language label and a copy button in the top-right corner.
 pub(crate) fn markdown_view(state: &Entity<TextViewState>) -> TextView {
-    TextView::new(state).selectable(true)
+    TextView::new(state)
+        .selectable(true)
+        .code_block_actions(|block, _, cx| {
+            let muted = cx.theme().muted_foreground;
+            h_flex()
+                .gap_1()
+                .items_center()
+                .when_some(
+                    block.lang().filter(|lang| !lang.is_empty()),
+                    |this, lang| this.child(div().pl_1().text_xs().text_color(muted).child(lang)),
+                )
+                .child(
+                    Clipboard::new("copy")
+                        .value(block.code())
+                        .tooltip("Copy code"),
+                )
+        })
 }

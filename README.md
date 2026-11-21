@@ -81,8 +81,12 @@ script/measure-memory.sh          # RSS / footprint of a running instance and it
 script/bundle-macos.sh && script/shot.sh <folder> out.png terminal,diff   # scripted screenshot (macOS)
 ```
 
-`PI_GUI_OPEN=terminal,diff,files,no-sidebar` opens those panels at startup, which is what
+`PI_GUI_OPEN=terminal,diff,files,no-sidebar,latest,attach,context` opens those panels (or the
+newest session, the attach picker, the context breakdown) at startup, which is what
 `script/shot.sh` uses for layout checks without driving the mouse.
+
+The app icon is `crates/app/assets/app-icon/icon.svg`; `script/make-icon.sh` regenerates the
+`.icns` (and a 512 px PNG for Linux launchers) from it.
 
 ### Performance notes
 

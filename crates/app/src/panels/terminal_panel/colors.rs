@@ -32,7 +32,7 @@ pub const DARK: Palette = Palette {
     ],
     foreground: h(0x00EC_E9E1),
     background: h(0x0026_2624),
-    cursor: h(0x00D9_7757),
+    cursor: h(0x0024_A926),
 };
 
 /// Warm light palette for the "Pi Light" theme.
@@ -57,7 +57,7 @@ pub const LIGHT: Palette = Palette {
     ],
     foreground: h(0x001F_1E1D),
     background: h(0x00FA_F9F5),
-    cursor: h(0x00C9_6442),
+    cursor: h(0x0000_573F),
 };
 
 pub fn for_mode(dark: bool) -> Palette {

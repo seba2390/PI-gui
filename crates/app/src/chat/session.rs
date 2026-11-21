@@ -262,6 +262,10 @@ impl PiSession {
         Some((used, window))
     }
 
+    pub fn stats(&self) -> Option<&SessionStats> {
+        self.stats.as_ref()
+    }
+
     pub fn total_cost(&self) -> Option<f64> {
         self.stats.as_ref().map(|stats| stats.cost)
     }

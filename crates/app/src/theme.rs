@@ -1,7 +1,7 @@
-//! The visual theme: a warm, Claude-desktop-like palette in light and dark.
+//! The visual theme: warm neutrals with Kvantify's green as the accent, in light and dark.
 //!
 //! gpui-kit components read the semantic tokens from `assets/themes/pi.json`.
-//! A few app-specific colours (diff lines, the clay accent, sidebar surface) live
+//! A few app-specific colours (diff lines, the Kvantify green accent, sidebar surface) live
 //! in [`Palette`], chosen by the active light/dark mode.
 
 use gpui_kit::component::{ActiveTheme as _, Theme, ThemeMode, ThemeRegistry};
@@ -67,7 +67,7 @@ pub fn palette(cx: &App) -> Palette {
         Palette {
             sidebar: rgb(0x001F_1E1D).into(),
             surface: rgb(0x0030_302E).into(),
-            accent: rgb(0x00D9_7757).into(),
+            accent: rgb(0x0024_A926).into(),
             subtle: rgb(0x0077_746C).into(),
             code_bg: rgb(0x001F_1E1D).into(),
             added: rgb(0x007F_B069).into(),
@@ -82,7 +82,7 @@ pub fn palette(cx: &App) -> Palette {
         Palette {
             sidebar: rgb(0x00F3_F1EA).into(),
             surface: rgb(0x00FF_FFFF).into(),
-            accent: rgb(0x00C9_6442).into(),
+            accent: rgb(0x0000_573F).into(),
             subtle: rgb(0x00A3_9F95).into(),
             code_bg: rgb(0x00F3_F1EA).into(),
             added: rgb(0x004E_8A3A).into(),

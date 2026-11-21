@@ -7,6 +7,7 @@
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use base64::Engine as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -15,7 +16,6 @@ use gpui_kit::component::list::{List, ListState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::progress::ProgressCircle;
-use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, IndexPath, Sizable as _, h_flex, v_flex,
 };
@@ -69,6 +69,8 @@ pub struct Composer {
     /// The attach popover's file list (searchable, indexed in the background).
     picker: Entity<ListState<FilePicker>>,
     picker_open: bool,
+    /// The context breakdown popover is open.
+    context_open: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -105,6 +107,7 @@ impl Composer {
             attachments: Vec::new(),
             picker,
             picker_open: false,
+            context_open: false,
             _subscriptions: subscriptions,
         }
     }
@@ -201,6 +204,11 @@ impl Composer {
     fn cycle_thinking(&mut self, _: &CycleThinking, _: &mut Window, cx: &mut Context<Self>) {
         self.session
             .update(cx, |session, cx| session.cycle_thinking_level(cx));
+    }
+
+    pub fn open_context_breakdown(&mut self, cx: &mut Context<Self>) {
+        self.context_open = true;
+        cx.notify();
     }
 
     pub fn open_attach_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -371,20 +379,20 @@ impl Composer {
                     .content(move |_, _, _| List::new(&picker).w(px(460.)).h(px(320.)))
             })
             .child(
-                Button::new("folder")
-                    .quiet(cx)
-                    .small()
-                    .icon(IconName::Folder)
-                    .label(folder)
-                    .tooltip(if folder_locked {
-                        "Working folder (choosing another starts a new chat)"
-                    } else {
-                        "Choose working folder"
-                    })
-                    .dropdown_menu_with_anchor(
-                        Anchor::BottomLeft,
-                        folder_menu(cx.weak_entity(), cwd),
-                    ),
+                Button::new(menu_id(
+                    "folder",
+                    &(&cwd, cx.try_global::<RecentFolders>().map(|r| r.0.clone())),
+                ))
+                .quiet(cx)
+                .small()
+                .icon(IconName::Folder)
+                .label(folder)
+                .tooltip(if folder_locked {
+                    "Working folder (choosing another starts a new chat)"
+                } else {
+                    "Choose working folder"
+                })
+                .dropdown_menu_with_anchor(Anchor::BottomLeft, folder_menu(cx.weak_entity(), cwd)),
             );
 
         let right = h_flex()
@@ -435,7 +443,7 @@ impl Composer {
             |model| model.display_name().to_owned(),
         );
         let handle = self.session.clone();
-        Button::new("model-picker")
+        Button::new(menu_id("model-picker", &(&current, models.len())))
             .quiet(cx)
             .small()
             .label(label)
@@ -467,7 +475,7 @@ impl Composer {
         let current = session.thinking_level();
         let reasoning = session.model().is_some_and(|model| model.reasoning);
         let handle = self.session.clone();
-        Button::new("thinking-picker")
+        Button::new(menu_id("thinking-picker", &(&levels, current)))
             .quiet(cx)
             .small()
             .icon(Icon::from(AppIcon::Brain))
@@ -507,6 +515,7 @@ impl Composer {
                 if let Some(cost) = cost.filter(|cost| *cost > 0.0) {
                     let _ = write!(text, " · ${cost:.3}");
                 }
+                text.push_str(" · click for breakdown");
                 text.into()
             }
             None => "Context usage unavailable".into(),
@@ -519,17 +528,37 @@ impl Composer {
         } else {
             colors.accent
         };
-        div()
-            .id("context-ring")
-            .px_1()
-            .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
-            .child(
-                #[allow(clippy::cast_possible_truncation)]
-                ProgressCircle::new("context-progress")
-                    .value(percent as f32)
-                    .color(color)
-                    .size_4(),
+        let session = self.session.downgrade();
+        let weak = cx.weak_entity();
+        Popover::new("context-popover")
+            .anchor(Anchor::BottomRight)
+            .open(self.context_open)
+            .on_open_change(move |open, _, cx| {
+                let _ = weak.update(cx, |this, cx| {
+                    this.context_open = *open;
+                    cx.notify();
+                });
+            })
+            .trigger(
+                Button::new("context-ring")
+                    .quiet(cx)
+                    .small()
+                    .compact()
+                    .child(
+                        #[allow(clippy::cast_possible_truncation)]
+                        ProgressCircle::new("context-progress")
+                            .value(percent as f32)
+                            .color(color)
+                            .size_4(),
+                    )
+                    // Instant: the numbers are the point of hovering.
+                    .tooltip(tooltip)
+                    .tooltip_show_delay(Duration::ZERO),
             )
+            .content(move |_, _, cx| match session.upgrade() {
+                Some(session) => super::context_panel::render(session.read(cx), cx),
+                None => div().into_any_element(),
+            })
     }
 
     fn render_attachments(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -761,6 +790,37 @@ fn load_attachment(path: PathBuf) -> Attachment {
 
 /// Builds the folder menu: recent working folders (instant, no disk access) and a fallback to
 /// the system folder dialog, which macOS takes a noticeable moment to open.
+const FOLDER_MENU_WIDTH: f32 = 440.;
+
+/// `(folder name, shortened parent)` for a menu row; the home folder is just `~`.
+fn folder_label(
+    folder: &std::path::Path,
+    home: Option<&std::path::Path>,
+) -> (SharedString, SharedString) {
+    let short = crate::ui::short_path(folder, home);
+    match (folder.file_name(), folder.parent()) {
+        _ if short == "~" => ("~".into(), SharedString::default()),
+        (Some(name), Some(parent)) => (
+            name.to_string_lossy().into_owned().into(),
+            crate::ui::short_path(parent, home).into(),
+        ),
+        _ => (short.into(), SharedString::default()),
+    }
+}
+
+/// Element id for a dropdown whose items depend on `key`. gpui-kit keeps a built menu per
+/// trigger id and only rebuilds it after certain dismissals, so a stale menu could be shown
+/// (e.g. the previous model's thinking levels); a content-derived id always gets a fresh one.
+fn menu_id(name: &'static str, key: &impl std::hash::Hash) -> ElementId {
+    use std::hash::BuildHasher as _;
+
+    ElementId::NamedInteger(
+        name.into(),
+        std::hash::BuildHasherDefault::<std::collections::hash_map::DefaultHasher>::default()
+            .hash_one(key),
+    )
+}
+
 fn folder_menu(
     composer: WeakEntity<Composer>,
     cwd: PathBuf,
@@ -773,19 +833,45 @@ fn folder_menu(
             .unwrap_or_default();
         let mut folders = vec![cwd.clone()];
         folders.extend(recent.into_iter().filter(|folder| *folder != cwd));
-        menu = menu.min_w(px(240.)).max_w(px(420.)).label("Working folder");
+        menu = menu
+            .min_w(px(260.))
+            .max_w(px(FOLDER_MENU_WIDTH))
+            .label("Working folder");
         for folder in folders {
-            let label = crate::ui::short_path(&folder, home.as_deref());
+            let (name, parent) = folder_label(&folder, home.as_deref());
             let checked = folder == cwd;
             let composer = composer.clone();
             menu = menu.item(
-                PopupMenuItem::new(label)
-                    .icon(IconName::Folder)
-                    .checked(checked)
-                    .on_click(move |_, _, cx| {
-                        let folder = folder.clone();
-                        let _ = composer.update(cx, |this, cx| this.change_folder(folder, cx));
-                    }),
+                PopupMenuItem::element(move |_, cx| {
+                    let muted = cx.theme().muted_foreground;
+                    // Long paths are cut with an ellipsis instead of overflowing the menu.
+                    h_flex()
+                        .w_full()
+                        .max_w(px(FOLDER_MENU_WIDTH - 64.))
+                        .min_w_0()
+                        .gap_2()
+                        .child(Icon::new(IconName::Folder).small().text_color(muted))
+                        .child(
+                            div()
+                                .flex_none()
+                                .max_w(px(180.))
+                                .truncate()
+                                .child(name.clone()),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_xs()
+                                .text_color(muted)
+                                .child(parent.clone()),
+                        )
+                })
+                .checked(checked)
+                .on_click(move |_, _, cx| {
+                    let folder = folder.clone();
+                    let _ = composer.update(cx, |this, cx| this.change_folder(folder, cx));
+                }),
             );
         }
         let composer = composer.clone();

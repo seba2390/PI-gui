@@ -20,3 +20,9 @@ pub const TRAFFIC_LIGHT_INSET: gpui_kit::Pixels = if cfg!(target_os = "macos") {
 } else {
     gpui_kit::px(12.)
 };
+
+/// Icon size of the top-bar buttons (sidebar, terminal, diff, files, panel toggles).
+pub fn top_bar_icon(icon: impl Into<gpui_kit::component::Icon>) -> gpui_kit::component::Icon {
+    use gpui_kit::Styled as _;
+    icon.into().size_5()
+}

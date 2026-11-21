@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#00573F"/>
+      <stop offset="1" stop-color="#00392F"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.10"/>
+      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <!-- Apple icon grid: 824×824 body inset 100px, corner radius ≈ 185 -->
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#shine)"/>
+  <!-- π, from the in-app logo (24×24 grid) scaled ×22 and centered -->
+  <g transform="translate(248 250) scale(22)" fill="none" stroke="#BFFD50" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 7h16"/><path d="M9 7v11"/><path d="M15 7v9a2 2 0 0 0 2 2h1"/>
+  </g>
+</svg>

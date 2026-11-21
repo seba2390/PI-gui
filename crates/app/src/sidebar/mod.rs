@@ -305,7 +305,8 @@ impl Render for Sidebar {
                         .child(
                             Button::new("collapse-sidebar")
                                 .quiet(cx)
-                                .icon(IconName::PanelLeftClose)
+                                .compact()
+                                .child(crate::ui::top_bar_icon(IconName::PanelLeftClose))
                                 .tooltip("Hide sidebar (⌘B)")
                                 .on_click(
                                     cx.listener(|_, _, _, cx| cx.emit(SidebarEvent::Collapse)),

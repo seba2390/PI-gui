@@ -111,6 +111,18 @@ impl MainWindow {
                         "diff" => this.show_diff(&ShowDiff, window, cx),
                         "files" => this.show_files(&ShowFiles, window, cx),
                         "no-sidebar" => this.toggle_sidebar(&ToggleSidebar, window, cx),
+                        "latest" => {
+                            let dir = cx.global::<AppConfig>().sessions_dir.clone();
+                            if let Some(latest) =
+                                dir.and_then(|dir| pi_sessions::scan(&dir).into_iter().next())
+                            {
+                                drop(this.open_session(&latest, window, cx));
+                            }
+                        }
+                        "context" => {
+                            let composer = this.chat.read(cx).composer().clone();
+                            composer.update(cx, |composer, cx| composer.open_context_breakdown(cx));
+                        }
                         "attach" => {
                             let composer = this.chat.read(cx).composer().clone();
                             composer
@@ -462,7 +474,8 @@ impl MainWindow {
                     this.child(
                         Button::new("open-sidebar")
                             .quiet(cx)
-                            .icon(IconName::PanelLeftOpen)
+                            .compact()
+                            .child(crate::ui::top_bar_icon(IconName::PanelLeftOpen))
                             .tooltip("Show sidebar (⌘B)")
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.toggle_sidebar(&ToggleSidebar, window, cx);
@@ -471,7 +484,10 @@ impl MainWindow {
                     .child(
                         Button::new("header-new-chat")
                             .quiet(cx)
-                            .icon(component::Icon::from(AppIcon::SquarePen))
+                            .compact()
+                            .child(crate::ui::top_bar_icon(component::Icon::from(
+                                AppIcon::SquarePen,
+                            )))
                             .tooltip("New chat (⌘N)")
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.new_chat(&NewChat, window, cx);
@@ -510,7 +526,8 @@ impl MainWindow {
                         .child(
                             Button::new("toggle-terminal")
                                 .quiet(cx)
-                                .icon(IconName::SquareTerminal)
+                                .compact()
+                                .child(crate::ui::top_bar_icon(IconName::SquareTerminal))
                                 .selected(self.terminal_open)
                                 .tooltip("Terminal (ctrl+`)")
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -520,7 +537,10 @@ impl MainWindow {
                         .child(
                             Button::new("show-diff")
                                 .quiet(cx)
-                                .icon(component::Icon::from(AppIcon::GitCompare))
+                                .compact()
+                                .child(crate::ui::top_bar_icon(component::Icon::from(
+                                    AppIcon::GitCompare,
+                                )))
                                 .selected(self.right_open && tab == RightTab::Diff)
                                 .tooltip("Changes (⌘⇧D)")
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -530,7 +550,10 @@ impl MainWindow {
                         .child(
                             Button::new("show-files")
                                 .quiet(cx)
-                                .icon(component::Icon::from(AppIcon::Files))
+                                .compact()
+                                .child(crate::ui::top_bar_icon(component::Icon::from(
+                                    AppIcon::Files,
+                                )))
                                 .selected(self.right_open && tab == RightTab::Files)
                                 .tooltip("Files (⌘⇧E)")
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -540,11 +563,12 @@ impl MainWindow {
                         .child(
                             Button::new("toggle-right")
                                 .quiet(cx)
-                                .icon(if self.right_open {
+                                .compact()
+                                .child(crate::ui::top_bar_icon(if self.right_open {
                                     IconName::PanelRightClose
                                 } else {
                                     IconName::PanelRightOpen
-                                })
+                                }))
                                 .tooltip("Toggle side panel (⌘⌥B)")
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.toggle_right_panel(&ToggleRightPanel, window, cx);
