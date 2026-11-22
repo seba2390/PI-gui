@@ -3,11 +3,13 @@
 //! - [`catalog`]: the models offered (none ship with the app).
 //! - [`models`]: what is installed, and the download that may be running.
 //! - [`engine`]: the recognizer the composer's `SpeechState` uses.
+//! - [`shortcut`]: the composer's hold-to-talk / tap-to-toggle shortcut.
 //! - [`ui`]: the download dialog, the progress banner and the settings rows.
 
 pub mod catalog;
 pub mod engine;
 pub mod models;
+pub mod shortcut;
 pub mod ui;
 
 use std::time::Duration;

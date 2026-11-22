@@ -9,7 +9,7 @@ use pi_sessions::Mode;
 use remote::HostId;
 use std::fmt::Write as _;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -111,6 +111,8 @@ pub struct Composer {
     dictation: Option<Dictation>,
     /// Focus for the dictation view (it replaces the input while dictating).
     dictation_focus: FocusHandle,
+    /// The dictation shortcut between its press and release (hold to talk, tap to toggle).
+    push_to_talk: crate::stt::shortcut::PushToTalk,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -212,6 +214,7 @@ impl Composer {
             speech,
             dictation: None,
             dictation_focus: cx.focus_handle(),
+            push_to_talk: crate::stt::shortcut::PushToTalk::default(),
             _subscriptions: subscriptions,
         }
     }
@@ -219,21 +222,72 @@ impl Composer {
     /// The microphone button: starts or stops dictation; the first time, offers to
     /// download a model.
     pub fn toggle_dictation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if crate::stt::session_config(cx).is_none() {
-            if let Some(download) = crate::stt::models::models(cx).read(cx).download() {
-                use gpui_kit::component::notification::Notification;
-                let message = format!(
-                    "{} is still downloading ({:.0}%). You can keep typing meanwhile.",
-                    download.model.name,
-                    download.fraction() * 100.
-                );
-                window.push_notification(Notification::info(message), cx);
-            } else {
-                crate::stt::ui::open_download_dialog(window, cx);
-            }
+        if self.speech.read(cx).status().is_active() || self.dictation_ready(window, cx) {
+            self.speech.update(cx, |speech, cx| speech.toggle(cx));
+        }
+    }
+
+    /// Whether a speech model is installed. If not, says why dictation cannot start: the
+    /// download in progress, or the dialog that offers one (the button and the shortcut
+    /// behave the same).
+    fn dictation_ready(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if crate::stt::session_config(cx).is_some() {
+            return true;
+        }
+        if let Some(download) = crate::stt::models::models(cx).read(cx).download() {
+            use gpui_kit::component::notification::Notification;
+            let message = format!(
+                "{} is still downloading ({:.0}%). You can keep typing meanwhile.",
+                download.model.name,
+                download.fraction() * 100.
+            );
+            window.push_notification(Notification::info(message), cx);
+        } else {
+            crate::stt::ui::open_download_dialog(window, cx);
+        }
+        false
+    }
+
+    /// The dictation shortcut went down (or repeats while held).
+    fn on_dictation_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !is_dictation_shortcut(&event.keystroke) {
             return;
         }
-        self.speech.update(cx, |speech, cx| speech.toggle(cx));
+        // The input must not see it (Shift+Space would type a space).
+        cx.stop_propagation();
+        use crate::stt::shortcut::Command;
+        let active = self.speech.read(cx).status().is_active();
+        match self
+            .push_to_talk
+            .key_down(Instant::now(), event.is_held, active)
+        {
+            Command::Start => {
+                if self.dictation_ready(window, cx) {
+                    self.speech.update(cx, |speech, cx| speech.start(cx));
+                } else {
+                    self.push_to_talk.reset();
+                }
+            }
+            Command::Stop => self.speech.update(cx, |speech, cx| speech.stop(cx)),
+            Command::Nothing => {}
+        }
+    }
+
+    /// The shortcut was released: after a hold, this ends dictation and keeps the text.
+    ///
+    /// Releasing Space or one of the shortcut's modifiers both count, whichever comes first:
+    /// macOS does not deliver the key-up of Space while ⌘ is still down.
+    fn on_dictation_release(&mut self, cx: &mut Context<Self>) {
+        use crate::stt::shortcut::Command;
+        let active = self.speech.read(cx).status().is_active();
+        if self.push_to_talk.key_up(Instant::now(), active) == Command::Stop {
+            self.speech.update(cx, |speech, cx| speech.stop(cx));
+        }
     }
 
     fn on_speech(&mut self, event: &SpeechEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -282,11 +336,14 @@ impl Composer {
         let active = status.is_active();
         let downloading = crate::stt::models::models(cx).read(cx).download().is_some()
             && crate::stt::session_config(cx).is_none();
-        let tooltip = match status {
-            SpeechStatus::Connecting => "Loading the speech model…",
-            _ if active => "Stop dictation (Enter)",
-            _ if downloading => "Speech model is downloading…",
-            _ => "Dictate (speech to text)",
+        let tooltip: String = match status {
+            SpeechStatus::Connecting => "Loading the speech model…".into(),
+            _ if active => "Stop dictation (Enter)".into(),
+            _ if downloading => "Speech model is downloading…".into(),
+            _ => format!(
+                "Dictate (hold {} to talk, tap to toggle)",
+                crate::stt::shortcut::LABEL
+            ),
         };
         Button::new("dictate")
             .icon(if active {
@@ -1495,6 +1552,17 @@ impl Render for Composer {
             .on_action(cx.listener(Self::dequeue))
             .on_action(cx.listener(Self::cycle_thinking))
             .on_action(cx.listener(Self::complete_first))
+            .capture_key_down(cx.listener(Self::on_dictation_key_down))
+            .on_key_up(cx.listener(|this, event: &KeyUpEvent, _, cx| {
+                if event.keystroke.key == "space" {
+                    this.on_dictation_release(cx);
+                }
+            }))
+            .on_modifiers_changed(cx.listener(|this, event: &ModifiersChangedEvent, _, cx| {
+                if !dictation_modifiers_held(event.modifiers) {
+                    this.on_dictation_release(cx);
+                }
+            }))
             .capture_action(cx.listener(Self::on_move_up))
             .capture_action(cx.listener(Self::on_move_down))
             // The input binds Tab and Esc itself; with the `@` list open they act on it.
@@ -1562,6 +1630,29 @@ impl Render for Composer {
             .child(self.render_toolbar(cx))
             .children(status)
     }
+}
+
+/// The parsed dictation shortcut.
+fn dictation_shortcut() -> &'static Keystroke {
+    static SHORTCUT: std::sync::OnceLock<Keystroke> = std::sync::OnceLock::new();
+    SHORTCUT.get_or_init(|| {
+        Keystroke::parse(crate::stt::shortcut::KEYS).expect("the dictation shortcut parses")
+    })
+}
+
+/// `keystroke` is the dictation shortcut (exactly its modifiers, so ⌘⌥⇧Space is not).
+fn is_dictation_shortcut(keystroke: &Keystroke) -> bool {
+    let shortcut = dictation_shortcut();
+    keystroke.key == shortcut.key && keystroke.modifiers == shortcut.modifiers
+}
+
+/// All of the shortcut's modifiers are still down.
+fn dictation_modifiers_held(modifiers: Modifiers) -> bool {
+    let wanted = dictation_shortcut().modifiers;
+    (!wanted.platform || modifiers.platform)
+        && (!wanted.control || modifiers.control)
+        && (!wanted.shift || modifiers.shift)
+        && (!wanted.alt || modifiers.alt)
 }
 
 /// The composer text after dictating `spoken` into a composer holding `draft`.
@@ -1843,6 +1934,35 @@ fn folder_menu(
 #[cfg(test)]
 mod inline_tests {
     use super::inline_file_block;
+
+    #[test]
+    fn dictation_shortcut_matches_exactly() {
+        use super::{dictation_modifiers_held, dictation_shortcut, is_dictation_shortcut};
+        use gpui_kit::{Keystroke, Modifiers};
+        let shortcut = dictation_shortcut().clone();
+        assert!(is_dictation_shortcut(&shortcut));
+        let plain_space = Keystroke::parse("space").unwrap();
+        assert!(!is_dictation_shortcut(&plain_space));
+        let shift_space = Keystroke::parse("shift-space").unwrap();
+        assert!(!is_dictation_shortcut(&shift_space));
+        let extra = Keystroke {
+            modifiers: Modifiers {
+                alt: true,
+                ..shortcut.modifiers
+            },
+            ..shortcut.clone()
+        };
+        assert!(!is_dictation_shortcut(&extra));
+
+        assert!(dictation_modifiers_held(shortcut.modifiers));
+        // Letting go of either modifier is a release.
+        let no_shift = Modifiers {
+            shift: false,
+            ..shortcut.modifiers
+        };
+        assert!(!dictation_modifiers_held(no_shift));
+        assert!(!dictation_modifiers_held(Modifiers::default()));
+    }
 
     #[test]
     fn dictation_joins_the_draft() {

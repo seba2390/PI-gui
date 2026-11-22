@@ -126,7 +126,9 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
 
 ## Speech to text
 
-The microphone button at the right of the message box dictates instead of typing. Speech is
+The microphone button at the right of the message box dictates instead of typing, and so does
+⌘⇧Space (Ctrl+Shift+Space on Linux/Windows) in the message box: hold it to talk and let go to
+keep the text, or tap it to start and tap again to stop. Speech is
 transcribed on this computer by a model downloaded once (none ship with the app); the first
 press offers the choice:
 
@@ -184,6 +186,7 @@ Composer behaviour mirrors pi's terminal.
 | Shift+Tab | Cycle thinking level |
 | Tab | Complete a `/` command or `@file` |
 | ↑ / ↓ | Earlier / later prompts (in an empty message box) |
+| ⌘⇧Space | Dictate: hold to talk, tap to start / stop |
 | Ctrl+T / Ctrl+O | Expand all thinking / tool output |
 | ⌘N / ⌘B / ⌘⌥B | New chat or session / toggle sidebar / toggle right panel |
 | ⌘1 / ⌘2 | Chat mode / Code mode |
