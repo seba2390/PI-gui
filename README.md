@@ -71,9 +71,13 @@ npm i -g @earendil-works/pi-coding-agent
 
   </details>
 
-- **Linux (x86_64):** download `pistachio-…-linux-x86_64.tar.gz` from
-  [Releases](https://github.com/seba2390/pistachio/releases), unpack it and run `./install.sh`.
-  That installs for your user only and adds "Pistachio" to your app launcher.
+- **Linux (x86_64 and ARM64):** download the package for your system from
+  [Releases](https://github.com/seba2390/pistachio/releases) (`amd64` / `x86_64` for Intel and
+  AMD, `arm64` / `aarch64` for ARM), then:
+  - Debian, Ubuntu: `sudo apt install ./pistachio_…_amd64.deb`
+  - Fedora and other RPM-based systems: `sudo dnf install ./pistachio-….x86_64.rpm`
+  - Anything else: unpack `pistachio-…-linux-x86_64.tar.gz` and run `./install.sh`. That installs
+    for your user only (no root) and adds "Pistachio" to your app launcher.
 - **Windows (x86_64, experimental):** download `pistachio-…-windows-x86_64.zip` from
   [Releases](https://github.com/seba2390/pistachio/releases), unzip it and run `pistachio.exe`.
   - Windows may warn about an unknown publisher the first time (More info → Run anyway).

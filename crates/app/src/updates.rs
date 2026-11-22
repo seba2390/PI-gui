@@ -54,14 +54,16 @@ struct GithubAsset {
     browser_download_url: String,
 }
 
-/// The platform's word in release file names.
+/// The platform's part of release file names (Linux builds are per architecture).
 pub fn platform() -> &'static str {
     if cfg!(target_os = "macos") {
         "macos"
     } else if cfg!(windows) {
         "windows"
+    } else if cfg!(target_arch = "aarch64") {
+        "linux-aarch64"
     } else {
-        "linux"
+        "linux-x86_64"
     }
 }
 
@@ -139,6 +141,7 @@ mod tests {
         "prerelease": false,
         "assets": [
             {"name": "Pistachio-v0.3.0-macos-universal.zip", "browser_download_url": "https://x/mac.zip"},
+            {"name": "pistachio-v0.3.0-linux-aarch64.tar.gz", "browser_download_url": "https://x/linux-arm.tgz"},
             {"name": "pistachio-v0.3.0-linux-x86_64.tar.gz", "browser_download_url": "https://x/linux.tgz"},
             {"name": "pistachio-v0.3.0-windows-x86_64.zip", "browser_download_url": "https://x/win.zip"}
         ]
@@ -151,6 +154,10 @@ mod tests {
         assert_eq!(release.download_url.as_deref(), Some("https://x/mac.zip"));
         let windows = parse_latest(LATEST, "windows").unwrap().unwrap();
         assert_eq!(windows.download_url.as_deref(), Some("https://x/win.zip"));
+        let linux = parse_latest(LATEST, "linux-x86_64").unwrap().unwrap();
+        assert_eq!(linux.download_url.as_deref(), Some("https://x/linux.tgz"));
+        let arm = parse_latest(LATEST, "linux-aarch64").unwrap().unwrap();
+        assert_eq!(arm.download_url.as_deref(), Some("https://x/linux-arm.tgz"));
         let other = parse_latest(LATEST, "freebsd").unwrap().unwrap();
         assert_eq!(other.download_url, None);
     }
