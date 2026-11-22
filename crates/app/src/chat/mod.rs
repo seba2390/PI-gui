@@ -110,6 +110,9 @@ pub struct ChatView {
     /// pi stopped while the chat was hidden; shown so the user sees why (and any prompts
     /// returned to the composer) before the chat is let go.
     stopped_unseen: bool,
+    /// The π field behind a new, empty conversation; it fades out when the first message is
+    /// sent and is then dropped.
+    pi_field: Option<Entity<crate::ui::PiField>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -123,8 +126,15 @@ impl ChatView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        // Only a brand-new conversation gets the π field: a resumed one is briefly empty
+        // while its history loads, and the field would flash.
+        let new = session_file.is_none();
         let session = cx.new(|cx| PiSession::new(cwd, session_file, host, cx));
-        Self::with_session(session, window, cx)
+        let mut this = Self::with_session(session, window, cx);
+        if new {
+            this.pi_field = Some(cx.new(|_| crate::ui::PiField::new()));
+        }
+        this
     }
 
     /// A placeholder with no pi process behind the welcome screen (see
@@ -158,7 +168,10 @@ impl ChatView {
             cx.subscribe(&composer, |_, _, event: &ComposerEvent, cx| {
                 cx.emit(ChatEvent::Composer(event.clone()));
             }),
-            cx.observe(&session, |_, _, cx| cx.notify()),
+            cx.observe(&session, |this, _, cx| {
+                this.fade_pi_field_once_started(cx);
+                cx.notify();
+            }),
         ];
 
         let mut this = Self {
@@ -180,6 +193,7 @@ impl ChatView {
             exploration: Vec::new(),
             held_dialogs: Vec::new(),
             stopped_unseen: false,
+            pi_field: None,
             _subscriptions: subscriptions,
         };
         this.sync(cx);
@@ -188,6 +202,16 @@ impl ChatView {
 
     pub fn session(&self) -> &Entity<PiSession> {
         &self.session
+    }
+
+    /// Starts fading the π field as soon as the conversation starts: a message was sent (it
+    /// may still be on its way to pi) or the transcript has something in it.
+    fn fade_pi_field_once_started(&mut self, cx: &mut Context<Self>) {
+        let Some(field) = &self.pi_field else { return };
+        let session = self.session.read(cx);
+        if session.is_busy() || !session.is_empty() {
+            field.update(cx, |field, cx| field.fade_out(cx));
+        }
     }
 
     /// Whether an extension question is waiting for this chat to be shown.
@@ -723,8 +747,18 @@ impl Render for ChatView {
         let is_empty = self.session.read(cx).is_empty() && !self.session.read(cx).is_running();
         let weak = cx.weak_entity();
         let background = cx.theme().background;
+        // Once faded out, the field is let go (it costs nothing either way while still).
+        if self
+            .pi_field
+            .as_ref()
+            .is_some_and(|field| field.read(cx).is_faded())
+        {
+            self.pi_field = None;
+        }
+        let pi_field = self.pi_field.clone();
 
         v_flex()
+            .relative()
             .key_context(CHAT_CONTEXT)
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::toggle_all_thinking))
@@ -732,6 +766,17 @@ impl Render for ChatView {
             .size_full()
             .min_h_0()
             .bg(background)
+            // Behind everything else (painted first), across the whole chat.
+            .when_some(pi_field, |this, field| {
+                this.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .child(field.cached(StyleRefinement::default().size_full())),
+                )
+            })
             .child(if is_empty {
                 self.render_empty(cx).into_any_element()
             } else {

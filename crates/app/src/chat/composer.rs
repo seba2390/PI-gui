@@ -341,6 +341,11 @@ impl Composer {
         cx.notify();
     }
 
+    pub fn close_context_breakdown(&mut self, cx: &mut Context<Self>) {
+        self.context_open = false;
+        cx.notify();
+    }
+
     pub fn open_attach_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.set_picker_open(true, window, cx);
     }
@@ -597,19 +602,25 @@ impl Composer {
             ),
         };
         let handle = self.session.clone();
-        button.dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
-            for mode in [WebMode::Off, WebMode::Search, WebMode::Deep] {
-                let handle = handle.clone();
-                menu = menu.item(
-                    PopupMenuItem::new(web_mode_label(mode))
+        crate::demo::mark(
+            "web-mode",
+            button.dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
+                for mode in [WebMode::Off, WebMode::Search, WebMode::Deep] {
+                    let handle = handle.clone();
+                    menu = menu.item(
+                        crate::demo::menu_item(
+                            web_mode_label(mode),
+                            format!("web:{}", mode.as_str()),
+                        )
                         .checked(current == mode)
                         .on_click(move |_, _, cx| {
                             handle.update(cx, |session, cx| session.set_web_mode(mode, cx));
                         }),
-                );
-            }
-            menu
-        })
+                    );
+                }
+                menu
+            }),
+        )
     }
 
     /// The attach button with its searchable list of the working folder's files.
@@ -690,36 +701,39 @@ impl Composer {
             .child(self.render_model_picker(cx))
             .child(self.render_thinking_picker(cx))
             .child(self.render_context_ring(cx))
-            .child(if running && !has_input {
-                Button::new("stop")
-                    .primary()
-                    .small()
-                    .icon(IconName::Square)
-                    .rounded(cx.theme().radius_full())
-                    .accessibility_label("Interrupt (esc)")
-                    .tooltip("Interrupt (esc)")
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.interrupt(&Interrupt, window, cx)),
-                    )
-            } else {
-                Button::new("send")
-                    .primary()
-                    .small()
-                    .icon(IconName::ArrowUp)
-                    .rounded(cx.theme().radius_full())
-                    .disabled(!has_input || !ready)
-                    .accessibility_label(if running {
-                        "Steer (enter) · follow-up (alt+enter)"
-                    } else {
-                        "Send (enter)"
-                    })
-                    .tooltip(if running {
-                        "Steer (enter) · follow-up (alt+enter)"
-                    } else {
-                        "Send (enter)"
-                    })
-                    .on_click(cx.listener(|this, _, window, cx| this.submit(false, window, cx)))
-            });
+            .child(crate::demo::mark(
+                "send",
+                if running && !has_input {
+                    Button::new("stop")
+                        .primary()
+                        .small()
+                        .icon(IconName::Square)
+                        .rounded(cx.theme().radius_full())
+                        .accessibility_label("Interrupt (esc)")
+                        .tooltip("Interrupt (esc)")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.interrupt(&Interrupt, window, cx);
+                        }))
+                } else {
+                    Button::new("send")
+                        .primary()
+                        .small()
+                        .icon(IconName::ArrowUp)
+                        .rounded(cx.theme().radius_full())
+                        .disabled(!has_input || !ready)
+                        .accessibility_label(if running {
+                            "Steer (enter) · follow-up (alt+enter)"
+                        } else {
+                            "Send (enter)"
+                        })
+                        .tooltip(if running {
+                            "Steer (enter) · follow-up (alt+enter)"
+                        } else {
+                            "Send (enter)"
+                        })
+                        .on_click(cx.listener(|this, _, window, cx| this.submit(false, window, cx)))
+                },
+            ));
 
         h_flex()
             .w_full()
@@ -740,7 +754,7 @@ impl Composer {
         );
         let handle = self.session.clone();
         let composer = cx.weak_entity();
-        Button::new(menu_id("model-picker", &(&current, models.len())))
+        let picker = Button::new(menu_id("model-picker", &(&current, models.len())))
             .quiet(cx)
             .small()
             .label(label)
@@ -753,11 +767,10 @@ impl Composer {
                     let (handle, model) = (handle.clone(), model.clone());
                     let checked = current.as_deref() == Some(model.qualified_id().as_str());
                     menu = menu.item(
-                        PopupMenuItem::new(format!(
-                            "{}  ·  {}",
-                            model.display_name(),
-                            model.provider
-                        ))
+                        crate::demo::menu_item(
+                            format!("{}  ·  {}", model.display_name(), model.provider),
+                            format!("model:{}", model.id),
+                        )
                         .checked(checked)
                         .on_click(move |_, _, cx| {
                             handle.update(cx, |session, cx| session.set_model(&model, cx));
@@ -784,7 +797,8 @@ impl Composer {
                                 });
                             }),
                     )
-            })
+            });
+        crate::demo::mark("model-picker", picker)
     }
 
     fn render_thinking_picker(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -793,7 +807,7 @@ impl Composer {
         let current = session.thinking_level();
         let reasoning = session.model().is_some_and(|model| model.reasoning);
         let handle = self.session.clone();
-        Button::new(menu_id("thinking-picker", &(&levels, current)))
+        let picker = Button::new(menu_id("thinking-picker", &(&levels, current)))
             .quiet(cx)
             .small()
             .icon(Icon::from(AppIcon::Brain))
@@ -804,7 +818,7 @@ impl Composer {
                 for level in &levels {
                     let (handle, level) = (handle.clone(), *level);
                     menu = menu.item(
-                        PopupMenuItem::new(level.to_string())
+                        crate::demo::menu_item(level.to_string(), format!("thinking:{level}"))
                             .checked(current == Some(level))
                             .on_click(move |_, _, cx| {
                                 handle.update(cx, |session, cx| {
@@ -814,7 +828,8 @@ impl Composer {
                     );
                 }
                 menu
-            })
+            });
+        crate::demo::mark("thinking-picker", picker)
     }
 
     fn render_context_ring(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -848,7 +863,7 @@ impl Composer {
         };
         let session = self.session.downgrade();
         let weak = cx.weak_entity();
-        Popover::new("context-popover")
+        let popover = Popover::new("context-popover")
             .anchor(Anchor::BottomRight)
             .open(self.context_open)
             .on_open_change(move |open, _, cx| {
@@ -877,7 +892,8 @@ impl Composer {
             .content(move |_, _, cx| match session.upgrade() {
                 Some(session) => super::context_panel::render(session.read(cx), cx),
                 None => div().into_any_element(),
-            })
+            });
+        crate::demo::mark("context-ring", popover)
     }
 
     fn render_attachments(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -1314,16 +1330,24 @@ impl Render for Composer {
             .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
                 this.attach_paths(paths.paths().to_vec(), cx);
             }))
-            .child(div().px_3().pt_3().pb_1().child({
-                let weak = cx.weak_entity();
-                Textarea::new(&self.input)
-                    .aria_label("Message")
-                    .appearance(false)
-                    .on_paste(move |item, _, cx| {
-                        weak.update(cx, |this, cx| this.paste(item, cx))
-                            .unwrap_or(false)
+            .child(
+                div()
+                    .relative()
+                    .px_3()
+                    .pt_3()
+                    .pb_1()
+                    .child({
+                        let weak = cx.weak_entity();
+                        Textarea::new(&self.input)
+                            .aria_label("Message")
+                            .appearance(false)
+                            .on_paste(move |item, _, cx| {
+                                weak.update(cx, |this, cx| this.paste(item, cx))
+                                    .unwrap_or(false)
+                            })
                     })
-            }))
+                    .children(crate::demo::probe("composer-input")),
+            )
             .child(self.render_toolbar(cx))
             .children(status)
     }

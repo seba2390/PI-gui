@@ -456,6 +456,8 @@ impl Sidebar {
                 )
                 .child(Icon::from(icon).small())
                 .child(label)
+                .relative()
+                .children(crate::demo::probe(format!("mode:{}", label.to_lowercase())))
         };
         h_flex()
             .id("mode-switch")
@@ -738,13 +740,16 @@ impl Render for Sidebar {
                     cx,
                 )))
             })
-            .child(div().px_2().pb_2().child(rows::action_row(
+            .child(div().px_2().pb_2().child(crate::demo::mark(
                 "new-chat",
-                Icon::from(AppIcon::SquarePen),
-                new_label,
-                false,
-                SidebarEvent::NewChat,
-                cx,
+                rows::action_row(
+                    "new-chat",
+                    Icon::from(AppIcon::SquarePen),
+                    new_label,
+                    false,
+                    SidebarEvent::NewChat,
+                    cx,
+                ),
             )))
             .child(
                 div()
@@ -772,13 +777,16 @@ impl Render for Sidebar {
                     .py_2()
                     .border_t_1()
                     .border_color(cx.theme().border)
-                    .child(rows::action_row(
+                    .child(crate::demo::mark(
                         "show-settings",
-                        Icon::new(IconName::Settings),
-                        "Settings",
-                        self.settings_active,
-                        SidebarEvent::ShowSettings,
-                        cx,
+                        rows::action_row(
+                            "show-settings",
+                            Icon::new(IconName::Settings),
+                            "Settings",
+                            self.settings_active,
+                            SidebarEvent::ShowSettings,
+                            cx,
+                        ),
                     )),
             )
     }

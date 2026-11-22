@@ -6,8 +6,10 @@ use std::path::{Path, PathBuf};
 use deepsearch::config::{BackendKind, Config as WebConfig, Mode as WebMode};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::setting::{
-    NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings,
+    NumberFieldOptions, RenderOptions, SettingField, SettingGroup, SettingItem, SettingPage,
+    Settings,
 };
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme as _, IconName, Sizable as _, h_flex, v_flex};
@@ -173,29 +175,33 @@ impl SettingsView {
                     .title("Appearance")
                     .item(SettingItem::new(
                         "Theme",
-                        SettingField::dropdown(
-                            options(&[
-                                ("system", "Follow system"),
-                                ("light", "Light"),
-                                ("dark", "Dark"),
-                            ]),
-                            |cx| {
-                                match cx.global::<AppSettings>().theme {
-                                    ThemeChoice::System => "system",
-                                    ThemeChoice::Light => "light",
-                                    ThemeChoice::Dark => "dark",
-                                }
-                                .into()
-                            },
-                            |value, cx| {
-                                let theme = match value.as_ref() {
-                                    "light" => ThemeChoice::Light,
-                                    "dark" => ThemeChoice::Dark,
-                                    _ => ThemeChoice::System,
-                                };
-                                AppSettings::update(cx, |s| s.theme = theme);
-                            },
-                        ),
+                        if crate::demo::enabled() {
+                            demo_theme_field()
+                        } else {
+                            SettingField::dropdown(
+                                options(&[
+                                    ("system", "Follow system"),
+                                    ("light", "Light"),
+                                    ("dark", "Dark"),
+                                ]),
+                                |cx| {
+                                    match cx.global::<AppSettings>().theme {
+                                        ThemeChoice::System => "system",
+                                        ThemeChoice::Light => "light",
+                                        ThemeChoice::Dark => "dark",
+                                    }
+                                    .into()
+                                },
+                                |value, cx| {
+                                    let theme = match value.as_ref() {
+                                        "light" => ThemeChoice::Light,
+                                        "dark" => ThemeChoice::Dark,
+                                        _ => ThemeChoice::System,
+                                    };
+                                    AppSettings::update(cx, |s| s.theme = theme);
+                                },
+                            )
+                        },
                     ))
                     .item(
                         SettingItem::new(
@@ -808,6 +814,41 @@ fn hover_switch(
                     .checked(value(cx))
                     .on_click(move |checked: &bool, _, cx| set_value(*checked, cx)),
             )
+    })
+}
+
+/// The Theme menu in demo mode: the stock dropdown's look, with items the demo cursor can
+/// point at (see [`crate::demo::menu_item`]).
+fn demo_theme_field() -> SettingField<SharedString> {
+    SettingField::render(|options: &RenderOptions, _: &mut Window, cx: &mut App| {
+        const CHOICES: [(ThemeChoice, &str, &str); 3] = [
+            (ThemeChoice::System, "system", "Follow system"),
+            (ThemeChoice::Light, "light", "Light"),
+            (ThemeChoice::Dark, "dark", "Dark"),
+        ];
+        let current = cx.global::<AppSettings>().theme;
+        let index = CHOICES
+            .iter()
+            .position(|(choice, ..)| *choice == current)
+            .unwrap_or_default();
+        let button = Button::new(("demo-theme", index))
+            .label(CHOICES[index].2)
+            .dropdown_caret(true)
+            .outline()
+            .with_size(options.size())
+            .dropdown_menu_with_anchor(Anchor::TopRight, move |mut menu, _, _| {
+                for (choice, value, label) in CHOICES {
+                    menu = menu.item(
+                        crate::demo::menu_item(label, format!("theme:{value}"))
+                            .checked(choice == current)
+                            .on_click(move |_, _, cx| {
+                                AppSettings::update(cx, |s| s.theme = choice);
+                            }),
+                    );
+                }
+                menu
+            });
+        crate::demo::mark("theme-picker", button)
     })
 }
 

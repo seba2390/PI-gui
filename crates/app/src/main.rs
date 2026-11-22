@@ -10,6 +10,7 @@ mod actions;
 mod assets;
 mod chat;
 mod config;
+mod demo;
 mod hosts;
 mod panels;
 mod persist;
