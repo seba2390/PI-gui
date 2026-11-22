@@ -190,6 +190,20 @@ pub struct PiSession {
     /// `(provider, model id)` to switch to once pi has started (after adding a model).
     pending_model: Option<(String, String)>,
     _event_pump: Task<()>,
+    /// The resumed session's history as read from its file, shown until pi answers.
+    preview: Preview,
+    _preview_task: Task<()>,
+}
+
+/// Whether the transcript shows a preview read from the session file (see
+/// [`pi_sessions::branch`]) and whether pi's own history has arrived since.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum Preview {
+    #[default]
+    None,
+    Shown,
+    /// pi's history arrived: a late preview must not replace it.
+    Superseded,
 }
 
 impl EventEmitter<SessionEvent> for PiSession {}
@@ -245,6 +259,8 @@ impl PiSession {
             reported_busy: false,
             pending_model: None,
             _event_pump: Task::ready(()),
+            preview: Preview::None,
+            _preview_task: Task::ready(()),
         };
 
         match PiProcess::spawn(&options) {
@@ -280,6 +296,7 @@ impl PiSession {
                     }
                 });
                 this.initialize(cx);
+                this.show_preview(cx);
             }
             Err(error) => {
                 this.lifecycle = Lifecycle::Exited {
@@ -320,6 +337,8 @@ impl PiSession {
             reported_busy: false,
             pending_model: None,
             _event_pump: Task::ready(()),
+            preview: Preview::None,
+            _preview_task: Task::ready(()),
         }
     }
 
@@ -1128,6 +1147,49 @@ impl PiSession {
         self.push_notice(NoticeKind::Error, text, cx);
     }
 
+    /// Shows a resumed local session's history right away, read from its file on the
+    /// background executor, instead of waiting a second or so for pi to start and send it.
+    /// pi's history replaces the preview when it arrives, unless they are the same.
+    fn show_preview(&mut self, cx: &mut Context<Self>) {
+        let (None, Some(file)) = (&self.host, self.resumed_from.clone()) else {
+            return;
+        };
+        self._preview_task = cx.spawn(async move |this, cx| {
+            let messages = cx
+                .background_executor()
+                .spawn(async move { read_preview(&file) })
+                .await;
+            let Some(messages) = messages else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| {
+                if this.preview != Preview::None {
+                    return;
+                }
+                let notices = this.notices();
+                this.transcript = Transcript::from_messages(&messages);
+                for notice in notices {
+                    this.transcript.push_notice(notice.kind, notice.text);
+                }
+                this.preview = Preview::Shown;
+                cx.emit(SessionEvent::Reloaded);
+                cx.notify();
+            });
+        });
+    }
+
+    /// Notices in the transcript (e.g. an extension that failed to load while pi started).
+    fn notices(&self) -> Vec<transcript::Notice> {
+        self.transcript
+            .items()
+            .iter()
+            .filter_map(|item| match &item.kind {
+                transcript::ItemKind::Notice(notice) => Some(notice.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn initialize(&mut self, cx: &mut Context<Self>) {
         let Some(client) = self.client.clone() else {
             return;
@@ -1164,27 +1226,28 @@ impl PiSession {
                 this.thinking_levels = levels;
                 this.stats = stats;
                 this.commands = commands;
-                let replaced = messages.is_some();
+                let mut replaced = false;
                 if let Some(messages) = messages {
                     let name = this.transcript.session_name().map(str::to_owned);
                     // Notices pi sent while starting (e.g. an extension that failed to load)
                     // stay visible after the history.
-                    let notices: Vec<_> = this
-                        .transcript
-                        .items()
-                        .iter()
-                        .filter_map(|item| match &item.kind {
-                            transcript::ItemKind::Notice(notice) => Some(notice.clone()),
-                            _ => None,
-                        })
-                        .collect();
-                    this.transcript = Transcript::from_messages(&messages);
+                    let notices = this.notices();
+                    let mut fresh = Transcript::from_messages(&messages);
+                    for notice in notices {
+                        fresh.push_notice(notice.kind, notice.text);
+                    }
+                    // The preview from the file is usually exactly this: keep it, so the rows
+                    // (and the scroll position) stay as they are.
+                    let same =
+                        this.preview == Preview::Shown && fresh.items() == this.transcript.items();
+                    if !same {
+                        this.transcript = fresh;
+                        replaced = true;
+                    }
+                    this.preview = Preview::Superseded;
                     this.transcript.set_session_name(
                         name.or_else(|| this.state.as_ref().and_then(|s| s.session_name.clone())),
                     );
-                    for notice in notices {
-                        this.transcript.push_notice(notice.kind, notice.text);
-                    }
                 }
                 this.flush_outbox(cx);
                 this.report_busy(cx);
@@ -1345,6 +1408,16 @@ impl PiSession {
 ///
 /// On a remote `host`, pi runs there through the host's shared ssh connection, in `cwd` on the
 /// remote, via the login shell (see [`remote::Ssh::command`]); remote sessions are always Code.
+/// The active branch's messages from a session file, or `None` when pi has to rebuild them
+/// (see [`pi_sessions::branch`]) or the file can't be read.
+fn read_preview(file: &Path) -> Option<Vec<AgentMessage>> {
+    let text = std::fs::read_to_string(file).ok()?;
+    pi_sessions::branch::active_messages(&text)?
+        .into_iter()
+        .map(|message| serde_json::from_value(message).ok())
+        .collect()
+}
+
 fn spawn_options(
     config: &AppConfig,
     cwd: &Path,
@@ -1518,6 +1591,44 @@ mod tests {
     /// on the host through pi's RPC, its session file is listed from the host, and the
     /// session resumes with its history. No model is needed.
     /// `PISTACHIO_SSH_TEST_HOST=<alias> cargo test -p pistachio -- --ignored real_pi_over_ssh`
+    /// The preview read from a session file shows exactly what pi's own history does. Runs
+    /// real pi on every `.jsonl` in `PISTACHIO_PREVIEW_CHECK` (use copies: pi may migrate a
+    /// file it opens).
+    #[test]
+    #[ignore = "needs pi and session files"]
+    fn preview_matches_pi() {
+        use futures::executor::block_on;
+        let Ok(dir) = std::env::var("PISTACHIO_PREVIEW_CHECK") else {
+            return;
+        };
+        let (mut same, mut left_to_pi) = (0, 0);
+        for entry in std::fs::read_dir(&dir).expect("readable folder") {
+            let path = entry.expect("entry").path();
+            if path.extension().is_none_or(|ext| ext != "jsonl") {
+                continue;
+            }
+            let Some(preview) = super::read_preview(&path) else {
+                left_to_pi += 1;
+                continue;
+            };
+            let mut options = pi_rpc::SpawnOptions::new(std::env::temp_dir());
+            options.session = Some(path.clone());
+            let (process, _events) = pi_rpc::PiProcess::spawn(&options).expect("spawn pi");
+            let messages = block_on(process.client().get_messages()).expect("get_messages");
+            let ours = transcript::Transcript::from_messages(&preview);
+            let theirs = transcript::Transcript::from_messages(&messages);
+            assert_eq!(
+                ours.items(),
+                theirs.items(),
+                "preview differs from pi for {}",
+                path.display()
+            );
+            same += 1;
+        }
+        eprintln!("{same} previews match pi; {left_to_pi} left to pi");
+        assert!(same > 0, "no session was checked");
+    }
+
     #[test]
     #[ignore = "runs pi on PISTACHIO_SSH_TEST_HOST"]
     fn real_pi_over_ssh() {

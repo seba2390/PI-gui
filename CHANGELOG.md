@@ -15,6 +15,11 @@ All notable changes to PI-gui are listed here. The format follows
 
 ### Changed
 
+- Switching to a session is near-instant: its history is read straight from the session
+  file (in about 60 ms for a long session) and shown while pi starts, instead of after pi
+  has started and sent it (around a second). pi's own history replaces it only if it
+  differs; sessions with compactions or context edits, and sessions on SSH hosts, still wait
+  for pi.
 - The working indicator is a little green π that pulses, in the chat and in
   the sidebar, where it now sits left of the conversation's name. "Working… 12s · esc to interrupt" is centred, and "Worked for" has a
   small π.

@@ -102,6 +102,10 @@ These tests are all `#[ignore]`d. Run them with `PISTACHIO_SSH_TEST_HOST=<alias>
   - `askpass_prompt_reaches_the_app` also needs `PISTACHIO_SSH_PASSWORD_HOST`, a host that
     offers password login.
 
+`PISTACHIO_PREVIEW_CHECK=<folder of session copies> cargo test -p pistachio preview_matches_pi --
+--ignored` runs real pi on each session file and checks that the history Pistachio previews
+from the file matches pi's (use copies: pi may migrate files it opens).
+
 `crates/transcript/tests/fixtures` holds sanitized recordings of real `pi --mode rpc`
 sessions. The replay tests check that streaming and history render the same way.
 
