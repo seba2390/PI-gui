@@ -41,9 +41,9 @@ See [docs/FEATURES.md](docs/FEATURES.md) for the full list and keyboard shortcut
 
 ## Demo
 
-<!-- The full demo video (docs/media/demo.mp4). GitHub only plays MP4s uploaded through its
-web editor: drag docs/media/demo.mp4 into this README on github.com and paste the resulting
-https://github.com/user-attachments/assets/... link on the line below. -->
+<!-- docs/media/demo.mp4, uploaded through GitHub (it only plays videos hosted there). After
+re-recording it, upload the new file the same way and replace this link. -->
+https://github.com/user-attachments/assets/45a10dcc-881a-451d-a78e-cefb881ec8d0
 
 
 ## Install
