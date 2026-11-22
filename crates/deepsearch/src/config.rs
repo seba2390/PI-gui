@@ -339,9 +339,29 @@ fn io_error(path: &Path) -> impl FnOnce(io::Error) -> ConfigError {
     move |source| ConfigError::Io { path, source }
 }
 
+/// Saves `config` as `dir`'s `config.json` (from the Settings page).
+pub fn save(dir: &Path, config: &Config) -> Result<(), ConfigError> {
+    fs::create_dir_all(dir).map_err(io_error(dir))?;
+    write_config(&dir.join(CONFIG_FILE), config)
+}
+
+/// Writes atomically (temp file + rename) and readable only by the user: the file can hold
+/// search API keys.
 fn write_config(path: &Path, config: &Config) -> Result<(), ConfigError> {
-    let text = serde_json::to_string_pretty(config).unwrap_or_default();
-    fs::write(path, text + "\n").map_err(io_error(path))
+    use std::io::Write as _;
+    let text = serde_json::to_string_pretty(config).unwrap_or_default() + "\n";
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    let _ = fs::remove_file(&tmp);
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options.open(&tmp).map_err(io_error(&tmp))?;
+    file.write_all(text.as_bytes()).map_err(io_error(&tmp))?;
+    drop(file);
+    fs::rename(&tmp, path).map_err(io_error(path))
 }
 
 fn read_or_write(path: &Path, default: &str) -> Result<String, ConfigError> {
@@ -403,5 +423,27 @@ mod tests {
 
         fs::write(dir.path().join(CONFIG_FILE), r#"{"backend":"bing"}"#).unwrap();
         assert!(matches!(load(dir.path()), Err(ConfigError::Invalid { .. })));
+    }
+
+    #[test]
+    fn save_round_trips_and_is_private() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config {
+            backend: BackendKind::Brave,
+            ..Config::default()
+        };
+        config.brave.api_key = Some("secret".into());
+        save(dir.path(), &config).unwrap();
+        let (loaded, _) = load(dir.path()).unwrap();
+        assert_eq!(loaded, config);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = fs::metadata(dir.path().join(CONFIG_FILE))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
     }
 }

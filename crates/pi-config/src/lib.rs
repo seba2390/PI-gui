@@ -5,6 +5,7 @@
 //! only what was added. See pi's `docs/models.md` and `docs/models-configuration.md` for the
 //! format: `{"providers": {"<id>": {baseUrl, api, apiKey, models: [{id, …}]}}}`.
 
+pub mod settings;
 pub mod skills;
 pub mod trust;
 

@@ -88,7 +88,7 @@ impl AppConfig {
 
 /// `pi` from `PATH`. On Windows npm installs it as `pi.cmd`, which `Command` only finds (and
 /// runs through `cmd.exe`) when given its full path, so it is looked up here.
-fn default_pi_program() -> PathBuf {
+pub(crate) fn default_pi_program() -> PathBuf {
     if cfg!(windows)
         && let Some(path) = std::env::var_os("PATH")
     {

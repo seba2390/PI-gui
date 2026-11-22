@@ -15,12 +15,14 @@ mod panels;
 mod persist;
 mod pi_place;
 mod remote_ui;
+mod settings;
 mod shell_env;
 mod sidebar;
 mod skills;
 mod theme;
 mod ui;
 mod ui_state;
+mod updates;
 mod window;
 
 use gpui_kit::*;
@@ -55,9 +57,14 @@ fn main() {
         let child_env = shell_env.join().unwrap_or_default();
         let config = config::AppConfig::detect(child_env);
         init(cx);
+        cx.set_global(settings::AppSettings::load(
+            settings::AppSettings::path().as_deref(),
+        ));
         theme::init(cx);
+        settings::init_text_size(cx);
         actions::init(cx);
         cx.set_global(config);
+        settings::apply_pi_program(cx);
         cx.set_global(ui_state::UiState::load(
             ui_state::UiState::path().as_deref(),
         ));

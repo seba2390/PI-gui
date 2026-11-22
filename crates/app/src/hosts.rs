@@ -191,18 +191,32 @@ impl Hosts {
             prompts: VecDeque::new(),
             _tasks: vec![prompts, checker],
         };
-        // Connect saved hosts quietly in the background so their dots and sessions are there
-        // when needed. Quiet: no prompts and no installs; failures only colour the dot.
-        let ids: Vec<HostId> = this
-            .store
-            .hosts
-            .iter()
-            .map(|host| host.id.clone())
-            .collect();
-        for id in ids {
-            this.connect_with(&id, ConnectMode::Quiet, cx);
+        // With "Connect saved SSH connections at start" (Settings), connect them quietly in
+        // the background so their dots and sessions are there when needed. Quiet: no prompts
+        // and no installs; failures only colour the dot.
+        let at_start = cx
+            .try_global::<crate::settings::AppSettings>()
+            .is_some_and(|settings| settings.connect_hosts_at_start);
+        if at_start {
+            let ids: Vec<HostId> = this
+                .store
+                .hosts
+                .iter()
+                .map(|host| host.id.clone())
+                .collect();
+            for id in ids {
+                this.connect_with(&id, ConnectMode::Quiet, cx);
+            }
         }
         this
+    }
+
+    /// Connects `id` in the background without prompts or installs (e.g. to reopen its last
+    /// session at start); failures only colour its dot.
+    pub fn connect_quietly(&mut self, id: &HostId, cx: &mut Context<Self>) {
+        if !self.status(id).is_connected() {
+            self.connect_with(id, ConnectMode::Quiet, cx);
+        }
     }
 
     pub fn hosts(&self) -> &[SavedHost] {

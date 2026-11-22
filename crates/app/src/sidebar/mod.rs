@@ -44,6 +44,8 @@ pub enum SidebarEvent {
     ConnectHost(HostId),
     /// Show the Skills page (Code mode).
     ShowSkills,
+    /// Show the Settings page.
+    ShowSettings,
     /// Move every session of this folder (on this host) to the trash.
     DeleteFolder(Option<HostId>, PathBuf),
 }
@@ -74,6 +76,8 @@ pub struct Sidebar {
     active: Option<(Option<HostId>, PathBuf)>,
     /// The Skills page is showing (its button is highlighted).
     skills_active: bool,
+    /// The Settings page is open (its footer row is highlighted).
+    settings_active: bool,
     filter: Entity<InputState>,
     loaded: bool,
     drag: WindowDrag,
@@ -87,7 +91,14 @@ impl EventEmitter<SidebarEvent> for Sidebar {}
 
 impl Sidebar {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let mode = cx.default_global::<UiState>().mode;
+        let mode = match cx
+            .default_global::<crate::settings::AppSettings>()
+            .start_mode
+        {
+            crate::settings::StartMode::Last => cx.default_global::<UiState>().mode,
+            crate::settings::StartMode::Chat => Mode::Chat,
+            crate::settings::StartMode::Code => Mode::Code,
+        };
         let filter = cx.new(|cx| InputState::new(window, cx).placeholder(search_placeholder(mode)));
         let subscriptions = vec![
             cx.subscribe(&filter, |_, _, event: &InputEvent, cx| {
@@ -106,6 +117,7 @@ impl Sidebar {
             sessions: Vec::new(),
             active: None,
             skills_active: false,
+            settings_active: false,
             filter,
             loaded: false,
             drag: WindowDrag::default(),
@@ -208,6 +220,13 @@ impl Sidebar {
             .copied()
     }
 
+    pub fn set_settings_active(&mut self, active: bool, cx: &mut Context<Self>) {
+        if self.settings_active != active {
+            self.settings_active = active;
+            cx.notify();
+        }
+    }
+
     pub fn set_skills_active(&mut self, active: bool, cx: &mut Context<Self>) {
         if self.skills_active != active {
             self.skills_active = active;
@@ -216,7 +235,7 @@ impl Sidebar {
     }
 
     fn is_active(&self, host: Option<&HostId>, path: &Path) -> bool {
-        if self.skills_active {
+        if self.skills_active || self.settings_active {
             return false;
         }
         self.active
@@ -712,7 +731,7 @@ impl Render for Sidebar {
             .when(self.mode == Mode::Code, |this| {
                 this.child(div().px_2().child(rows::action_row(
                     "show-skills",
-                    AppIcon::Sparkles,
+                    Icon::from(AppIcon::Sparkles),
                     "Skills",
                     self.skills_active,
                     SidebarEvent::ShowSkills,
@@ -721,7 +740,7 @@ impl Render for Sidebar {
             })
             .child(div().px_2().pb_2().child(rows::action_row(
                 "new-chat",
-                AppIcon::SquarePen,
+                Icon::from(AppIcon::SquarePen),
                 new_label,
                 false,
                 SidebarEvent::NewChat,
@@ -729,9 +748,14 @@ impl Render for Sidebar {
             )))
             .child(
                 div()
-                    .px_3()
+                    .px_2()
                     .pb_1()
-                    .child(Input::new(&self.filter).small().cleanable(true)),
+                    // The same field as the Settings page's search: default size, search icon.
+                    .child(
+                        Input::new(&self.filter)
+                            .prefix(Icon::new(IconName::Search))
+                            .cleanable(true),
+                    ),
             )
             .child(
                 div()
@@ -741,6 +765,21 @@ impl Render for Sidebar {
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)
                     .child(list),
+            )
+            .child(
+                div()
+                    .px_2()
+                    .py_2()
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .child(rows::action_row(
+                        "show-settings",
+                        Icon::new(IconName::Settings),
+                        "Settings",
+                        self.settings_active,
+                        SidebarEvent::ShowSettings,
+                        cx,
+                    )),
             )
     }
 }

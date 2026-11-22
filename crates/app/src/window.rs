@@ -18,8 +18,9 @@ use pi_sessions::SessionSummary;
 use pi_sessions::Mode;
 
 use crate::actions::{
-    FocusComposer, NewChat, ResumeSession, ShowChatMode, ShowCodeMode, ShowDiff, ShowFiles,
-    ToggleRightPanel, ToggleSidebar, ToggleTerminal, WINDOW_CONTEXT,
+    CheckForUpdates, FocusComposer, NewChat, OpenSettings, ResumeSession, ShowChatMode,
+    ShowCodeMode, ShowDiff, ShowFiles, ToggleRightPanel, ToggleSidebar, ToggleTerminal,
+    WINDOW_CONTEXT,
 };
 use crate::chat::{ChatEvent, ChatView, ComposerEvent};
 use crate::config::AppConfig;
@@ -28,6 +29,8 @@ use crate::panels::{RightPanel, RightPanelEvent, RightTab, TerminalPanel, Termin
 use crate::remote_ui::{
     AddHost, AddHostEvent, ConnectFlow, ConnectFlowEvent, ManageHosts, ManageHostsEvent,
 };
+use crate::settings::AppSettings;
+use crate::settings::view::{SettingsEvent, SettingsView};
 use crate::sidebar::{Activity, Sidebar, SidebarEvent};
 use crate::ui::QuietButton as _;
 use crate::ui::{AppIcon, TOP_BAR_HEIGHT, TRAFFIC_LIGHT_INSET, WindowDrag};
@@ -150,6 +153,8 @@ pub struct MainWindow {
     /// The Skills page, shown in the chat column instead of the chat while `skills_open`.
     skills: Option<(Entity<crate::skills::SkillsView>, Subscription)>,
     skills_open: bool,
+    /// The Settings page, shown in the chat column while set.
+    settings: Option<(Entity<SettingsView>, Subscription)>,
     /// Set while pi restarts for the Skills page, so showing the new chat keeps the page.
     keep_skills: bool,
     /// The welcome screen is showing (no session open yet; `chat` is an idle placeholder).
@@ -237,16 +242,27 @@ impl MainWindow {
             focus_chat(&chat_for_focus, window, cx);
         });
         let this = cx.weak_entity();
+        let (reopen, check_updates) = {
+            let settings = cx.default_global::<AppSettings>();
+            (settings.reopen_last_session, settings.check_for_updates)
+        };
+        let scripted = !open_at_startup.is_empty();
         window.defer(cx, move |window, cx| {
             let _ = this.update(cx, |this, cx| {
+                if reopen && !scripted {
+                    this.reopen_last_local_session(window, cx);
+                }
                 this.open_panels(&open_at_startup, window, cx);
+                if check_updates && !scripted {
+                    this.check_for_updates(false, window, cx);
+                }
             });
         });
-        // A Code session on an SSH host comes back after a restart (once the host connected
-        // quietly in the background; nothing happens if it cannot be reached).
+        // With "Reopen the last session", a Code session on an SSH host comes back after a
+        // restart (once the host connected quietly; nothing happens if it cannot be reached).
         let restore = {
             let state = cx.default_global::<UiState>();
-            (state.mode == Mode::Code)
+            (reopen && !scripted && state.mode == Mode::Code && mode == Mode::Code)
                 .then(|| state.last_sessions.get(&Mode::Code).cloned())
                 .flatten()
                 .and_then(|last| {
@@ -258,6 +274,11 @@ impl MainWindow {
                 })
                 .filter(|target| crate::hosts::hosts(cx).read(cx).get(&target.host).is_some())
         };
+        // Its host may not connect at start on its own (that is a separate setting).
+        if let Some(target) = &restore {
+            let host = target.host.clone();
+            crate::hosts::hosts(cx).update(cx, |hosts, cx| hosts.connect_quietly(&host, cx));
+        }
         Self {
             sidebar,
             chat,
@@ -275,6 +296,7 @@ impl MainWindow {
             models_reload: Vec::new(),
             skills: None,
             skills_open: false,
+            settings: None,
             keep_skills: false,
             sidebar_open: true,
             right_open: false,
@@ -312,6 +334,7 @@ impl MainWindow {
                 "add-host" => self.open_add_host(window, cx),
                 "manage-hosts" => self.open_manage_hosts(window, cx),
                 "skills" => self.toggle_skills(window, cx),
+                "settings" => self.open_settings(&OpenSettings, window, cx),
                 other if other.starts_with("open-skill:") => {
                     let path = other.trim_start_matches("open-skill:").to_owned();
                     self.toggle_skills(window, cx);
@@ -537,6 +560,7 @@ impl MainWindow {
         }
         remember(&previous, cx);
         remember(&chat, cx);
+        self.close_settings(cx);
         if self.skills_open {
             if self.keep_skills {
                 let session = chat.read(cx).session().clone();
@@ -655,8 +679,12 @@ impl MainWindow {
             .unwrap_or_else(|| "A chat".to_owned());
         match event {
             ChatEvent::Stopped => {
-                window.push_notification(Notification::error(format!("{title}: pi stopped")), cx);
-                if !window.is_window_active() {
+                let (notify, attention) = notify_settings(cx);
+                if notify {
+                    window
+                        .push_notification(Notification::error(format!("{title}: pi stopped")), cx);
+                }
+                if attention && !window.is_window_active() {
                     window.request_attention();
                 }
                 self.update_activity(cx);
@@ -674,19 +702,25 @@ impl MainWindow {
                 if let Some(key) = session_key(chat, cx) {
                     self.finished.insert(key);
                 }
-                window.push_notification(Notification::success(format!("{title}: done")), cx);
-                if !window.is_window_active() {
+                let (notify, attention) = notify_settings(cx);
+                if notify {
+                    window.push_notification(Notification::success(format!("{title}: done")), cx);
+                }
+                if attention && !window.is_window_active() {
                     window.request_attention();
                 }
                 self.prune_background(cx);
                 self.sidebar.update(cx, |sidebar, cx| sidebar.refresh(cx));
             }
             ChatEvent::NeedsAttention => {
-                window.push_notification(
-                    Notification::warning(format!("{title} needs your input")),
-                    cx,
-                );
-                if !window.is_window_active() {
+                let (notify, attention) = notify_settings(cx);
+                if notify {
+                    window.push_notification(
+                        Notification::warning(format!("{title} needs your input")),
+                        cx,
+                    );
+                }
+                if attention && !window.is_window_active() {
                     window.request_attention();
                 }
                 self.update_activity(cx);
@@ -909,6 +943,7 @@ impl MainWindow {
             }
             SidebarEvent::ConnectHost(host) => self.open_connect_flow(host.clone(), window, cx),
             SidebarEvent::ShowSkills => self.toggle_skills(window, cx),
+            SidebarEvent::ShowSettings => self.toggle_settings(window, cx),
             SidebarEvent::DeleteFolder(host, folder) => {
                 self.confirm_delete_folder(host.clone(), folder.clone(), window, cx);
             }
@@ -1135,6 +1170,7 @@ impl MainWindow {
         if self.mode(cx) != Mode::Code {
             return;
         }
+        self.close_settings(cx);
         let session = self.chat.read(cx).session().clone();
         let reuse = self.skills.as_ref().is_some_and(|(skills, _)| {
             let current = skills.read(cx).session_entity();
@@ -1171,6 +1207,225 @@ impl MainWindow {
         self.skills = None;
         self.sidebar
             .update(cx, |sidebar, cx| sidebar.set_skills_active(false, cx));
+    }
+
+    /// Opens the last session of the start mode on this computer ("Reopen the last session";
+    /// one on an SSH host is restored once the host connects).
+    fn reopen_last_local_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mode = self.sidebar.read(cx).mode();
+        let Some(last) = cx
+            .default_global::<UiState>()
+            .last_sessions
+            .get(&mode)
+            .filter(|last| last.host.is_none())
+            .cloned()
+        else {
+            return;
+        };
+        let Some(dir) = cx.global::<AppConfig>().sessions_dir.clone() else {
+            return;
+        };
+        if let Some(summary) = pi_sessions::scan(&dir)
+            .into_iter()
+            .find(|summary| summary.path == last.file)
+        {
+            drop(self.open_session(None, &summary, window, cx));
+        }
+    }
+
+    /// Whether the chat column shows a page (Skills or Settings) instead of the chat.
+    fn page_open(&self) -> bool {
+        self.skills_open || self.settings.is_some()
+    }
+
+    /// Shows (or hides) the Settings page.
+    fn toggle_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings.is_some() {
+            self.close_settings(cx);
+            focus_chat(&self.chat, window, cx);
+            cx.notify();
+            return;
+        }
+        if self.skills_open {
+            self.close_skills(cx);
+        }
+        let models = self
+            .chat
+            .read(cx)
+            .session()
+            .read(cx)
+            .models()
+            .iter()
+            .map(|model| (model.provider.clone(), model.id.clone(), model.name.clone()))
+            .collect();
+        let view = cx.new(|cx| SettingsView::new(models, window, cx));
+        let subscription = cx.subscribe_in(&view, window, Self::on_settings_event);
+        self.settings = Some((view, subscription));
+        self.sidebar
+            .update(cx, |sidebar, cx| sidebar.set_settings_active(true, cx));
+        cx.notify();
+    }
+
+    fn close_settings(&mut self, cx: &mut Context<Self>) {
+        if self.settings.take().is_some() {
+            self.sidebar
+                .update(cx, |sidebar, cx| sidebar.set_settings_active(false, cx));
+        }
+    }
+
+    fn open_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings.is_none() {
+            self.toggle_settings(window, cx);
+        }
+    }
+
+    fn on_settings_event(
+        &mut self,
+        _: &Entity<SettingsView>,
+        event: &SettingsEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            SettingsEvent::AddModel => drop(self.open_models_dialog(false, window, cx)),
+            SettingsEvent::EditModels => drop(self.open_models_dialog(true, window, cx)),
+            SettingsEvent::AddHost => self.open_add_host(window, cx),
+            SettingsEvent::ManageHosts => self.open_manage_hosts(window, cx),
+            SettingsEvent::ConnectHost(host) => {
+                crate::hosts::hosts(cx).update(cx, |hosts, cx| hosts.connect(host, false, cx));
+            }
+            SettingsEvent::CheckForUpdates => self.check_for_updates(true, window, cx),
+        }
+    }
+
+    /// Looks for a newer release in the background. `manual` (the menu or Settings) also says
+    /// when there is none or the check failed; at start a skipped version is not offered.
+    fn check_for_updates(&mut self, manual: bool, window: &mut Window, cx: &mut Context<Self>) {
+        use gpui_kit::component::notification::Notification;
+        if manual {
+            window.push_notification("Checking for updates…", cx);
+        }
+        let task = cx
+            .background_executor()
+            .spawn(async { crate::updates::fetch_latest() });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = task.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                let current = crate::updates::compared_version();
+                match result {
+                    Ok(Some(release)) if crate::updates::is_newer(&release.version, &current) => {
+                        let skipped = cx.global::<AppSettings>().skipped_version.as_deref()
+                            == Some(release.version.as_str());
+                        if manual || !skipped {
+                            this.offer_update(release, window, cx);
+                        }
+                    }
+                    Ok(_) if manual => window.push_notification(
+                        Notification::success(format!(
+                            "You have the latest version (Pistachio {current})."
+                        )),
+                        cx,
+                    ),
+                    Err(error) if manual => window.push_notification(
+                        Notification::error(format!("Could not check for updates: {error}")),
+                        cx,
+                    ),
+                    Ok(_) => {}
+                    Err(error) => log::info!("update check failed: {error}"),
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Asks whether to download `release`; nothing happens without a yes.
+    fn offer_update(
+        &mut self,
+        release: crate::updates::Release,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let notes: SharedString = release.notes.trim().to_owned().into();
+        let current = crate::updates::compared_version();
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let download = release
+                .download_url
+                .clone()
+                .unwrap_or_else(|| release.page_url.clone());
+            let page = release.page_url.clone();
+            let version = release.version.clone();
+            let muted = cx.theme().muted_foreground;
+            dialog
+                .title(format!("Pistachio {} is available", release.version))
+                .w(px(520.))
+                .child(
+                    v_flex()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(muted)
+                                .child(format!("You have version {current}.")),
+                        )
+                        .when(!notes.is_empty(), |this| {
+                            this.child(
+                                div()
+                                    .id("update-notes")
+                                    .max_h(px(260.))
+                                    .overflow_y_scroll()
+                                    .text_sm()
+                                    .child(component::text::TextView::markdown(
+                                        "update-notes-text",
+                                        notes.clone(),
+                                    )),
+                            )
+                        })
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(muted)
+                                .child("The download opens in your browser."),
+                        ),
+                )
+                .footer(
+                    h_flex()
+                        .w_full()
+                        .justify_between()
+                        .child(
+                            Button::new("update-skip")
+                                .quiet(cx)
+                                .label("Skip this version")
+                                .on_click(move |_, window, cx| {
+                                    let version = version.clone();
+                                    AppSettings::update(cx, |s| s.skipped_version = Some(version));
+                                    window.close_dialog(cx);
+                                }),
+                        )
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .child(
+                                    Button::new("update-notes-page")
+                                        .label("What's new")
+                                        .on_click(move |_, _, cx| cx.open_url(&page)),
+                                )
+                                .child(
+                                    Button::new("update-later")
+                                        .label("Later")
+                                        .on_click(|_, window, cx| window.close_dialog(cx)),
+                                )
+                                .child(
+                                    Button::new("update-download")
+                                        .primary()
+                                        .label("Download")
+                                        .on_click(move |_, window, cx| {
+                                            cx.open_url(&download);
+                                            window.close_dialog(cx);
+                                        }),
+                                ),
+                        ),
+                )
+        });
     }
 
     /// "Manage SSH connections".
@@ -1715,7 +1970,9 @@ impl MainWindow {
 
     fn render_chat_header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let session = self.chat.read(cx).session().read(cx);
-        let title = if self.skills_open {
+        let title = if self.settings.is_some() {
+            "Settings".to_owned()
+        } else if self.skills_open {
             "Skills".to_owned()
         } else if self.welcome {
             String::new()
@@ -1732,7 +1989,7 @@ impl MainWindow {
         let folder = crate::ui::short_path(session.cwd(), home.as_deref());
         // Code sessions (here or on an SSH host) have folder tools (terminal, diff, files);
         // chats have no folder, and remote folders are shown as `host:path`.
-        let code = session.has_folder_tools() && !self.skills_open && !self.welcome;
+        let code = session.has_folder_tools() && !self.page_open() && !self.welcome;
         let folder = match session.host() {
             Some(host) => {
                 let label = crate::hosts::hosts(cx)
@@ -1817,6 +2074,18 @@ impl MainWindow {
                             )
                         }),
                 )
+                .when(self.settings.is_some(), |this| {
+                    this.child(
+                        Button::new("close-settings")
+                            .quiet(cx)
+                            .small()
+                            .icon(IconName::ArrowLeft)
+                            .label("Back")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.toggle_settings(window, cx);
+                            })),
+                    )
+                })
                 .when(self.skills_open, |this| {
                     this.child(
                         Button::new("close-skills")
@@ -1936,6 +2205,15 @@ fn render_terminal_edge(cx: &mut Context<MainWindow>) -> impl IntoElement + use<
 }
 
 /// A chat with work in flight or a question waiting: switching away must not drop it.
+/// Whether background chats show toasts, and ask for attention (Dock bounce) — Settings.
+fn notify_settings(cx: &App) -> (bool, bool) {
+    let settings = cx.try_global::<AppSettings>().cloned().unwrap_or_default();
+    (
+        settings.background_notifications,
+        settings.request_attention,
+    )
+}
+
 fn keeps_working(chat: &Entity<ChatView>, cx: &App) -> bool {
     let chat = chat.read(cx);
     chat.needs_attention() || chat.session().read(cx).is_busy()
@@ -2172,22 +2450,27 @@ impl Render for MainWindow {
             cx.theme().foreground,
             cx.theme().font_family.clone(),
         );
+        let settings = self.settings.as_ref().map(|(settings, _)| settings.clone());
         let skills = self
             .skills
             .as_ref()
-            .filter(|_| self.skills_open)
+            .filter(|_| self.skills_open && settings.is_none())
             .map(|(skills, _)| skills.clone());
+        let page_open = self.page_open();
         let chat_column = v_flex()
             .size_full()
             .min_w_0()
             .child(self.render_chat_header(cx))
+            .when_some(settings, |this, settings| {
+                this.child(div().flex_1().min_h_0().child(settings.cached(full())))
+            })
             .when_some(skills, |this, skills| {
                 this.child(div().flex_1().min_h_0().child(skills.cached(full())))
             })
-            .when(self.welcome && !self.skills_open, |this| {
+            .when(self.welcome && !page_open, |this| {
                 this.child(self.render_welcome(cx))
             })
-            .when(!self.skills_open && !self.welcome, |this| {
+            .when(!page_open && !self.welcome, |this| {
                 let terminal = self.terminal.clone().filter(|_| self.terminal_open);
                 this.child(
                     v_flex()
@@ -2232,6 +2515,10 @@ impl Render for MainWindow {
             .on_action(cx.listener(Self::show_chat_mode))
             .on_action(cx.listener(Self::show_code_mode))
             .on_action(cx.listener(Self::resume_session))
+            .on_action(cx.listener(Self::open_settings))
+            .on_action(cx.listener(|this, _: &CheckForUpdates, window, cx| {
+                this.check_for_updates(true, window, cx);
+            }))
             .on_action(|_: &crate::actions::CloseWindow, window, cx| {
                 if cfg!(target_os = "macos") {
                     cx.hide();

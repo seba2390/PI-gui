@@ -63,9 +63,12 @@ checks scriptable:
 - Mode and panels: `chat`, `code`, `terminal`, `diff`, `files`, `no-sidebar`.
 - Sessions and popovers: `latest`, `attach`, `context`.
 - Dialogs: `add-host`, `manage-hosts`, `add-model`, `add-provider`, `edit-models`.
-- Skills page: `skills`, `new-skill`, `open-skill:<path>`.
+- Skills page: `skills`, `new-skill`, `open-skill:<path>`; the Settings page: `settings`.
 - SSH: `ssh:<alias>`, `remote:<alias>:<folder>` and `remote-latest:<alias>` open a remote
   session once connected. Panels listed after them apply to that session.
+
+**Update prompt.** In debug builds, `PISTACHIO_PRETEND_VERSION=0.0.1` makes "Check for
+Updates…" treat the latest release as new.
 
 **Separate state.** Setting `PI_CODING_AGENT_DIR` to a scratch folder runs the app with its
 own state, so it won't touch your normal pi sessions or settings.
