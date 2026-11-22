@@ -40,7 +40,7 @@ impl ContextEstimate {
             match &item.kind {
                 ItemKind::User(user) => {
                     out.user +=
-                        tokens(user.text.len()) + TOKENS_PER_IMAGE * user.image_count as u64;
+                        tokens(user.text.len()) + TOKENS_PER_IMAGE * user.images.len() as u64;
                 }
                 ItemKind::Assistant(assistant) => {
                     for block in &assistant.blocks {
@@ -111,7 +111,7 @@ mod tests {
     fn user(text: &str, images: usize) -> TranscriptItem {
         item(ItemKind::User(UserItem {
             text: text.to_owned(),
-            image_count: images,
+            images: vec![crate::model::Image::new("", "image/png"); images],
         }))
     }
 
@@ -147,6 +147,7 @@ mod tests {
                         output: "o".repeat(400),
                         details: None,
                         duration_ms: None,
+                        images: Vec::new(),
                         nested: Vec::new(),
                     }),
                 },

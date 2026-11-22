@@ -119,6 +119,7 @@ mod tests {
             output: String::new(),
             details: None,
             duration_ms: None,
+            images: Vec::new(),
             nested: Vec::new(),
         })
     }
@@ -202,6 +203,7 @@ mod tests {
             output: String::new(),
             details: None,
             duration_ms: None,
+            images: Vec::new(),
             nested: Vec::new(),
         };
         assert!(!is_exploration(&streaming));

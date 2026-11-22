@@ -6,6 +6,7 @@ mod context_panel;
 pub mod dialogs;
 mod file_picker;
 mod find;
+mod images;
 pub(crate) mod mention;
 pub mod models_dialog;
 mod rows;
@@ -262,6 +263,25 @@ impl ChatView {
         self.scroller
             .update(cx, |scroller, cx| scroller.reset(0, cx));
         self.sync(cx);
+    }
+
+    /// Opens the picture viewer on the conversation's pictures, at `start`
+    /// (`PISTACHIO_OPEN=image-viewer:<n>`, for layout checks).
+    /// Returns whether there were pictures to show.
+    pub fn open_images(
+        chat: &Entity<Self>,
+        start: usize,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        let session = chat.read(cx).session.clone();
+        let all = images::all_images(session.read(cx).transcript().items());
+        if all.is_empty() {
+            return false;
+        }
+        let start = start.min(all.len() - 1);
+        images::open_viewer(all.into(), start, window, cx);
+        true
     }
 
     /// The composer, e.g. to insert an `@path` mention from the Files tab.

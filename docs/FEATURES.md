@@ -118,6 +118,12 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   reads (on the SSH host for remote sessions); the previous version is kept as
   `models.json.bak-pistachio`. pi reads the file only when it starts, so after saving it restarts
   on the same session (after the current turn, if one is running) and selects the new model.
+- **Pictures**: when the agent reads an image, a thumbnail shows next to the call (the first two
+  of an "Explored" group, with "+N"); pictures attached to a prompt show above it. Clicking one
+  opens a full-window viewer: ← / → or the arrows browse all of that call's, group's or
+  prompt's pictures, Esc closes it.
+- **Transcript layout**: the model's text is the main voice. Tool calls and thinking sit on a
+  thin rail on the left in a quieter style, with more room where they meet the text.
 - **Find in chat** (⌘F): a search bar over the conversation. Every match is highlighted;
   Enter / Shift+Enter (or ⌘G / ⌘⇧G) go to the next / previous one with a "3 of 12" count, and
   Esc closes the bar. It searches prompts and replies as shown, thinking, tool output and the

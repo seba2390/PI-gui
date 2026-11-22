@@ -191,6 +191,7 @@ mod tests {
             output: output.into(),
             details,
             duration_ms: None,
+            images: Vec::new(),
             nested: Vec::new(),
         }
     }

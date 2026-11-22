@@ -6,7 +6,18 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Pictures in the chat: when the agent reads an image (a screenshot, say), a small thumbnail
+  shows to the right of the call, and an "Explored" group shows the first two with "+N".
+  Pictures attached to a prompt show above it. Clicking one opens a full-window viewer; ← / →
+  or the arrows browse all the pictures of that call, group or prompt, and Esc closes it.
+
 ### Changed
+
+- The model's text stands apart from its activity: runs of tool calls and thinking sit on a
+  thin rail on the left, in a slightly smaller, muted style, with more room where they meet
+  the text. An image read says "Read an image" instead of "Read 1 line".
 
 - Tool calls in the chat read in the past tense like the rest: "Wrote", "Edited", "Listed" and
   "Searched" instead of "Write", "Edit", "List" and "Search".

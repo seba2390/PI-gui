@@ -66,7 +66,8 @@ checks scriptable:
   every tool call in the chat (like Ctrl+O); `view-file:<path>` opens a file (relative to the
   folder) in the Files tab's viewer.
 - Sessions and popovers: `latest`, `new-chat` (like ⌘N), `attach`, `context`; `find:<text>` opens the find bar
-  searching for `<text>`.
+  searching for `<text>`; `image-viewer:<n>` opens the picture viewer on the session's
+  `<n>`th picture.
 - Dialogs: `add-host`, `manage-hosts`, `add-model`, `add-provider`, `edit-models`.
 - Skills page: `skills`, `new-skill`, `open-skill:<path>`; the Settings page: `settings`.
 - SSH: `ssh:<alias>`, `remote:<alias>:<folder>` and `remote-latest:<alias>` open a remote

@@ -171,6 +171,11 @@ fn compact_args(args: &Value) -> String {
 pub fn result_summary(tool: &ToolBlock) -> Option<String> {
     let lines = |text: &str| text.trim_end().lines().count();
     match tool.name.as_str() {
+        // A picture comes back with a one-line note; the picture is what was read.
+        "read" if !tool.images.is_empty() => Some(match tool.images.len() {
+            1 => "Read an image".to_owned(),
+            n => format!("Read {n} images"),
+        }),
         "read" => Some(plural(lines(&tool.output), "line", "Read")),
         "write" => {
             arg(&tool.args, "content").map(|content| plural(lines(content), "line", "Wrote"))
@@ -296,6 +301,7 @@ mod tests {
             output: String::new(),
             details: None,
             duration_ms: None,
+            images: Vec::new(),
             nested: Vec::new(),
         }
     }

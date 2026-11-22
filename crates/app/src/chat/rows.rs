@@ -18,12 +18,22 @@ use transcript::{
     ToolBlock, ToolStatus, TranscriptItem, format_duration,
 };
 
+use super::images;
 use super::session::{AfterFork, PiSession};
 use super::{BlockKey, CONTENT_MAX_WIDTH, ChatView, markdown_view};
 use crate::code_highlight::{self, LineStyles, Side};
 use crate::config::AppConfig;
 use crate::theme::{Palette, palette};
 use crate::ui::{AppIcon, CopyButton, QuietButton as _};
+
+/// Text size of tool calls, thinking and "Explored" rows: a step below the model's prose,
+/// so its answers read as the main voice.
+const ACTIVITY_TEXT: Rems = rems(0.8125);
+/// How far a run of activity sits right of its rail line.
+const RAIL_INDENT: Pixels = px(14.);
+/// Extra space where the model's text meets a run of activity (rows inside a run sit
+/// close together).
+const SECTION_GAP: Pixels = px(8.);
 
 /// Collapsed tool output shows at most this many lines.
 const PREVIEW_LINES: usize = 3;
@@ -94,6 +104,25 @@ pub fn render_row(
         (Some(item), _) => render_item(item, &context, theme.muted, cx),
         (None, _) => render_working(session.transcript().status(), &context),
     };
+    // Rows of only activity (and "Explored" groups) sit on one continuous rail; text gets more
+    // room where it meets them.
+    let activity = |row: usize| match (items.get(row), chat.role(row)) {
+        (Some(_), Some(RowRole::Group(_))) => true,
+        (Some(item), _) => is_activity(item),
+        (None, _) => false,
+    };
+    let on_rail = activity(row);
+    // The row above that shows something (folded rows render nothing).
+    let previous = (0..row)
+        .rev()
+        .find(|ix| !matches!(chat.role(*ix), Some(RowRole::Hidden)));
+    let section_change = previous.is_some_and(|previous| {
+        activity(previous) != on_rail
+            && matches!(
+                items.get(previous).map(|item| &item.kind),
+                Some(ItemKind::Assistant(_))
+            )
+    });
     // Tight spacing inside a turn, more air around prompts and turn ends.
     let is_user = matches!(
         items.get(row).map(|item| &item.kind),
@@ -119,8 +148,15 @@ pub fn render_row(
             div()
                 .w_full()
                 .max_w(CONTENT_MAX_WIDTH)
+                .when(section_change, |this| this.mt(SECTION_GAP))
                 .pt(top)
                 .pb(bottom)
+                // The rail's line spans the row's padding, so consecutive rows join up.
+                .when(on_rail, |this| {
+                    this.pl(RAIL_INDENT)
+                        .border_l_1()
+                        .border_color(context.palette.subtle.opacity(0.35))
+                })
                 .child(content),
         )
         .into_any_element()
@@ -133,6 +169,14 @@ fn render_item(item: &TranscriptItem, cx: &RowContext<'_>, bubble: Hsla, app: &A
             .items_end()
             .gap_1()
             .group("user-message")
+            // Attached pictures, above the bubble; they open in the viewer.
+            .children(images::thumbnails(
+                ("prompt-images", item.id.0),
+                &user.images,
+                images::PROMPT_THUMBNAILS,
+                size(px(72.), px(54.)),
+                app,
+            ))
             .child(
                 v_flex()
                     .min_w_0()
@@ -151,17 +195,7 @@ fn render_item(item: &TranscriptItem, cx: &RowContext<'_>, bubble: Hsla, app: &A
                             Some(state) => markdown_view(state).into_any_element(),
                             None => div().child(user.text.clone()).into_any_element(),
                         },
-                    )
-                    .when(user.image_count > 0, |this| {
-                        this.child(
-                            h_flex()
-                                .gap_1()
-                                .text_xs()
-                                .text_color(cx.muted)
-                                .child(Icon::from(AppIcon::Image).xsmall())
-                                .child(plural(user.image_count, "image")),
-                        )
-                    }),
+                    ),
             )
             .child(user_actions(item.id.0, &user.text, cx, app))
             .into_any_element(),
@@ -373,25 +407,44 @@ fn render_assistant(
     assistant: &AssistantItem,
     cx: &RowContext<'_>,
 ) -> AnyElement {
+    // A row of only activity is put on the rail as a whole (see `render_row`); a row that
+    // mixes text and steps puts each run of steps on its own rail here.
+    let rail_here = !is_activity(item);
     let mut column = v_flex().w_full().gap_3();
+    let mut run: Vec<AnyElement> = Vec::new();
+    let flush = |column: Div, run: &mut Vec<AnyElement>| {
+        if run.is_empty() {
+            return column;
+        }
+        let steps = std::mem::take(run);
+        if rail_here {
+            column.child(rail(v_flex().w_full().gap_3().children(steps), cx))
+        } else {
+            column.children(steps)
+        }
+    };
     for (index, block) in assistant.blocks.iter().enumerate() {
         let key = BlockKey {
             item: item.id,
             block: index,
         };
-        column = column.child(match &block.kind {
-            BlockKind::Thinking(thinking) => render_thinking(key, thinking, cx),
-            BlockKind::Text(text) => match cx.chat.markdown(key) {
-                Some(state) => div()
-                    .w_full()
-                    .text_color(cx.foreground)
-                    .child(markdown_view(state))
-                    .into_any_element(),
-                None => div().child(text.text.clone()).into_any_element(),
-            },
-            BlockKind::Tool(tool) => render_tool(key, tool, cx),
-        });
+        match &block.kind {
+            BlockKind::Thinking(thinking) => run.push(render_thinking(key, thinking, cx)),
+            BlockKind::Tool(tool) => run.push(render_tool(key, tool, cx)),
+            BlockKind::Text(text) => {
+                column = flush(column, &mut run);
+                column = column.child(match cx.chat.markdown(key) {
+                    Some(state) => div()
+                        .w_full()
+                        .text_color(cx.foreground)
+                        .child(markdown_view(state))
+                        .into_any_element(),
+                    None => div().child(text.text.clone()).into_any_element(),
+                });
+            }
+        }
     }
+    column = flush(column, &mut run);
     if let Some(error) = &assistant.error
         && assistant.stop_reason != pi_rpc::protocol::StopReason::Aborted
     {
@@ -405,6 +458,33 @@ fn render_assistant(
         );
     }
     column.into_any_element()
+}
+
+/// Puts a run of activity (tool calls, thinking) behind a thin line on its left, indented, so
+/// it reads as one unit apart from the model's text.
+fn rail(content: impl IntoElement, cx: &RowContext<'_>) -> Div {
+    div()
+        .w_full()
+        .pl(RAIL_INDENT)
+        .border_l_1()
+        .border_color(cx.palette.subtle.opacity(0.35))
+        .child(content)
+}
+
+/// Whether a transcript item shows only activity: an assistant message with tool calls or
+/// thinking but no text (and no error). Such rows join one continuous rail.
+fn is_activity(item: &TranscriptItem) -> bool {
+    match &item.kind {
+        ItemKind::Assistant(assistant) => {
+            assistant.error.is_none()
+                && !assistant.blocks.is_empty()
+                && assistant.blocks.iter().all(|block| match &block.kind {
+                    BlockKind::Text(text) => text.text.trim().is_empty(),
+                    BlockKind::Thinking(_) | BlockKind::Tool(_) => true,
+                })
+        }
+        _ => false,
+    }
 }
 
 fn element_id(prefix: &'static str, key: BlockKey) -> ElementId {
@@ -468,7 +548,7 @@ fn render_thinking(key: BlockKey, thinking: &ThinkingBlock, cx: &RowContext<'_>)
                 .aria_label(SharedString::from(label.clone()))
                 .aria_expanded(expanded)
                 .gap_1p5()
-                .text_sm()
+                .text_size(ACTIVITY_TEXT)
                 .text_color(color)
                 .cursor_pointer()
                 .hover(|style| style.text_color(cx.foreground))
@@ -554,12 +634,12 @@ fn render_group(group: &Group, cx: &RowContext<'_>) -> AnyElement {
                 .flex_1()
                 .min_w_0()
                 .gap_1p5()
-                .text_sm()
+                .text_size(ACTIVITY_TEXT)
                 .child(
                     div()
                         .flex_none()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(cx.foreground)
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(cx.muted)
                         .child(if active { "Exploring" } else { "Explored" }),
                 )
                 .child(div().text_color(cx.muted).child(detail))
@@ -588,7 +668,7 @@ fn render_group(group: &Group, cx: &RowContext<'_>) -> AnyElement {
             };
             h_flex()
                 .gap_2()
-                .text_sm()
+                .text_size(ACTIVITY_TEXT)
                 .child(
                     div()
                         .flex_none()
@@ -613,10 +693,36 @@ fn render_group(group: &Group, cx: &RowContext<'_>) -> AnyElement {
             .children(lines)
             .into_any_element()
     };
-    v_flex()
-        .gap_1()
-        .child(header)
-        .child(body)
+    // Collapsed, the group shows the pictures its calls returned next to its lines; expanded,
+    // each call shows its own.
+    let pictures: Vec<transcript::Image> = if expanded {
+        Vec::new()
+    } else {
+        tools
+            .iter()
+            .flat_map(|tool| tool.images.iter().cloned())
+            .collect()
+    };
+    let thumbs = images::thumbnails(
+        element_id("explored-images", key),
+        &pictures,
+        images::TOOL_THUMBNAILS,
+        size(px(48.), px(34.)),
+        cx.app,
+    );
+    h_flex()
+        .w_full()
+        .items_start()
+        .gap_3()
+        .child(
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .gap_1()
+                .child(header)
+                .child(body),
+        )
+        .children(thumbs)
         .into_any_element()
 }
 
@@ -673,7 +779,17 @@ fn render_tool(key: BlockKey, tool: &ToolBlock, cx: &RowContext<'_>) -> AnyEleme
         }),
     };
 
-    v_flex()
+    // Pictures the call returned (`read` on a screenshot), to the right of its lines.
+    let thumbs = images::thumbnails(
+        element_id("tool-images", key),
+        &tool.images,
+        images::TOOL_THUMBNAILS,
+        size(px(48.), px(34.)),
+        cx.app,
+    );
+    let top = v_flex()
+        .flex_1()
+        .min_w_0()
         .gap_1()
         .child(
             h_flex()
@@ -702,13 +818,15 @@ fn render_tool(key: BlockKey, tool: &ToolBlock, cx: &RowContext<'_>) -> AnyEleme
                         .flex_1()
                         .min_w_0()
                         .gap_1p5()
-                        .text_sm()
+                        .text_size(ACTIVITY_TEXT)
                         .items_start()
+                        // Quieter than the model's text: activity is context, prose is the
+                        // answer.
                         .child(
                             div()
                                 .flex_none()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(cx.foreground)
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(cx.muted)
                                 .child(header.title),
                         )
                         .child(
@@ -716,7 +834,7 @@ fn render_tool(key: BlockKey, tool: &ToolBlock, cx: &RowContext<'_>) -> AnyEleme
                                 .min_w_0()
                                 .truncate()
                                 .font_family(cx.mono.clone())
-                                .text_color(cx.muted)
+                                .text_color(cx.palette.subtle)
                                 .child(header.detail),
                         )
                         .when(labelled, |this| {
@@ -775,7 +893,17 @@ fn render_tool(key: BlockKey, tool: &ToolBlock, cx: &RowContext<'_>) -> AnyEleme
                             }),
                     ),
             )
-        })
+        });
+    v_flex()
+        .gap_1()
+        .child(
+            h_flex()
+                .w_full()
+                .items_start()
+                .gap_3()
+                .child(top)
+                .children(thumbs),
+        )
         .when(expanded, |this| {
             let command = (tool.name == "bash")
                 .then(|| tool.args.get("command").and_then(serde_json::Value::as_str))

@@ -392,6 +392,27 @@ impl MainWindow {
                     self.right_panel
                         .update(cx, |panel, cx| panel.open_file(path, window, cx));
                 }
+                other if other.starts_with("image-viewer:") => {
+                    let start = other["image-viewer:".len()..].parse().unwrap_or(0);
+                    // The session loads in the background; a scripted check waits (up to a few
+                    // seconds) for its pictures.
+                    cx.spawn_in(window, async move |this, cx| {
+                        for _ in 0..50 {
+                            let opened = this
+                                .update_in(cx, |this, window, cx| {
+                                    ChatView::open_images(&this.chat.clone(), start, window, cx)
+                                })
+                                .unwrap_or(true);
+                            if opened {
+                                break;
+                            }
+                            cx.background_executor()
+                                .timer(std::time::Duration::from_millis(100))
+                                .await;
+                        }
+                    })
+                    .detach();
+                }
                 other if other.starts_with("find:") => {
                     let chat = self.chat.clone();
                     let text = other["find:".len()..].to_owned();
