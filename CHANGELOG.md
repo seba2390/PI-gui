@@ -6,6 +6,21 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Settings → Appearance → Code colors: pick the syntax colors for code (Pistachio, One,
+  GitHub, Solarized, Gruvbox or Catppuccin), each with a light and a dark variant. Only code
+  colors change; the rest of the app keeps its theme.
+
+### Changed
+
+- The models.json editor colors JSON: keys, strings, numbers, `true`/`false` and `null` each
+  get their own color.
+- The skill editor colors Markdown: headings, bold and italic, code, links and list markers.
+- Code blocks in chat are colored for Python, Rust, JavaScript, TypeScript (and TSX), C, C++,
+  C#, Go, Java, HTML, CSS, Bash, SQL, YAML, TOML, JSON, Markdown and diffs. Other languages
+  still get the labeled box with a copy button, in one color.
+
 ## [0.4.1] - 2026-11-22
 
 ### Added

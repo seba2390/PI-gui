@@ -9,6 +9,7 @@
 mod actions;
 mod assets;
 mod chat;
+mod code_colors;
 mod config;
 mod demo;
 mod hosts;
@@ -20,6 +21,7 @@ mod settings;
 mod shell_env;
 mod sidebar;
 mod skills;
+mod syntax;
 mod theme;
 mod ui;
 mod ui_state;
@@ -62,6 +64,7 @@ fn main() {
             settings::AppSettings::path().as_deref(),
         ));
         theme::init(cx);
+        syntax::init();
         settings::init_text_size(cx);
         actions::init(cx);
         cx.set_global(config);

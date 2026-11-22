@@ -23,7 +23,32 @@ workspace = { path = "crates/workspace" }
 term = { path = "crates/term" }
 
 # UI. gpui-kit pins the matching `gpui-pre` snapshot; keep it exact (pre-1.0).
-gpui-kit = { version = "=0.10.0", default-features = false, features = ["component", "assets"] }
+# Syntax colors (models.json, SKILL.md, chat code blocks): `tree-sitter` brings JSON, and
+# each `tree-sitter-<lang>` one more grammar. Only these are compiled in; each adds to the
+# binary, so add languages deliberately.
+gpui-kit = { version = "=0.10.0", default-features = false, features = [
+    "component",
+    "assets",
+    "tree-sitter",
+    "tree-sitter-markdown",
+    "tree-sitter-bash",
+    "tree-sitter-c",
+    "tree-sitter-cpp",
+    "tree-sitter-csharp",
+    "tree-sitter-css",
+    "tree-sitter-diff",
+    "tree-sitter-go",
+    "tree-sitter-html",
+    "tree-sitter-java",
+    "tree-sitter-javascript",
+    "tree-sitter-python",
+    "tree-sitter-rust",
+    "tree-sitter-sql",
+    "tree-sitter-toml",
+    "tree-sitter-tsx",
+    "tree-sitter-typescript",
+    "tree-sitter-yaml",
+] }
 
 # Shared
 anyhow = "1"

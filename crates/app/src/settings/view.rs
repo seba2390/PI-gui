@@ -19,6 +19,7 @@ use pi_config::settings::{StartupDefaults, THINKING_LEVELS};
 use remote::HostId;
 
 use super::{AppSettings, StartMode, TextSize, ThemeChoice};
+use crate::code_colors::CodeColors;
 use crate::config::AppConfig;
 use crate::ui::AppIcon;
 
@@ -203,6 +204,26 @@ impl SettingsView {
                             )
                         },
                     ))
+                    .item(
+                        SettingItem::new(
+                            "Code colors",
+                            SettingField::dropdown(
+                                CodeColors::ALL
+                                    .into_iter()
+                                    .map(|colors| (colors.id().into(), colors.label().into()))
+                                    .collect(),
+                                |cx| cx.global::<AppSettings>().code_colors.id().into(),
+                                |value, cx| {
+                                    let colors = CodeColors::from_id(value.as_ref());
+                                    AppSettings::update(cx, |s| s.code_colors = colors);
+                                },
+                            ),
+                        )
+                        .description(
+                            "Syntax colors for code in chat, skills and models.json. \
+                             Each has a light and a dark variant.",
+                        ),
+                    )
                     .item(
                         SettingItem::new(
                             "Text size",

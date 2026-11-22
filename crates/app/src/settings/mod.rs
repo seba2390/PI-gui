@@ -59,6 +59,8 @@ pub enum StartMode {
 #[allow(clippy::struct_excessive_bools)] // independent on/off settings
 pub struct AppSettings {
     pub theme: ThemeChoice,
+    /// The palette for code (syntax colors only; the rest of the theme is unchanged).
+    pub code_colors: crate::code_colors::CodeColors,
     pub text_size: TextSize,
     pub start_mode: StartMode,
     /// Open the last session of the start mode (on this computer or an SSH host) at start,
@@ -83,6 +85,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             theme: ThemeChoice::default(),
+            code_colors: crate::code_colors::CodeColors::default(),
             text_size: TextSize::default(),
             start_mode: StartMode::default(),
             reopen_last_session: false,
@@ -149,6 +152,9 @@ impl AppSettings {
                     });
                 }
             });
+        }
+        if before.code_colors != after.code_colors {
+            crate::theme::apply_code_colors(cx);
         }
         if before.text_size != after.text_size {
             apply_text_size(cx);
@@ -222,6 +228,7 @@ mod tests {
         let path = dir.path().join("nested/settings.json");
         let settings = AppSettings {
             text_size: TextSize::Large,
+            code_colors: crate::code_colors::CodeColors::Gruvbox,
             start_mode: StartMode::Code,
             skipped_version: Some("0.3.0".into()),
             ..AppSettings::default()
