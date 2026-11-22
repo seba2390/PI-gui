@@ -26,7 +26,6 @@ fn live_host_round_trip() {
         .collect();
     eprintln!("config hosts: {aliases:?}");
     eprintln!("resolved: {:?}", resolve(ssh.target()).unwrap());
-    eprintln!("control dir: {}", ssh.control_dir().display());
 
     ssh.disconnect();
     assert!(!ssh.is_connected());
