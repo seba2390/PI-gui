@@ -40,3 +40,32 @@ gpui-kit = { workspace = true, features = ["test-support"] }
 
 [lints]
 workspace = true
+
+# Linux packages, built by the release workflow (`cargo deb`, `cargo generate-rpm`) after
+# `cargo build --release`; it writes target/release/THIRD-PARTY-LICENSES.txt first.
+[package.metadata.deb]
+maintainer = "Sebastian Yde Madsen <75695915+seba2390@users.noreply.github.com>"
+extended-description = "A fast, native desktop app for the pi coding agent (https://pi.dev), written in Rust. Needs pi: npm i -g @earendil-works/pi-coding-agent"
+section = "devel"
+depends = "$auto"
+assets = [
+    ["target/release/pistachio", "usr/bin/", "755"],
+    ["../../packaging/linux/pistachio.desktop", "usr/share/applications/", "644"],
+    ["assets/app-icon/icon-512.png", "usr/share/icons/hicolor/512x512/apps/pistachio.png", "644"],
+    ["../../README.md", "usr/share/doc/pistachio/", "644"],
+    ["../../LICENSE-MIT", "usr/share/doc/pistachio/", "644"],
+    ["../../LICENSE-APACHE", "usr/share/doc/pistachio/", "644"],
+    ["target/release/THIRD-PARTY-LICENSES.txt", "usr/share/doc/pistachio/", "644"],
+]
+
+[package.metadata.generate-rpm]
+summary = "Native desktop app for the pi coding agent"
+assets = [
+    { source = "target/release/pistachio", dest = "/usr/bin/pistachio", mode = "755" },
+    { source = "../../packaging/linux/pistachio.desktop", dest = "/usr/share/applications/pistachio.desktop", mode = "644" },
+    { source = "assets/app-icon/icon-512.png", dest = "/usr/share/icons/hicolor/512x512/apps/pistachio.png", mode = "644" },
+    { source = "../../README.md", dest = "/usr/share/doc/pistachio/README.md", mode = "644", doc = true },
+    { source = "../../LICENSE-MIT", dest = "/usr/share/licenses/pistachio/LICENSE-MIT", mode = "644", doc = true },
+    { source = "../../LICENSE-APACHE", dest = "/usr/share/licenses/pistachio/LICENSE-APACHE", mode = "644", doc = true },
+    { source = "target/release/THIRD-PARTY-LICENSES.txt", dest = "/usr/share/licenses/pistachio/THIRD-PARTY-LICENSES.txt", mode = "644", doc = true },
+]

@@ -6,6 +6,15 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Linux builds for ARM64 (aarch64), and `.deb` and `.rpm` packages for x86_64 and ARM64.
+- Install on macOS with Homebrew: `brew install --cask seba2390/tap/pistachio`.
+
+### Fixed
+
+- "Check for Updates…" on Linux offers the download for your architecture.
+
 ## [0.4.0] - 2026-11-22
 
 ### Added

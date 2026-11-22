@@ -44,8 +44,15 @@ jobs:
           path: ${{ env.ASSET }}
 
   linux:
-    name: Linux (x86_64)
-    runs-on: ubuntu-22.04
+    name: Linux (${{ matrix.arch }})
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -54,24 +61,39 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev \
-            libx11-xcb-dev libxcb1-dev libfontconfig-dev libfreetype-dev libzstd-dev
+            libx11-xcb-dev libxcb1-dev libfontconfig-dev libfreetype-dev libzstd-dev rpm
       - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb,cargo-generate-rpm
       - run: cargo build --release --locked
-      - name: Package
+      - name: Package (.tar.gz, .deb, .rpm)
         run: |
-          dir="pistachio-${GITHUB_REF_NAME}-linux-x86_64"
+          mkdir -p dist
+          python3 script/third-party-licenses.py ${{ matrix.arch }}-unknown-linux-gnu \
+            > target/release/THIRD-PARTY-LICENSES.txt
+          dir="pistachio-${GITHUB_REF_NAME}-linux-${{ matrix.arch }}"
           mkdir -p "$dir"
-          cp target/release/pistachio "$dir/"
+          cp target/release/pistachio target/release/THIRD-PARTY-LICENSES.txt "$dir/"
           cp packaging/linux/pistachio.desktop packaging/linux/install.sh "$dir/"
           cp crates/app/assets/app-icon/icon-512.png "$dir/pistachio.png"
           cp README.md LICENSE-MIT LICENSE-APACHE "$dir/"
-          python3 script/third-party-licenses.py x86_64-unknown-linux-gnu > "$dir/THIRD-PARTY-LICENSES.txt"
-          tar -czf "$dir.tar.gz" "$dir"
-          echo "ASSET=$dir.tar.gz" >> "$GITHUB_ENV"
+          tar -czf "dist/$dir.tar.gz" "$dir"
+          cargo deb -p pistachio --no-build --output dist/
+          cargo generate-rpm -p crates/app --output dist/
+          ls -l dist
+      - name: Check the packages
+        run: |
+          rpm -qpl dist/*.rpm
+          rpm -qpR dist/*.rpm
+          sudo apt-get install -y ./dist/*.deb
+          dpkg -L pistachio
+          test -x /usr/bin/pistachio
+          sudo apt-get remove -y pistachio
       - uses: actions/upload-artifact@v7
         with:
-          name: linux
-          path: ${{ env.ASSET }}
+          name: linux-${{ matrix.arch }}
+          path: dist/*
 
   windows:
     name: Windows (x86_64)
