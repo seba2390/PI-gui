@@ -581,6 +581,8 @@ impl MainWindow {
         self.sidebar
             .update(cx, |sidebar, cx| sidebar.set_mode(mode, window, cx));
         if self.mode(cx) == mode {
+            // Already this mode: back to its chat from the Skills or Settings page.
+            self.close_pages(cx);
             return;
         }
         if mode == Mode::Chat {
@@ -1003,8 +1005,14 @@ impl MainWindow {
         cx: &mut Context<Self>,
     ) {
         match event {
-            SidebarEvent::Open(None, summary) => drop(self.open_session(None, summary, window, cx)),
+            // Clicking a conversation shows it, even the one already behind the Skills or
+            // Settings page (opening it is a no-op then, so close the page here).
+            SidebarEvent::Open(None, summary) => {
+                self.close_pages(cx);
+                drop(self.open_session(None, summary, window, cx));
+            }
             SidebarEvent::Open(Some(host), summary) => {
+                self.close_pages(cx);
                 let target = RemoteTarget {
                     host: host.clone(),
                     folder: summary.cwd.clone(),
@@ -1325,6 +1333,15 @@ impl MainWindow {
     /// Whether the chat column shows a page (Skills or Settings) instead of the chat.
     fn page_open(&self) -> bool {
         self.skills_open || self.settings.is_some()
+    }
+
+    /// Back from the Skills or Settings page to the chat behind it.
+    fn close_pages(&mut self, cx: &mut Context<Self>) {
+        if self.page_open() {
+            self.close_skills(cx);
+            self.close_settings(cx);
+            cx.notify();
+        }
     }
 
     /// Shows (or hides) the Settings page.
@@ -1813,11 +1830,7 @@ impl MainWindow {
         if self.mode(cx) == mode && self.chat.read(cx).session().read(cx).is_empty() {
             // The Skills or Settings page covers the chat: going back to it is the new
             // conversation (otherwise the click seems to do nothing).
-            if self.page_open() {
-                self.close_skills(cx);
-                self.close_settings(cx);
-                cx.notify();
-            }
+            self.close_pages(cx);
             focus_chat(&self.chat, window, cx);
             return;
         }

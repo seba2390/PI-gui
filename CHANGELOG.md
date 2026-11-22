@@ -33,6 +33,11 @@ All notable changes to PI-gui are listed here. The format follows
 - Tool calls in the chat read in the past tense like the rest: "Wrote", "Edited", "Listed" and
   "Searched" instead of "Write", "Edit", "List" and "Search".
 
+### Fixed
+
+- Clicking the conversation already behind the Settings or Skills page (or the Chat / Code
+  mode already in use) did nothing; it now closes the page and shows the conversation.
+
 ## [0.4.2] - 2026-11-22
 
 ### Added
