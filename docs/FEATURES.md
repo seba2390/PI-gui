@@ -91,8 +91,8 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
     host key is explained, and you can remove the old key and confirm the new one.
   - The folder browser takes a typed or pasted path, creates folders and can show hidden ones.
   - Remote sessions behave like local ones: they are listed in the sidebar under the host
-    (then folder), can be opened, renamed and moved to the host's trash, and the last one
-    comes back after a restart. The Diff and Files tabs read git and the folder over SSH
+    (then folder), can be opened, renamed and moved to the host's trash, and with "Reopen the
+    last session" the last one comes back after a restart. The Diff and Files tabs read git and the folder over SSH
     (refreshed every 10 s while shown and after each turn), the terminal is your shell on the
     host in the session's folder, and the attach picker indexes the remote folder.
   - When the connection drops, the session offers to reconnect and resumes its session file.
@@ -123,6 +123,29 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
 - macOS and Linux, plus an experimental Windows build. GPU-rendered with [GPUI](https://gpui.rs) via
   [gpui-kit](https://gpui-kit.com).
 
+## Settings and updates
+
+Settings opens from the Pistachio menu (⌘,) or the button at the bottom of the sidebar. Every
+change is saved right away.
+
+- **General:** theme (follow the system, light or dark), text size (scales the interface),
+  whether to open in Chat, Code or the mode used last, reopening the last session, and
+  notifications for chats working in the background.
+- **pi & models:** which `pi` to run (`PISTACHIO_PI_BIN` still wins), the model and thinking
+  level pi starts with (saved in pi's own `settings.json`, like `/settings` in the terminal),
+  and shortcuts to add models or edit `models.json`.
+- **Web search:** the search service (DuckDuckGo, SearXNG, Brave or Tavily, with API keys
+  stored only on this computer), whether new chats search, limits per message, and local
+  network access.
+- **SSH connections:** saved hosts with their status, connecting, adding and managing them.
+
+The app's own settings live in `~/.pi/agent/pistachio/settings.json`.
+
+**Updates.** When Pistachio opens (and from **Check for Updates…** in the Pistachio menu or
+Settings) it asks GitHub for the latest release. If there is a newer one, it shows what's new
+and offers to download it in your browser: nothing is downloaded or installed without a yes,
+and a version can be skipped. The automatic check can be turned off in Settings.
+
 ## Keyboard shortcuts
 
 Composer behaviour mirrors pi's terminal.
@@ -142,6 +165,7 @@ Composer behaviour mirrors pi's terminal.
 | ⌘⇧D / ⌘⇧E | Changes / files panel |
 | Ctrl+` | Toggle terminal |
 | ⌘W / ⌘M | Close (the app keeps running) / minimize the window |
+| ⌘, | Settings |
 
 (Use Ctrl instead of ⌘ on Linux/Windows.)
 

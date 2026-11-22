@@ -30,18 +30,24 @@ pub fn init(cx: &mut App) {
     Theme::sync_system_appearance(None, cx);
 }
 
-/// Follows the OS light/dark setting for `window`.
+/// Light or dark as chosen in Settings, following the OS for `window` by default.
 pub fn sync_with_window(window: &mut Window, cx: &mut App) {
-    let mode = match window.appearance() {
-        gpui_kit::WindowAppearance::Dark | gpui_kit::WindowAppearance::VibrantDark => {
-            ThemeMode::Dark
-        }
-        gpui_kit::WindowAppearance::Light | gpui_kit::WindowAppearance::VibrantLight => {
-            ThemeMode::Light
-        }
+    use crate::settings::{AppSettings, ThemeChoice};
+    let mode = match cx.default_global::<AppSettings>().theme {
+        ThemeChoice::Light => ThemeMode::Light,
+        ThemeChoice::Dark => ThemeMode::Dark,
+        ThemeChoice::System => match window.appearance() {
+            gpui_kit::WindowAppearance::Dark | gpui_kit::WindowAppearance::VibrantDark => {
+                ThemeMode::Dark
+            }
+            gpui_kit::WindowAppearance::Light | gpui_kit::WindowAppearance::VibrantLight => {
+                ThemeMode::Light
+            }
+        },
     };
     if cx.theme().mode != mode {
         Theme::change(mode, Some(window), cx);
+        crate::settings::apply_text_size(cx);
     }
 }
 

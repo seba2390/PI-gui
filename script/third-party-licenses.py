@@ -13,6 +13,8 @@ NAMES = ("license", "licence", "copying", "notice", "unlicense", "copyright", "a
 
 
 def main() -> None:
+    # License texts contain names like "Michał"; Windows' console encoding can't write them.
+    sys.stdout.reconfigure(encoding="utf-8")
     target = sys.argv[1] if len(sys.argv) > 1 else None
     cmd = ["cargo", "metadata", "--format-version", "1", "--locked"]
     if target:

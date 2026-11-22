@@ -160,7 +160,7 @@ pub fn session_row(
 /// aligned with the session rows below.
 pub fn action_row(
     id: &'static str,
-    icon: AppIcon,
+    icon: Icon,
     label: &'static str,
     selected: bool,
     event: SidebarEvent,
@@ -185,7 +185,7 @@ pub fn action_row(
         .when(selected, |this| this.bg(active_bg))
         .hover(|style| style.bg(hover_bg))
         .on_click(cx.listener(move |_, _, _, cx| cx.emit(event.clone())))
-        .child(Icon::from(icon).small().text_color(theme.muted_foreground))
+        .child(icon.small().text_color(theme.muted_foreground))
         .child(label)
 }
 

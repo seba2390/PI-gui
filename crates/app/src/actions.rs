@@ -23,6 +23,8 @@ actions!(
         CloseWindow,
         Minimize,
         Zoom,
+        OpenSettings,
+        CheckForUpdates,
     ]
 );
 
@@ -65,6 +67,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new(primary!("2"), ShowCodeMode, Some(WINDOW_CONTEXT)),
         KeyBinding::new(primary!("q"), Quit, None),
         KeyBinding::new(primary!("w"), CloseWindow, Some(WINDOW_CONTEXT)),
+        KeyBinding::new(primary!(","), OpenSettings, Some(WINDOW_CONTEXT)),
     ]);
     cx.on_action(|_: &Quit, cx| cx.quit());
     cx.on_action(|_: &Hide, cx| cx.hide());
@@ -85,6 +88,10 @@ pub fn init(cx: &mut App) {
 fn menus() -> Vec<Menu> {
     vec![
         Menu::new("Pistachio").items([
+            MenuItem::action("Check for Updates…", CheckForUpdates),
+            MenuItem::separator(),
+            MenuItem::action("Settings…", OpenSettings),
+            MenuItem::separator(),
             MenuItem::os_submenu("Services", SystemMenuType::Services),
             MenuItem::separator(),
             MenuItem::action("Hide Pistachio", Hide),
@@ -143,6 +150,7 @@ mod tests {
             primary!("shift-e"),
             primary!("l"),
             primary!("w"),
+            primary!(","),
         ];
         for keys in primary {
             assert!(Keystroke::parse(keys).is_ok(), "{keys}");

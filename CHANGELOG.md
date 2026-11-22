@@ -6,7 +6,32 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-22
+
+### Added
+
+- **Settings page** (⌘, or the button at the bottom of the sidebar): theme, text size, start
+  mode, reopening the last session, background notifications, which `pi` to run, pi's startup
+  model and thinking level, web search service, keys and limits, and SSH connections.
+- **Check for Updates…** in the Pistachio menu and in Settings, plus an optional check when the
+  app opens. A newer release is offered (what's new, download in the browser, skip this
+  version); nothing is downloaded without a yes.
+
+### Changed
+
+- The last session is reopened at start only with the new "Reopen the last session" setting
+  (before, an SSH session came back on its own).
+- Web search's `config.json` is written atomically and readable only by you.
+
+### Fixed
+
+- The Windows release packaging (license notices with non-ASCII names), so 0.2.0's changes
+  ship in this release.
+
 ## [0.2.0] - 2026-11-22
+
+Tagged but not published as downloads (the Windows packaging failed); its changes are in
+0.3.0.
 
 ### Changed
 
@@ -80,6 +105,7 @@ chats, skills and model management. Changes since the last private build:
 - A corrupt `hosts.json` is kept as a backup.
 - A remembered terminal height can no longer squeeze out the chat.
 
-[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/seba2390/pistachio/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/seba2390/pistachio/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/seba2390/pistachio/releases/tag/v0.1.0
