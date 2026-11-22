@@ -6,6 +6,12 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-22
+
+The first public release: chat and code sessions over pi's RPC mode, with streaming
+transcripts, git changes and file panels, an integrated terminal, SSH remotes, web search for
+chats, skills and model management. Changes since the last private build:
+
 ### Added
 
 - Labelled bash calls show only their label; click to see the command and output.
@@ -51,3 +57,6 @@ All notable changes to PI-gui are listed here. The format follows
 - Saves of UI state and SSH hosts can no longer land out of order.
 - A corrupt `hosts.json` is kept as a backup.
 - A remembered terminal height can no longer squeeze out the chat.
+
+[Unreleased]: https://github.com/seba2390/PI-gui/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/seba2390/PI-gui/releases/tag/v0.1.0
