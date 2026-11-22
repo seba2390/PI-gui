@@ -5,6 +5,7 @@ pub mod composer;
 mod context_panel;
 pub mod dialogs;
 mod file_picker;
+mod find;
 pub(crate) mod mention;
 pub mod models_dialog;
 mod rows;
@@ -42,6 +43,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("ctrl-o", ToggleToolOutput, Some(CHAT_CONTEXT)),
     ]);
     composer::init(cx);
+    find::init(cx);
 }
 
 /// Identifies one block of one transcript item, for expansion and markdown state.
@@ -116,6 +118,8 @@ pub struct ChatView {
     /// Syntax colors of edit diffs and read files in tool rows, so re-rendering (scrolling,
     /// streaming) never parses the same code twice. Filled while rendering, hence the cell.
     highlights: std::cell::RefCell<crate::code_highlight::HighlightCache>,
+    /// The find bar (⌘F), while open.
+    find: Option<find::Find>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -200,6 +204,7 @@ impl ChatView {
             stopped_unseen: false,
             pi_field: None,
             highlights: std::cell::RefCell::default(),
+            find: None,
             _subscriptions: subscriptions,
         };
         this.sync(cx);
@@ -538,6 +543,8 @@ impl ChatView {
                 }
             }));
         }
+        // Matches move with the transcript (new text, a reload).
+        self.refresh_find(cx);
         cx.notify();
     }
 
@@ -768,8 +775,9 @@ impl Render for ChatView {
         }
         let pi_field = self.pi_field.clone();
 
-        v_flex()
-            .relative()
+        let find_bar = self.render_find(cx);
+        let root = self.find_actions(v_flex(), cx);
+        root.relative()
             .key_context(CHAT_CONTEXT)
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::toggle_all_thinking))
@@ -793,6 +801,7 @@ impl Render for ChatView {
                 self.render_empty(cx).into_any_element()
             } else {
                 div()
+                    .relative()
                     .flex_1()
                     .min_h_0()
                     .child(
@@ -806,6 +815,7 @@ impl Render for ChatView {
                         .with_bottom_fade(background)
                         .size_full(),
                     )
+                    .children(find_bar)
                     .into_any_element()
             })
             .child(

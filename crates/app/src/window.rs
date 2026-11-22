@@ -18,7 +18,7 @@ use pi_sessions::SessionSummary;
 use pi_sessions::Mode;
 
 use crate::actions::{
-    CheckForUpdates, FocusComposer, NewChat, OpenSettings, ResumeSession, ShowChatMode,
+    CheckForUpdates, FindInChat, FocusComposer, NewChat, OpenSettings, ResumeSession, ShowChatMode,
     ShowCodeMode, ShowDiff, ShowFiles, ToggleRightPanel, ToggleSidebar, ToggleTerminal,
     WINDOW_CONTEXT,
 };
@@ -384,6 +384,11 @@ impl MainWindow {
                     if let Some(model) = crate::stt::catalog::model(&other["speech-get:".len()..]) {
                         crate::stt::ui::start_download(model, cx);
                     }
+                }
+                other if other.starts_with("find:") => {
+                    let chat = self.chat.clone();
+                    let text = other["find:".len()..].to_owned();
+                    chat.update(cx, |chat, cx| chat.find_text(&text, window, cx));
                 }
                 other if other.starts_with("open-skill:") => {
                     let path = other.trim_start_matches("open-skill:").to_owned();
@@ -2017,6 +2022,15 @@ impl MainWindow {
         UiState::update(cx, |state| state.terminal_height = Some(height));
     }
 
+    /// ⌘F: the find bar of the conversation on screen.
+    fn find_in_chat(&mut self, _: &FindInChat, window: &mut Window, cx: &mut Context<Self>) {
+        if self.welcome {
+            return;
+        }
+        let chat = self.chat.clone();
+        chat.update(cx, |chat, cx| chat.open_find(window, cx));
+    }
+
     fn focus_composer(&mut self, _: &FocusComposer, window: &mut Window, cx: &mut Context<Self>) {
         focus_chat(&self.chat, window, cx);
     }
@@ -2568,6 +2582,7 @@ impl Render for MainWindow {
             .on_action(cx.listener(Self::show_diff))
             .on_action(cx.listener(Self::show_files))
             .on_action(cx.listener(Self::focus_composer))
+            .on_action(cx.listener(Self::find_in_chat))
             .on_action(cx.listener(Self::show_chat_mode))
             .on_action(cx.listener(Self::show_code_mode))
             .on_action(cx.listener(Self::resume_session))

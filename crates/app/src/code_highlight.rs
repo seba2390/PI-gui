@@ -225,6 +225,49 @@ pub fn join_lines(
     out
 }
 
+/// `top` drawn over `base` (both sorted and non-overlapping), as one sorted,
+/// non-overlapping list for a `StyledText`: where they overlap, `top`'s fields win (find
+/// highlights over syntax colors).
+pub fn overlay(
+    base: &[(Range<usize>, HighlightStyle)],
+    top: &[(Range<usize>, HighlightStyle)],
+) -> Vec<(Range<usize>, HighlightStyle)> {
+    if top.is_empty() {
+        return base.to_vec();
+    }
+    if base.is_empty() {
+        return top.to_vec();
+    }
+    let mut points: Vec<usize> = base
+        .iter()
+        .chain(top)
+        .flat_map(|(range, _)| [range.start, range.end])
+        .collect();
+    points.sort_unstable();
+    points.dedup();
+    // The style of `list` covering `at`, walking forward with `ix` (segments come in order).
+    let covering = |list: &[(Range<usize>, HighlightStyle)], ix: &mut usize, at: usize| {
+        while *ix < list.len() && list[*ix].0.end <= at {
+            *ix += 1;
+        }
+        list.get(*ix)
+            .filter(|(range, _)| range.start <= at)
+            .map(|(_, style)| *style)
+    };
+    let (mut b, mut t) = (0, 0);
+    let mut out: Vec<(Range<usize>, HighlightStyle)> = Vec::new();
+    for pair in points.windows(2) {
+        let (start, end) = (pair[0], pair[1]);
+        let style = match (covering(base, &mut b, start), covering(top, &mut t, start)) {
+            (None, None) => continue,
+            (Some(style), None) | (None, Some(style)) => style,
+            (Some(under), Some(over)) => under.highlight(over),
+        };
+        out.push((start..end, style));
+    }
+    out
+}
+
 /// Per-line styles keyed by content, valid for one highlight theme.
 #[derive(Default)]
 pub struct HighlightCache {
@@ -403,6 +446,34 @@ mod tests {
             joined.iter().map(|(r, _)| r.clone()).collect::<Vec<_>>(),
             [2..5, 10..13]
         );
+    }
+
+    #[test]
+    fn overlay_splits_where_styles_meet() {
+        let red = hsla(0., 1., 0.5, 1.);
+        let blue = hsla(0.6, 1., 0.5, 1.);
+        let yellow = hsla(0.15, 1., 0.5, 1.);
+        let color = |c| HighlightStyle {
+            color: Some(c),
+            ..Default::default()
+        };
+        let base = [(0..4, color(red)), (6..10, color(blue))];
+        let top = [(
+            2..8,
+            HighlightStyle {
+                background_color: Some(yellow),
+                ..Default::default()
+            },
+        )];
+        let out = overlay(&base, &top);
+        let ranges: Vec<_> = out.iter().map(|(r, _)| r.clone()).collect();
+        assert_eq!(ranges, [0..2, 2..4, 4..6, 6..8, 8..10]);
+        assert_eq!(out[1].1.color, Some(red));
+        assert_eq!(out[1].1.background_color, Some(yellow));
+        assert_eq!(out[2].1.color, None);
+        assert_eq!(out[3].1.color, Some(blue));
+        assert_eq!(out[4].1.background_color, None);
+        assert_eq!(overlay(&base, &[]), base.to_vec());
     }
 
     #[test]

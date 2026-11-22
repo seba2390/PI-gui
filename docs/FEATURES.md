@@ -118,6 +118,11 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   reads (on the SSH host for remote sessions); the previous version is kept as
   `models.json.bak-pistachio`. pi reads the file only when it starts, so after saving it restarts
   on the same session (after the current turn, if one is running) and selects the new model.
+- **Find in chat** (⌘F): a search bar over the conversation. Every match is highlighted;
+  Enter / Shift+Enter (or ⌘G / ⌘⇧G) go to the next / previous one with a "3 of 12" count, and
+  Esc closes the bar. It searches prompts and replies as shown, thinking, tool output and the
+  agent's edits, including collapsed rows: the row with the current match opens and the
+  transcript scrolls to it. Case is ignored.
 - Right panel: git changes and a file tree of the working folder.
 - Syntax colors for code by file extension: chat code blocks, the agent's edits (its diffs
   in the chat), the files it reads, and the Changes panel's diffs. Diffs keep their red and
@@ -194,6 +199,8 @@ Composer behaviour mirrors pi's terminal.
 | Ctrl+T / Ctrl+O | Expand all thinking / tool output |
 | ⌘N / ⌘B / ⌘⌥B | New chat or session / toggle sidebar / toggle right panel |
 | ⌘1 / ⌘2 | Chat mode / Code mode |
+| ⌘F | Find in the conversation |
+| Enter / Shift+Enter, ⌘G / ⌘⇧G | Next / previous match (in the find bar) |
 | ⌘⇧D / ⌘⇧E | Changes / files panel |
 | Ctrl+` | Toggle terminal |
 | ⌘W / ⌘M | Close (the app keeps running) / minimize the window |

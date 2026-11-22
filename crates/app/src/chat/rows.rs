@@ -11,6 +11,7 @@ use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use transcript::explore::{Group, RowRole};
+use transcript::search::Field;
 use transcript::tool::{self, DiffKind, PathContext};
 use transcript::{
     AssistantItem, BlockKind, ItemKind, NestedEntry, NoticeKind, RunStatus, ThinkingBlock,
@@ -26,8 +27,9 @@ use crate::ui::{AppIcon, CopyButton, QuietButton as _};
 
 /// Collapsed tool output shows at most this many lines.
 const PREVIEW_LINES: usize = 3;
-/// Expanded tool output is capped to keep rows cheap; the rest is summarized.
-const MAX_OUTPUT_LINES: usize = 400;
+/// Expanded tool output is capped to keep rows cheap (at `search::MAX_OUTPUT_LINES`, which is
+/// what find searches); the rest is summarized.
+use transcript::search::{self, MAX_OUTPUT_LINES};
 /// Spinner glyphs, played forwards then backwards so the star "breathes"; one per chat tick.
 pub(crate) const SPINNER: [&str; 10] = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"];
 
@@ -48,6 +50,7 @@ struct RowContext<'a> {
     mono: SharedString,
     /// Syntax colors (the user's Code colors) for edits and files shown in tool rows.
     highlight: Arc<HighlightTheme>,
+    app: &'a App,
 }
 
 pub fn render_row(
@@ -81,6 +84,7 @@ pub fn render_row(
         border: theme.border,
         mono: theme.mono_font_family.clone(),
         highlight: theme.highlight_theme.clone(),
+        app: cx,
     };
 
     let content = match (items.get(row), chat.role(row)) {
@@ -184,7 +188,16 @@ fn render_item(item: &TranscriptItem, cx: &RowContext<'_>, bubble: Hsla, app: &A
                     }),
             )
             .when(!output.trim().is_empty(), |this| {
-                this.child(output_box(("bash-out", item.id.0), output, None, cx))
+                this.child(output_box(
+                    ("bash-out", item.id.0),
+                    output,
+                    None,
+                    BlockKey {
+                        item: item.id,
+                        block: 0,
+                    },
+                    cx,
+                ))
             })
             .into_any_element(),
         ItemKind::Notice(notice) => {
@@ -473,7 +486,10 @@ fn render_thinking(key: BlockKey, thinking: &ThinkingBlock, cx: &RowContext<'_>)
                     .border_color(cx.border)
                     .text_sm()
                     .text_color(cx.muted)
-                    .child(thinking.text.trim().to_owned()),
+                    .child(
+                        StyledText::new(thinking.text.trim().to_owned())
+                            .with_highlights(cx.chat.find_highlights(key, Field::Thinking, cx.app)),
+                    ),
             )
         })
         .into_any_element()
@@ -781,6 +797,7 @@ fn render_tool(key: BlockKey, tool: &ToolBlock, cx: &RowContext<'_>) -> AnyEleme
                     ("tool-diff", key.item.0 * 1_000 + key.block as u64),
                     lines,
                     language.map(|language| diff_styles(language, lines, cx)),
+                    key,
                     cx,
                 ),
                 None if !tool.output.trim().is_empty() => output_box(
@@ -789,6 +806,7 @@ fn render_tool(key: BlockKey, tool: &ToolBlock, cx: &RowContext<'_>) -> AnyEleme
                     language
                         .filter(|_| tool.name == "read")
                         .map(|language| file_styles(language, &tool.output, cx)),
+                    key,
                     cx,
                 ),
                 None => div()
@@ -930,29 +948,32 @@ fn plural(count: usize, noun: &str) -> String {
     format!("{count} {noun}{}", if count == 1 { "" } else { "s" })
 }
 
+/// Tool or shell output in a scrolling box, with syntax colors for a file that was read
+/// and find highlights. It shows [`search::shown_output`], the text find searches.
 fn output_box(
     id: impl Into<ElementId>,
     output: &str,
     styles: Option<Rc<Vec<LineStyles>>>,
+    key: BlockKey,
     cx: &RowContext<'_>,
 ) -> AnyElement {
-    let lines: Vec<&str> = output.trim_end().lines().collect();
-    let mut text = lines
-        .iter()
-        .take(MAX_OUTPUT_LINES)
-        .copied()
-        .collect::<Vec<_>>()
-        .join("\n");
-    let highlights =
-        styles.map(|styles| code_highlight::join_lines(&styles, output, MAX_OUTPUT_LINES));
-    if lines.len() > MAX_OUTPUT_LINES {
-        let _ = write!(text, "\n… {} more lines", lines.len() - MAX_OUTPUT_LINES);
+    let shown = search::shown_output(output);
+    let total = output.trim_end().lines().count();
+    let syntax = styles
+        .map(|styles| code_highlight::join_lines(&styles, output, MAX_OUTPUT_LINES))
+        .unwrap_or_default();
+    let find = cx.chat.find_highlights(key, Field::Output, cx.app);
+    let highlights = code_highlight::overlay(&syntax, &find);
+    let mut text = shown.into_owned();
+    if total > MAX_OUTPUT_LINES {
+        let _ = write!(text, "\n… {} more lines", total - MAX_OUTPUT_LINES);
     }
+    // With the current find match inside, the box shows everything so the match is visible.
+    let full = cx.chat.find_current_in(key);
     div()
         .id(id)
         .w_full()
-        .max_h(px(320.))
-        .overflow_y_scroll()
+        .when(!full, |this| this.max_h(px(320.)).overflow_y_scroll())
         .p_2()
         .rounded_md()
         .bg(cx.palette.code_bg)
@@ -961,12 +982,7 @@ fn output_box(
         .font_family(cx.mono.clone())
         .text_xs()
         .text_color(cx.foreground)
-        .child(match highlights {
-            Some(highlights) => StyledText::new(text)
-                .with_highlights(highlights)
-                .into_any_element(),
-            None => text.into_any_element(),
-        })
+        .child(StyledText::new(text).with_highlights(highlights))
         .into_any_element()
 }
 
@@ -974,8 +990,10 @@ fn diff_box(
     id: impl Into<ElementId>,
     lines: &[tool::DiffLine],
     styles: Option<Rc<Vec<LineStyles>>>,
+    key: BlockKey,
     cx: &RowContext<'_>,
 ) -> AnyElement {
+    let full = cx.chat.find_current_in(key);
     let gutter = lines
         .iter()
         .filter_map(|line| line.line_number)
@@ -988,7 +1006,14 @@ fn diff_box(
         .enumerate()
         .take(MAX_OUTPUT_LINES)
         .map(|(ix, line)| {
-            let line_styles = styles.as_ref().and_then(|styles| styles.get(ix));
+            let syntax = styles
+                .as_ref()
+                .and_then(|styles| styles.get(ix))
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            let find = cx.chat.find_highlights(key, Field::DiffLine(ix), cx.app);
+            let line_styles = (!syntax.is_empty() || !find.is_empty())
+                .then(|| code_highlight::overlay(syntax, &find));
             let (sign, fg, bg) = match line.kind {
                 DiffKind::Added => ("+", cx.palette.added, Some(cx.palette.added_bg)),
                 DiffKind::Removed => ("-", cx.palette.removed, Some(cx.palette.removed_bg)),
@@ -1013,12 +1038,11 @@ fn diff_box(
                 .child(match line_styles {
                     // Code colors on top of the added/removed background; the sign keeps
                     // the red/green.
-                    Some(line_styles) if line.kind != DiffKind::Gap => {
-                        div().flex_1().min_w_0().text_color(cx.foreground).child(
-                            StyledText::new(line.text.clone())
-                                .with_highlights(line_styles.iter().cloned()),
-                        )
-                    }
+                    Some(line_styles) if line.kind != DiffKind::Gap => div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_color(cx.foreground)
+                        .child(StyledText::new(line.text.clone()).with_highlights(line_styles)),
                     _ => div().flex_1().min_w_0().text_color(fg).child(
                         if line.kind == DiffKind::Gap {
                             "⋯".to_owned()
@@ -1031,8 +1055,7 @@ fn diff_box(
     div()
         .id(id)
         .w_full()
-        .max_h(px(360.))
-        .overflow_y_scroll()
+        .when(!full, |this| this.max_h(px(360.)).overflow_y_scroll())
         .py_1()
         .rounded_md()
         .bg(cx.palette.code_bg)

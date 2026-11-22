@@ -18,6 +18,10 @@ All notable changes to PI-gui are listed here. The format follows
 - Dictation shortcut: ⌘⇧Space (Ctrl+Shift+Space on Linux/Windows) in the message box. Hold
   it to talk and let go to keep the text, or tap it to start and tap again to stop. Without a
   model it offers the download, like the microphone button.
+- Find in chat (⌘F, also Edit → Find in Chat): highlights every match in the conversation,
+  with Enter / Shift+Enter (or ⌘G / ⌘⇧G) for the next / previous one and a "3 of 12" count;
+  Esc closes it. Thinking, tool output and edits are searched too, and a collapsed row opens
+  when it holds the current match.
 - Settings → Appearance → Code colors: pick the syntax colors for code (Pistachio, One,
   GitHub, Solarized, Gruvbox or Catppuccin), each with a light and a dark variant. A Python
   snippet below the picker shows the chosen palette right away. Only code colors change; the

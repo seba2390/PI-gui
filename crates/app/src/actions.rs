@@ -25,6 +25,7 @@ actions!(
         Zoom,
         OpenSettings,
         CheckForUpdates,
+        FindInChat,
     ]
 );
 
@@ -63,6 +64,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new(primary!("shift-d"), ShowDiff, Some(WINDOW_CONTEXT)),
         KeyBinding::new(primary!("shift-e"), ShowFiles, Some(WINDOW_CONTEXT)),
         KeyBinding::new(primary!("l"), FocusComposer, Some(WINDOW_CONTEXT)),
+        KeyBinding::new(primary!("f"), FindInChat, Some(WINDOW_CONTEXT)),
         KeyBinding::new(primary!("1"), ShowChatMode, Some(WINDOW_CONTEXT)),
         KeyBinding::new(primary!("2"), ShowCodeMode, Some(WINDOW_CONTEXT)),
         KeyBinding::new(primary!("q"), Quit, None),
@@ -113,6 +115,8 @@ fn menus() -> Vec<Menu> {
             MenuItem::os_action("Copy", Copy, OsAction::Copy),
             MenuItem::os_action("Paste", Paste, OsAction::Paste),
             MenuItem::os_action("Select All", SelectAll, OsAction::SelectAll),
+            MenuItem::separator(),
+            MenuItem::action("Find in Chat", FindInChat),
         ]),
         Menu::new("View").items([
             MenuItem::action("Chat", ShowChatMode),

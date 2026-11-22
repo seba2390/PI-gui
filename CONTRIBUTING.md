@@ -64,7 +64,8 @@ checks scriptable:
 - Mode and panels: `chat`, `code`, `terminal`, `diff`, `files`, `no-sidebar`;
   `diff-expand-all` opens the Changes tab with every file expanded, and `expand-tools` expands
   every tool call in the chat (like Ctrl+O).
-- Sessions and popovers: `latest`, `attach`, `context`.
+- Sessions and popovers: `latest`, `attach`, `context`; `find:<text>` opens the find bar
+  searching for `<text>`.
 - Dialogs: `add-host`, `manage-hosts`, `add-model`, `add-provider`, `edit-models`.
 - Skills page: `skills`, `new-skill`, `open-skill:<path>`; the Settings page: `settings`.
 - SSH: `ssh:<alias>`, `remote:<alias>:<folder>` and `remote-latest:<alias>` open a remote
