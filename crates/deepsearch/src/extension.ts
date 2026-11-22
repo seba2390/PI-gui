@@ -1,13 +1,13 @@
-// Web search for PI-gui chats: off, search (a quick lookup) or deep (a thorough investigation),
+// Web search for Pistachio chats: off, search (a quick lookup) or deep (a thorough investigation),
 // set with `/websearch off|search|deep`. This file only connects pi to the Rust helper that does
-// the work (PI-gui's own executable, run as `<exe> --deepsearch-tool <command>` with JSON on
-// stdin). PI-gui writes this file on start; edits here are overwritten. Settings and each mode's
+// the work (Pistachio's own executable, run as `<exe> --deepsearch-tool <command>` with JSON on
+// stdin). Pistachio writes this file on start; edits here are overwritten. Settings and each mode's
 // instructions live next to it in config.json, prompt-search.md and prompt-deep.md.
 import { spawn } from "node:child_process";
 import { Type } from "typebox";
 
-const BIN = process.env.PI_GUI_DEEPSEARCH_BIN;
-const KEY = "pi-gui-deepsearch";
+const BIN = process.env.PISTACHIO_DEEPSEARCH_BIN;
+const KEY = "pistachio-deepsearch";
 const TOOLS = ["web_search", "web_fetch"];
 const MODES = ["off", "search", "deep"] as const;
 type Mode = (typeof MODES)[number];
@@ -25,7 +25,7 @@ type Reply = {
 function helper(command: string, input: unknown, signal?: AbortSignal): Promise<Reply> {
   return new Promise((resolve) => {
     if (!BIN) {
-      resolve({ ok: false, error: "Deep search only works in sessions started by PI-gui." });
+      resolve({ ok: false, error: "Deep search only works in sessions started by Pistachio." });
       return;
     }
     const child = spawn(BIN, ["--deepsearch-tool", command], { stdio: ["pipe", "pipe", "pipe"], signal });

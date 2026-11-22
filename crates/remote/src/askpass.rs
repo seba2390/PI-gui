@@ -25,8 +25,8 @@ use std::net::{TcpListener as Listener, TcpStream as Stream};
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener as Listener, UnixStream as Stream};
 
-const SOCKET_ENV: &str = "PI_GUI_ASKPASS_SOCKET";
-const TOKEN_ENV: &str = "PI_GUI_ASKPASS_TOKEN";
+const SOCKET_ENV: &str = "PISTACHIO_ASKPASS_SOCKET";
+const TOKEN_ENV: &str = "PISTACHIO_ASKPASS_TOKEN";
 /// How long a prompt may stay unanswered before ssh is told it was cancelled.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -171,7 +171,7 @@ pub fn run_client_if_requested() -> Option<i32> {
         }
         Ok(None) => 1,
         Err(error) => {
-            eprintln!("pi-gui askpass: {error}");
+            eprintln!("pistachio askpass: {error}");
             1
         }
     })

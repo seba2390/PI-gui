@@ -543,7 +543,10 @@ fn default_shell() -> Option<tty::Shell> {
 #[cfg(windows)]
 #[allow(clippy::unnecessary_wraps)] // same signature as the Unix version
 fn default_shell() -> Option<tty::Shell> {
-    Some(tty::Shell::new("powershell.exe".to_owned(), vec!["-NoLogo".to_owned()]))
+    Some(tty::Shell::new(
+        "powershell.exe".to_owned(),
+        vec!["-NoLogo".to_owned()],
+    ))
 }
 
 #[cfg(test)]

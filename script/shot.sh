@@ -4,9 +4,9 @@
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cwd="$1"; out="$2"; panels="${3:-}"; wait="${4:-3}"
-pkill -f "PI.app/Contents/MacOS/pi-gui" 2>/dev/null || true
+pkill -f "Pistachio.app/Contents/MacOS/pistachio" 2>/dev/null || true
 sleep 0.5
-(cd "$cwd" && PI_GUI_OPEN="$panels" nohup "$root/target/debug/PI.app/Contents/MacOS/pi-gui" >"$out.log" 2>&1 &)
+(cd "$cwd" && PISTACHIO_OPEN="$panels" nohup "$root/target/debug/Pistachio.app/Contents/MacOS/pistachio" >"$out.log" 2>&1 &)
 sleep "$wait"
 screencapture -x "$out"
 echo "$out"

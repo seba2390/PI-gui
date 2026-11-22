@@ -1,9 +1,9 @@
-//! UI-agnostic SSH support for PI-gui: pi runs *on* the remote machine and the GUI talks to it
+//! UI-agnostic SSH support for Pistachio: pi runs *on* the remote machine and the GUI talks to it
 //! over `ssh host … pi --mode rpc`.
 //!
 //! * [`config`] — host aliases discovered from the user's OpenSSH config, and `ssh -G`
 //!   resolution of a target to its effective hostname, user and port.
-//! * [`host`] — saved connections (`<agent dir>/pi-gui/hosts.json`).
+//! * [`host`] — saved connections (`<agent dir>/pistachio/hosts.json`).
 //! * [`ssh`] — talking to one host: a shared (`ControlMaster`) connection, remote shell scripts,
 //!   probing for pi, listing remote folders, and the command line that starts pi remotely.
 //!   Also: installing pi automatically (`Ssh::install_pi`), interactive connections with
@@ -31,4 +31,4 @@ pub use config::{ConfigHost, Resolved, discover_hosts, parse_config, resolve};
 pub use error::{RemoteError, classify};
 pub use host::{HostId, HostStore, SavedHost, Target};
 pub use sessions::SessionIndex;
-pub use ssh::{DirListing, MANAGED_DIR, Probe, Ssh, remote_word, sh_quote};
+pub use ssh::{DirListing, LEGACY_MANAGED_DIR, MANAGED_DIR, Probe, Ssh, remote_word, sh_quote};

@@ -61,9 +61,14 @@ pub enum Mode {
 }
 
 impl Mode {
-    /// The mode of a session that runs in `cwd`, given the GUI's chat folder.
+    /// The mode of a session that runs in `cwd`, given the GUI's chat folder. Chats started
+    /// before the rename from PI-gui ran in `<agent dir>/pi-gui/chat` and are chats too.
     pub fn of(cwd: &Path, chat_dir: &Path) -> Self {
-        if cwd == chat_dir {
+        let legacy = chat_dir
+            .parent()
+            .and_then(Path::parent)
+            .map(|agent| agent.join(LEGACY_APP_DIR).join("chat"));
+        if cwd == chat_dir || legacy.as_deref() == Some(cwd) {
             Self::Chat
         } else {
             Self::Code
@@ -71,9 +76,38 @@ impl Mode {
     }
 }
 
-/// The folder chat-mode sessions run in: `<agent dir>/pi-gui/chat`.
+/// The app's own folder inside pi's agent dir (settings, chat folder, web search).
+pub const APP_DIR: &str = "pistachio";
+
+/// [`APP_DIR`] before the rename from PI-gui; its settings move on first start.
+pub const LEGACY_APP_DIR: &str = "pi-gui";
+
+/// `<agent dir>/pistachio`.
+pub fn app_dir() -> Option<PathBuf> {
+    agent_dir().map(|agent| agent.join(APP_DIR))
+}
+
+/// The folder chat-mode sessions run in: `<agent dir>/pistachio/chat`.
 pub fn chat_dir() -> Option<PathBuf> {
-    agent_dir().map(|agent| agent.join("pi-gui").join("chat"))
+    app_dir().map(|dir| dir.join("chat"))
+}
+
+/// Moves the settings of the app's folder from before the rename (`<agent dir>/pi-gui`) to
+/// [`app_dir`], once: UI state, SSH hosts and web search settings. The old `chat` folder stays,
+/// because earlier chats' session files point at it ([`Mode::of`] still treats it as a chat).
+pub fn migrate_legacy_app_dir(agent: &Path) -> std::io::Result<()> {
+    let (old, new) = (agent.join(LEGACY_APP_DIR), agent.join(APP_DIR));
+    if !old.is_dir() || new.exists() {
+        return Ok(());
+    }
+    fs::create_dir_all(&new)?;
+    for name in ["state.json", "hosts.json", "deepsearch"] {
+        let from = old.join(name);
+        if from.exists() {
+            fs::rename(&from, new.join(name))?;
+        }
+    }
+    Ok(())
 }
 
 /// Sessions sharing a working folder, for the Code sidebar.
@@ -459,11 +493,11 @@ mod tests {
 
     #[test]
     fn mode_follows_the_chat_folder() {
-        let chat = Path::new("/home/u/.pi/agent/pi-gui/chat");
+        let chat = Path::new("/home/u/.pi/agent/pistachio/chat");
         assert_eq!(Mode::of(chat, chat), Mode::Chat);
         assert_eq!(Mode::of(Path::new("/home/u/code/app"), chat), Mode::Code);
         assert_eq!(
-            Mode::of(Path::new("/home/u/.pi/agent/pi-gui"), chat),
+            Mode::of(Path::new("/home/u/.pi/agent/pistachio"), chat),
             Mode::Code
         );
         assert_eq!(serde_json::to_string(&Mode::Chat).unwrap(), "\"chat\"");
@@ -542,5 +576,41 @@ mod tests {
             ],
         );
         assert_eq!(read_summary(&path).unwrap().unwrap().title(), "New chat");
+    }
+
+    #[test]
+    fn legacy_chat_folder_is_still_chat() {
+        let chat = Path::new("/home/u/.pi/agent/pistachio/chat");
+        assert_eq!(
+            Mode::of(Path::new("/home/u/.pi/agent/pi-gui/chat"), chat),
+            Mode::Chat
+        );
+        assert_eq!(
+            Mode::of(Path::new("/home/u/.pi/agent/pi-gui"), chat),
+            Mode::Code
+        );
+    }
+
+    #[test]
+    fn migrates_settings_once_and_keeps_old_chats() {
+        let agent = tempfile::tempdir().unwrap();
+        let old = agent.path().join(LEGACY_APP_DIR);
+        fs::create_dir_all(old.join("chat")).unwrap();
+        fs::create_dir_all(old.join("deepsearch")).unwrap();
+        fs::write(old.join("state.json"), "{}").unwrap();
+        fs::write(old.join("deepsearch/config.json"), "{}").unwrap();
+        migrate_legacy_app_dir(agent.path()).unwrap();
+        let new = agent.path().join(APP_DIR);
+        assert!(new.join("state.json").is_file());
+        assert!(new.join("deepsearch/config.json").is_file());
+        assert!(!new.join("hosts.json").exists());
+        assert!(
+            old.join("chat").is_dir(),
+            "old chats stay where their sessions point"
+        );
+        // A second start changes nothing, even with files left in the old folder.
+        fs::write(old.join("hosts.json"), "{}").unwrap();
+        migrate_legacy_app_dir(agent.path()).unwrap();
+        assert!(!new.join("hosts.json").exists());
     }
 }

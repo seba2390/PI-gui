@@ -513,7 +513,7 @@ impl Hosts {
         self._tasks.push(task);
     }
 
-    /// Installs pi into `~/.pi-gui/server` on the host, showing progress in the status, then
+    /// Installs pi into `~/.pistachio/server` on the host, showing progress in the status, then
     /// probes again. Returns whether pi is now available.
     async fn install_and_probe(
         this: WeakEntity<Self>,
@@ -724,7 +724,7 @@ impl Hosts {
 
     /// Copies this computer's pi model settings (`models.json`, and `auth.json` only with
     /// `include_credentials`) to the host's agent folder. Existing files there are kept as
-    /// `*.bak-pi-gui`.
+    /// `*.bak-pistachio`.
     pub fn copy_model_settings(
         &mut self,
         id: &HostId,
@@ -795,19 +795,19 @@ enum Connected {
 mod tests {
     /// ssh asks for a password through the app's own askpass (this crate's binary started by
     /// ssh); the test cancels, so no password is sent. Needs a host that offers password
-    /// login: `PI_GUI_SSH_PASSWORD_HOST=<alias> cargo build && cargo test -p pi-gui -- \
+    /// login: `PISTACHIO_SSH_PASSWORD_HOST=<alias> cargo build && cargo test -p pistachio -- \
     /// --ignored askpass_prompt_reaches_the_app`.
     #[test]
-    #[ignore = "needs PI_GUI_SSH_PASSWORD_HOST and the built pi-gui binary"]
+    #[ignore = "needs PISTACHIO_SSH_PASSWORD_HOST and the built pistachio binary"]
     fn askpass_prompt_reaches_the_app() {
-        let Ok(alias) = std::env::var("PI_GUI_SSH_PASSWORD_HOST") else {
+        let Ok(alias) = std::env::var("PISTACHIO_SSH_PASSWORD_HOST") else {
             return;
         };
-        // The app binary next to this test's build folders (`target/debug/pi-gui`).
+        // The app binary next to this test's build folders (`target/debug/pistachio`).
         let test = std::env::current_exe().unwrap();
         let exe = test
             .ancestors()
-            .map(|dir| dir.join("pi-gui"))
+            .map(|dir| dir.join("pistachio"))
             .find(|path| path.is_file())
             .unwrap_or_default();
         assert!(exe.exists(), "build the app first: {}", exe.display());
@@ -839,11 +839,11 @@ mod tests {
     /// End to end over a real SSH host, without installing anything there: pi-rpc's scripted
     /// fake pi is passed inline to the remote `python3`, started through the same
     /// `Ssh::command` + launcher path a remote session uses, and answers `get_state`.
-    /// Run with `PI_GUI_SSH_TEST_HOST=<alias> cargo test -p pi-gui -- --ignored rpc_over_ssh`.
+    /// Run with `PISTACHIO_SSH_TEST_HOST=<alias> cargo test -p pistachio -- --ignored rpc_over_ssh`.
     #[test]
-    #[ignore = "needs PI_GUI_SSH_TEST_HOST (an ssh alias with key auth and python3)"]
+    #[ignore = "needs PISTACHIO_SSH_TEST_HOST (an ssh alias with key auth and python3)"]
     fn rpc_over_ssh() {
-        let Ok(alias) = std::env::var("PI_GUI_SSH_TEST_HOST") else {
+        let Ok(alias) = std::env::var("PISTACHIO_SSH_TEST_HOST") else {
             return;
         };
         let ssh = remote::Ssh::new(remote::Target::Alias { alias });

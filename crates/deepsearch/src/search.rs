@@ -112,7 +112,7 @@ fn results_from(array: Option<&Value>, title: &str, url: &str, snippet: &str) ->
 
 fn searxng(config: &Config, query: &str) -> Result<Vec<SearchResult>, String> {
     let settings = &config.searxng;
-    let agent = backend_agent(config.search.timeout_secs, "pi-gui-deepsearch");
+    let agent = backend_agent(config.search.timeout_secs, "pistachio-deepsearch");
     let mut request = agent
         .get(format!("{}/search", settings.url.trim_end_matches('/')))
         .query("q", query)
@@ -136,7 +136,7 @@ fn brave(config: &Config, query: &str, count: usize) -> Result<Vec<SearchResult>
             config.brave.api_key_env
         )
     })?;
-    let agent = backend_agent(config.search.timeout_secs, "pi-gui-deepsearch");
+    let agent = backend_agent(config.search.timeout_secs, "pistachio-deepsearch");
     let request = agent
         .get("https://api.search.brave.com/res/v1/web/search")
         .query("q", query)
@@ -162,7 +162,7 @@ fn tavily(config: &Config, query: &str, count: usize) -> Result<Vec<SearchResult
             config.tavily.api_key_env
         )
     })?;
-    let agent = backend_agent(config.search.timeout_secs, "pi-gui-deepsearch");
+    let agent = backend_agent(config.search.timeout_secs, "pistachio-deepsearch");
     let body = serde_json::json!({
         "query": query,
         "max_results": count,

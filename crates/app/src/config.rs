@@ -7,7 +7,7 @@ use gpui_kit::Global;
 
 #[derive(Debug, Clone)]
 pub struct AppConfig {
-    /// The `pi` executable. Override with `PI_GUI_PI_BIN`.
+    /// The `pi` executable. Override with `PISTACHIO_PI_BIN`.
     pub pi_program: PathBuf,
     /// Extra environment for child processes (login-shell `PATH`, …).
     pub child_env: Vec<(OsString, OsString)>,
@@ -20,7 +20,7 @@ pub struct AppConfig {
     pub deepsearch_dir: PathBuf,
     /// This executable, which runs deep search's web tools for pi.
     pub exe: Option<PathBuf>,
-    /// Panels to open at startup (`PI_GUI_OPEN=terminal,diff,files`), for scripted
+    /// Panels to open at startup (`PISTACHIO_OPEN=terminal,diff,files`), for scripted
     /// screenshots and responsiveness checks.
     pub open_at_startup: Vec<String>,
 }
@@ -51,9 +51,9 @@ impl AppConfig {
             child_env: Vec::new(),
             sessions_dir: None,
             home: None,
-            chat_dir: std::env::temp_dir().join("pi-gui-test-chat"),
-            deepsearch_dir: std::env::temp_dir().join("pi-gui-test-deepsearch"),
-            exe: Some(PathBuf::from("/app/pi-gui")),
+            chat_dir: std::env::temp_dir().join("pistachio-test-chat"),
+            deepsearch_dir: std::env::temp_dir().join("pistachio-test-deepsearch"),
+            exe: Some(PathBuf::from("/app/pistachio")),
             open_at_startup: Vec::new(),
         }
     }
@@ -62,17 +62,17 @@ impl AppConfig {
     pub fn detect(child_env: Vec<(OsString, OsString)>) -> Self {
         let home = dirs_home();
         Self {
-            pi_program: std::env::var_os("PI_GUI_PI_BIN")
+            pi_program: std::env::var_os("PISTACHIO_PI_BIN")
                 .map_or_else(default_pi_program, PathBuf::from),
             child_env,
             sessions_dir: pi_sessions::sessions_dir(),
             home,
             chat_dir: pi_sessions::chat_dir()
-                .unwrap_or_else(|| std::env::temp_dir().join("pi-gui-chat")),
+                .unwrap_or_else(|| std::env::temp_dir().join("pistachio-chat")),
             deepsearch_dir: deepsearch::config::default_dir()
-                .unwrap_or_else(|| std::env::temp_dir().join("pi-gui-deepsearch")),
+                .unwrap_or_else(|| std::env::temp_dir().join("pistachio-deepsearch")),
             exe: std::env::current_exe().ok(),
-            open_at_startup: std::env::var("PI_GUI_OPEN")
+            open_at_startup: std::env::var("PISTACHIO_OPEN")
                 .map(|value| {
                     value
                         .split(',')

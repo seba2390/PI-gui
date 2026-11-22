@@ -86,7 +86,7 @@ impl PiPlace {
     }
 
     /// Writes atomically, creating folders; with `backup`, the previous file is kept as
-    /// `<path>.bak-pi-gui`.
+    /// `<path>.bak-pistachio`.
     pub fn write(&self, path: &str, text: &str, backup: bool) -> Result<(), String> {
         match self {
             Self::Local { .. } => {
@@ -98,11 +98,11 @@ impl PiPlace {
                 }
                 if backup && path.is_file() {
                     let mut name = path.as_os_str().to_owned();
-                    name.push(".bak-pi-gui");
+                    name.push(".bak-pistachio");
                     std::fs::copy(path, PathBuf::from(name)).map_err(fail)?;
                 }
                 let mut tmp = path.as_os_str().to_owned();
-                tmp.push(".pi-gui-tmp");
+                tmp.push(".pistachio-tmp");
                 let tmp = PathBuf::from(tmp);
                 write_private(&tmp, path, text.as_bytes()).map_err(fail)?;
                 std::fs::rename(&tmp, path).map_err(fail)
@@ -225,12 +225,12 @@ mod tests {
         place.write(&file, "two", true).unwrap();
         assert_eq!(place.read(&file).unwrap().as_deref(), Some("two"));
         assert_eq!(
-            std::fs::read_to_string(format!("{file}.bak-pi-gui")).unwrap(),
+            std::fs::read_to_string(format!("{file}.bak-pistachio")).unwrap(),
             "one"
         );
         let skill = place.agent_path("skills/x/SKILL.md");
         place.write(&skill, "s", false).unwrap();
-        assert!(!std::path::Path::new(&format!("{skill}.bak-pi-gui")).exists());
+        assert!(!std::path::Path::new(&format!("{skill}.bak-pistachio")).exists());
 
         let out = place
             .run_script(

@@ -6,8 +6,8 @@
 //!
 //! For trying settings by hand, words after the command become the input and the reply is
 //! printed as the model would see it:
-//! `pi-gui --deepsearch-tool search rust gpui` or
-//! `pi-gui --deepsearch-tool fetch https://example.com "what to look for"`.
+//! `pistachio --deepsearch-tool search rust gpui` or
+//! `pistachio --deepsearch-tool fetch https://example.com "what to look for"`.
 
 use std::io::{IsTerminal as _, Read as _};
 

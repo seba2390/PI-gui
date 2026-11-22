@@ -1,4 +1,4 @@
-//! Saved remote connections, stored as JSON at `<agent dir>/pi-gui/hosts.json`.
+//! Saved remote connections, stored as JSON at `<agent dir>/pistachio/hosts.json`.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -98,7 +98,7 @@ pub struct HostStore {
 impl HostStore {
     /// Where the store lives, or `None` if pi's agent dir is unknown.
     pub fn path() -> Option<PathBuf> {
-        pi_sessions::agent_dir().map(|agent| agent.join("pi-gui").join("hosts.json"))
+        pi_sessions::app_dir().map(|dir| dir.join("hosts.json"))
     }
 
     /// Reads the store; a missing file gives an empty store, and so does a corrupt one

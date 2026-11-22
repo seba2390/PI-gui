@@ -50,11 +50,9 @@ pub fn open_prompt(prompt: Prompt, window: &mut Window, cx: &mut App) {
                     .gap_2()
                     .child(div().text_sm().child(text.clone()))
                     .child(Input::new(&input))
-                    .child(
-                        div().text_xs().text_color(muted).child(
-                            "Sent only to ssh for this connection; PI-gui does not store it.",
-                        ),
-                    ),
+                    .child(div().text_xs().text_color(muted).child(
+                        "Sent only to ssh for this connection; Pistachio does not store it.",
+                    )),
             )
             .on_close(move |_, _, cx| closed(false, cx))
             .footer(

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Writes the license notices of every crate linked into pi-gui (normal dependencies only,
+"""Writes the license notices of every crate linked into pistachio (normal dependencies only,
 for one target platform), as required when distributing the binary.
 
 Usage: script/third-party-licenses.py [target-triple] > THIRD-PARTY-LICENSES.txt
@@ -20,7 +20,7 @@ def main() -> None:
     meta = json.loads(subprocess.check_output(cmd))
     packages = {p["id"]: p for p in meta["packages"]}
     nodes = {n["id"]: n for n in meta["resolve"]["nodes"]}
-    root = next(p["id"] for p in meta["packages"] if p["name"] == "pi-gui" and p["source"] is None)
+    root = next(p["id"] for p in meta["packages"] if p["name"] == "pistachio" and p["source"] is None)
 
     # Walk normal (linked) dependencies only: build and dev dependencies are not shipped.
     seen, stack = set(), [root]
@@ -52,7 +52,7 @@ def main() -> None:
         groups.setdefault(text, []).append(label)
 
     out = sys.stdout
-    out.write("PI-gui includes the following third-party software.\n")
+    out.write("Pistachio includes the following third-party software.\n")
     out.write("Each block lists the packages it applies to, followed by their license texts.\n\n")
     for text, labels in groups.items():
         out.write("=" * 78 + "\n")

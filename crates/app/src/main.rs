@@ -1,4 +1,4 @@
-//! PI-gui: a lean desktop GUI for the pi coding agent.
+//! Pistachio: a lean desktop GUI for the pi coding agent.
 //!
 //! The GUI is a pure view over `pi --mode rpc`: every agent behaviour comes from pi
 //! itself; this binary only renders pi's event stream and forwards user input.
@@ -35,8 +35,16 @@ fn main() {
     if let Some(code) = remote::askpass::run_client_if_requested() {
         std::process::exit(code);
     }
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn,pi_gui=info"))
-        .init();
+    env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("warn,pistachio=info"),
+    )
+    .init();
+    // Settings saved before the rename from PI-gui move to the new folder, once.
+    if let Some(agent) = pi_sessions::agent_dir()
+        && let Err(error) = pi_sessions::migrate_legacy_app_dir(&agent)
+    {
+        log::warn!("could not move settings from the PI-gui folder: {error}");
+    }
 
     // Probing the login shell takes ~100–200 ms; overlap it with GPU/platform startup.
     let shell_env = std::thread::spawn(shell_env::login_shell_env);

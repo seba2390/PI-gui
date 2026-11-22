@@ -11,31 +11,39 @@ use crate::RemoteError;
 use crate::config::resolve_full;
 use crate::error::meaningful_lines;
 use crate::process;
-use crate::ssh::{MANAGED_DIR, Ssh, remote_word, script_result, sh_quote};
+use crate::ssh::{LEGACY_MANAGED_DIR, MANAGED_DIR, Ssh, remote_word, script_result, sh_quote};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(120);
 const SHELL_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// Run by `/bin/sh` on the host for a terminal: changes to `$1` (falling back to home), puts
-/// pi-gui's own pi on `PATH`, then becomes the user's login shell. `$2`, when set, is a
+/// pistachio's own pi on `PATH`, then becomes the user's login shell. `$2`, when set, is a
 /// command to run first in the login shell.
 const TERMINAL_SCRIPT: &str = r#"d=$1
 case $d in ""|"~") cd ;; "~/"*) cd -- "$HOME/${d#??}" ;; *) cd -- "$d" ;; esac 2>/dev/null || cd
-m=$HOME/MANAGED_DIR/bin
-[ -d "$m" ] && PATH=$m:$PATH && export PATH
+for m in "$HOME/LEGACY_MANAGED_DIR/bin" "$HOME/MANAGED_DIR/bin"; do
+  [ -d "$m" ] && PATH=$m:$PATH && export PATH
+done
 s=${SHELL:-/bin/sh}
 if [ -n "$2" ]; then
   case ${s##*/} in fish) "$s" -l -c "$2" ;; *) "$s" -lc "$2" ;; esac
 fi
 exec "$s" -l"#;
 
+/// [`TERMINAL_SCRIPT`] with its placeholders filled in (the newest install wins on `PATH`).
+fn terminal_script() -> String {
+    TERMINAL_SCRIPT
+        .replace("LEGACY_MANAGED_DIR", LEGACY_MANAGED_DIR)
+        .replace("MANAGED_DIR", MANAGED_DIR)
+}
+
 /// Writes stdin to `$1` atomically (mode 0600 for new files), keeping a copy of an existing
-/// file as `$1.bak-pi-gui` unless `$2` is `0`.
+/// file as `$1.bak-pistachio` unless `$2` is `0`.
 const UPLOAD_SCRIPT: &str = r#"f=$1
 umask 077
 mkdir -p -- "$(dirname -- "$f")" || exit 1
-[ "$2" != 0 ] && [ -f "$f" ] && cp -p -- "$f" "$f.bak-pi-gui"
-cat > "$f.pi-gui-tmp" && mv -- "$f.pi-gui-tmp" "$f""#;
+[ "$2" != 0 ] && [ -f "$f" ] && cp -p -- "$f" "$f.bak-pistachio"
+cat > "$f.pistachio-tmp" && mv -- "$f.pistachio-tmp" "$f""#;
 
 impl Ssh {
     /// Like [`Ssh::connect`], but lets ssh ask for passwords, passphrases or one-time codes
@@ -75,15 +83,15 @@ impl Ssh {
     }
 
     /// The program and arguments for a terminal on the host: an interactive login shell in
-    /// `cwd` (a remote path; `~` for home), with `~/.pi-gui/server/bin` on `PATH`. With
+    /// `cwd` (a remote path; `~` for home), with `~/.pistachio/server/bin` on `PATH`. With
     /// `command`, the login shell runs it first and stays open afterwards.
     pub fn terminal_command(&self, cwd: &str, command: Option<&str>) -> (PathBuf, Vec<OsString>) {
         let mut args: Vec<OsString> = vec!["-t".into()];
         args.extend(self.base_args());
         args.push("--".into());
-        let script = TERMINAL_SCRIPT.replace("MANAGED_DIR", MANAGED_DIR);
+        let script = terminal_script();
         let mut remote = format!(
-            "exec /bin/sh -c {} pi-gui {}",
+            "exec /bin/sh -c {} pistachio {}",
             remote_word(&script),
             remote_word(cwd)
         );
@@ -96,13 +104,13 @@ impl Ssh {
     }
 
     /// Writes `contents` to `path` on the host (parent folders created, an existing file kept
-    /// as `<path>.bak-pi-gui`, new files private).
+    /// as `<path>.bak-pistachio`, new files private).
     pub fn upload(&self, path: &str, contents: Vec<u8>) -> Result<(), RemoteError> {
         self.write_file(path, contents, true)
     }
 
     /// Writes `contents` to `path` on the host atomically (parent folders created, new files
-    /// private), keeping the previous file as `<path>.bak-pi-gui` when `backup` is set.
+    /// private), keeping the previous file as `<path>.bak-pistachio` when `backup` is set.
     pub fn write_file(
         &self,
         path: &str,
@@ -233,7 +241,7 @@ mod tests {
         let remote = args.last().unwrap().to_string_lossy().into_owned();
         assert!(remote.starts_with("exec /bin/sh -c "), "{remote}");
         assert!(
-            remote.ends_with(" pi-gui '/srv/my app' 'echo hi'"),
+            remote.ends_with(" pistachio '/srv/my app' 'echo hi'"),
             "{remote}"
         );
 
@@ -249,9 +257,9 @@ mod tests {
             use std::os::unix::fs::PermissionsExt as _;
             std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
-        let script = TERMINAL_SCRIPT.replace("MANAGED_DIR", MANAGED_DIR);
+        let script = terminal_script();
         let out = Command::new("/bin/sh")
-            .args(["-c", &script, "pi-gui", "~/proj", "echo hi"])
+            .args(["-c", &script, "pistachio", "~/proj", "echo hi"])
             .env("HOME", &home)
             .env("SHELL", &fake)
             .output()
@@ -286,7 +294,7 @@ mod tests {
         run("two");
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "two");
         assert_eq!(
-            std::fs::read_to_string(file.with_extension("json.bak-pi-gui")).unwrap(),
+            std::fs::read_to_string(file.with_extension("json.bak-pistachio")).unwrap(),
             "one"
         );
         #[cfg(unix)]

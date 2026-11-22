@@ -1,4 +1,4 @@
-//! UI-agnostic backend for PI-gui's right-hand panel.
+//! UI-agnostic backend for Pistachio's right-hand panel.
 //!
 //! * [`git`] — repository status, per-file and whole-tree diffs (the "Diff" tab), implemented
 //!   on top of the `git` CLI.

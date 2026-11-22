@@ -1690,7 +1690,7 @@ mod tests {
             ("grep -rn TODO .", "Searched “TODO” in ."),
             ("sed -n '1,80p' src/lib.rs", "Read src/lib.rs"),
             (
-                "cd crates/app && cargo test -p pi-gui 2>&1 | tail -20",
+                "cd crates/app && cargo test -p pistachio 2>&1 | tail -20",
                 "Ran cargo test",
             ),
             ("cargo build --release", "Ran cargo build"),

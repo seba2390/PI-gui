@@ -1,5 +1,5 @@
 //! Read-only end-to-end checks against a real host. Ignored by default; run with
-//! `PI_GUI_SSH_TEST_HOST=<ssh config alias> cargo test -p remote -- --ignored --nocapture`.
+//! `PISTACHIO_SSH_TEST_HOST=<ssh config alias> cargo test -p remote -- --ignored --nocapture`.
 
 use std::io::Read;
 use std::process::{Command, Stdio};
@@ -8,15 +8,15 @@ use std::time::Instant;
 use remote::{RemoteError, Ssh, Target, discover_hosts, resolve};
 
 fn test_host() -> Option<Ssh> {
-    let alias = std::env::var("PI_GUI_SSH_TEST_HOST").ok()?;
+    let alias = std::env::var("PISTACHIO_SSH_TEST_HOST").ok()?;
     Some(Ssh::new(Target::Alias { alias }))
 }
 
 #[test]
-#[ignore = "needs PI_GUI_SSH_TEST_HOST and network access"]
+#[ignore = "needs PISTACHIO_SSH_TEST_HOST and network access"]
 fn live_host_round_trip() {
     let Some(ssh) = test_host() else {
-        eprintln!("PI_GUI_SSH_TEST_HOST not set; skipping");
+        eprintln!("PISTACHIO_SSH_TEST_HOST not set; skipping");
         return;
     };
     let home = dirs::home_dir().unwrap();
@@ -119,11 +119,11 @@ fn checks(ssh: &Ssh) {
     assert!(fingerprint.contains("SHA256:"));
 }
 
-/// Installs pi on the test host (into `~/.pi-gui/server`, like the app does when pi is
+/// Installs pi on the test host (into `~/.pistachio/server`, like the app does when pi is
 /// missing) and checks that the probe finds it. Writes to the host, so it is opt-in:
-/// `PI_GUI_SSH_TEST_HOST=<alias> cargo test -p remote --test live -- --ignored live_install`.
+/// `PISTACHIO_SSH_TEST_HOST=<alias> cargo test -p remote --test live -- --ignored live_install`.
 #[test]
-#[ignore = "installs pi on PI_GUI_SSH_TEST_HOST"]
+#[ignore = "installs pi on PISTACHIO_SSH_TEST_HOST"]
 fn live_install() {
     let Some(ssh) = test_host() else { return };
     ssh.connect(false).unwrap();
@@ -141,7 +141,7 @@ fn live_install() {
 /// The diff / files panels, the file index, sessions, uploads and trash over a real host,
 /// in a scratch folder there (removed afterwards).
 #[test]
-#[ignore = "needs PI_GUI_SSH_TEST_HOST and network access"]
+#[ignore = "needs PISTACHIO_SSH_TEST_HOST and network access"]
 fn live_workspace_and_sessions() {
     use std::path::Path;
     use std::sync::Arc;
@@ -150,7 +150,7 @@ fn live_workspace_and_sessions() {
     let Some(ssh) = test_host() else { return };
     ssh.connect(false).unwrap();
     let root = ssh
-        .exec("d=$(mktemp -d /tmp/pi-gui-live.XXXXXX) && cd \"$d\" && git init -q && printf 'one\\n' > a.txt && git add . && git -c user.name=t -c user.email=t@t commit -qm init && printf 'one\\ntwo\\n' > a.txt && mkdir -p 'src dir' ignored && printf 'x\\n' > 'src dir/new file.rs' && printf 'ignored/\\n' > .gitignore && printf 'secret' > ignored/s && pwd -P")
+        .exec("d=$(mktemp -d /tmp/pistachio-live.XXXXXX) && cd \"$d\" && git init -q && printf 'one\\n' > a.txt && git add . && git -c user.name=t -c user.email=t@t commit -qm init && printf 'one\\ntwo\\n' > a.txt && mkdir -p 'src dir' ignored && printf 'x\\n' > 'src dir/new file.rs' && printf 'ignored/\\n' > .gitignore && printf 'secret' > ignored/s && pwd -P")
         .unwrap()
         .trim()
         .to_owned();

@@ -4,7 +4,7 @@ use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
 use gpui_kit::{App, KeyBinding, Menu, MenuItem, OsAction, SystemMenuType, actions};
 
 actions!(
-    pi_gui,
+    pistachio,
     [
         NewChat,
         ToggleSidebar,
@@ -80,18 +80,18 @@ pub fn init(cx: &mut App) {
     cx.set_menus(menus());
 }
 
-/// The native menu bar. On macOS the first menu is the app menu ("PI"), so the app can be
+/// The native menu bar. On macOS the first menu is the app menu ("Pistachio"), so the app can be
 /// quit, hidden etc. like any other; shortcuts show next to the items automatically.
 fn menus() -> Vec<Menu> {
     vec![
-        Menu::new("PI").items([
+        Menu::new("Pistachio").items([
             MenuItem::os_submenu("Services", SystemMenuType::Services),
             MenuItem::separator(),
-            MenuItem::action("Hide PI", Hide),
+            MenuItem::action("Hide Pistachio", Hide),
             MenuItem::action("Hide Others", HideOthers),
             MenuItem::action("Show All", ShowAll),
             MenuItem::separator(),
-            MenuItem::action("Quit PI", Quit),
+            MenuItem::action("Quit Pistachio", Quit),
         ]),
         Menu::new("File").items([
             MenuItem::action("New Chat / Session", NewChat),

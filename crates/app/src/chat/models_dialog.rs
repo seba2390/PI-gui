@@ -50,7 +50,7 @@ impl Place {
         self.pi.read(&self.path).map(Option::unwrap_or_default)
     }
 
-    /// Writes atomically, keeping the previous file as `models.json.bak-pi-gui`.
+    /// Writes atomically, keeping the previous file as `models.json.bak-pistachio`.
     fn write(&self, text: &str) -> Result<(), String> {
         self.pi.write(&self.path, text, true)
     }
@@ -707,7 +707,7 @@ impl ModelsDialog {
             )
             .child(div().text_xs().text_color(muted).child(
                 "Format: {\"providers\": {\"<id>\": {\"baseUrl\", \"api\", \"apiKey\", \"models\": [{\"id\"}]}}}. \
-                 See pi's docs/models.md. The previous file is kept as models.json.bak-pi-gui.",
+                 See pi's docs/models.md. The previous file is kept as models.json.bak-pistachio.",
             ))
             .child(
                 h_flex()
@@ -822,11 +822,11 @@ mod tests {
     }
 
     /// "List server models" against a real OpenAI-compatible server from this computer:
-    /// `PI_GUI_TEST_MODELS_BASE_URL=http://host:port/v1 cargo test -p pi-gui -- --ignored lists_server_models`
+    /// `PISTACHIO_TEST_MODELS_BASE_URL=http://host:port/v1 cargo test -p pistachio -- --ignored lists_server_models`
     #[test]
-    #[ignore = "needs PI_GUI_TEST_MODELS_BASE_URL"]
+    #[ignore = "needs PISTACHIO_TEST_MODELS_BASE_URL"]
     fn lists_server_models() {
-        let Ok(base) = std::env::var("PI_GUI_TEST_MODELS_BASE_URL") else {
+        let Ok(base) = std::env::var("PISTACHIO_TEST_MODELS_BASE_URL") else {
             return;
         };
         let place = local(&std::env::temp_dir());
@@ -853,7 +853,7 @@ mod tests {
         place.write("{\"b\": 2}\n").unwrap();
         assert_eq!(place.read().unwrap(), "{\"b\": 2}\n");
         assert_eq!(
-            std::fs::read_to_string(dir.path().join("agent/models.json.bak-pi-gui")).unwrap(),
+            std::fs::read_to_string(dir.path().join("agent/models.json.bak-pistachio")).unwrap(),
             "{\"a\": 1}\n"
         );
     }

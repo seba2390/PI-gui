@@ -1,15 +1,15 @@
-# Installs pi for PI-gui into ~/.pi-gui/server without prompts or root access (POSIX sh).
+# Installs pi for Pistachio into ~/.pistachio/server without prompts or root access (POSIX sh).
 #
 # Uses the login shell's Node.js when it is 22.19 or newer (with npm); otherwise downloads the
 # official standalone Node.js 22 build for this machine from nodejs.org, checks its SHA-256 and
-# keeps it in ~/.pi-gui/server/node. pi itself is installed from npm into
-# ~/.pi-gui/server/pi, and ~/.pi-gui/server/bin/pi starts it with that Node.js.
+# keeps it in ~/.pistachio/server/node. pi itself is installed from npm into
+# ~/.pistachio/server/pi, and ~/.pistachio/server/bin/pi starts it with that Node.js.
 #
-# Progress lines start with PIGUI_STEP=; the last line is PIGUI_INSTALLED=<path to pi>.
+# Progress lines start with PISTACHIO_STEP=; the last line is PISTACHIO_INSTALLED=<path to pi>.
 set -eu
-D=$HOME/.pi-gui/server
+D=$HOME/.pistachio/server
 PKG=@earendil-works/pi-coding-agent
-step() { printf 'PIGUI_STEP=%s\n' "$1"; }
+step() { printf 'PISTACHIO_STEP=%s\n' "$1"; }
 die() { printf '%s\n' "$1" >&2; exit 1; }
 fetch() {
   if command -v curl >/dev/null 2>&1; then curl -fsSL --retry 2 "$1" -o "$2"
@@ -37,7 +37,7 @@ else
     ppc64le) arch=ppc64le ;; s390x) arch=s390x ;; *) die "Unsupported processor: $(uname -m)" ;;
   esac
   base=https://nodejs.org/dist/latest-v22.x
-  t=$(mktemp -d "${TMPDIR:-/tmp}/pi-gui-node.XXXXXX")
+  t=$(mktemp -d "${TMPDIR:-/tmp}/pistachio-node.XXXXXX")
   trap 'rm -rf "$t"' EXIT
   step "Downloading Node.js"
   fetch "$base/SHASUMS256.txt" "$t/SHASUMS256.txt"
@@ -86,4 +86,4 @@ mv "$D/bin/pi.new" "$D/bin/pi"
 
 step "Checking pi"
 "$D/bin/pi" --version </dev/null
-printf 'PIGUI_INSTALLED=%s\n' "$D/bin/pi"
+printf 'PISTACHIO_INSTALLED=%s\n' "$D/bin/pi"

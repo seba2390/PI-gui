@@ -6,6 +6,19 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-22
+
+### Changed
+
+- **PI-gui is now Pistachio.** The app, binary (`pistachio`), macOS bundle (`Pistachio.app`,
+  `dev.pistachio.app`), Linux launcher and repository (`seba2390/pistachio`) are renamed.
+  - Settings move on first start from `~/.pi/agent/pi-gui/` to `~/.pi/agent/pistachio/`.
+    Earlier chats stay where they are and still show up under Chat.
+  - On SSH hosts pi is now installed into `~/.pistachio/server`; an existing
+    `~/.pi-gui/server` is still used until then.
+  - Environment variables are now `PISTACHIO_*` (for example `PISTACHIO_PI_BIN`,
+    `PISTACHIO_OPEN`).
+
 ### Added
 
 - Windows build (experimental): a `pi-gui.exe` zip in each release. pi installed with npm
@@ -67,5 +80,6 @@ chats, skills and model management. Changes since the last private build:
 - A corrupt `hosts.json` is kept as a backup.
 - A remembered terminal height can no longer squeeze out the chat.
 
-[Unreleased]: https://github.com/seba2390/PI-gui/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/seba2390/PI-gui/releases/tag/v0.1.0
+[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/seba2390/pistachio/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/seba2390/pistachio/releases/tag/v0.1.0

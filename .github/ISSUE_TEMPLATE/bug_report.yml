@@ -19,7 +19,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: PI-gui version or commit
+      label: Pistachio version or commit
       placeholder: v0.1.0 / abc1234
     validations:
       required: true
@@ -38,5 +38,5 @@ body:
     id: logs
     attributes:
       label: Logs
-      description: Run `RUST_LOG=pi_gui=debug pi-gui` from a terminal and paste the relevant part. Remove anything private.
+      description: Run `RUST_LOG=pistachio=debug pistachio` from a terminal and paste the relevant part. Remove anything private.
       render: text

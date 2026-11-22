@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Reports the resident memory of a running PI-gui and its pi children.
-# Usage: script/measure-memory.sh [pid]   (default: newest pi-gui process)
+# Reports the resident memory of a running Pistachio and its pi children.
+# Usage: script/measure-memory.sh [pid]   (default: newest pistachio process)
 set -euo pipefail
-pid="${1:-$(pgrep -n -f 'pi-gui$|MacOS/pi-gui' || true)}"
-[[ -n "$pid" ]] || { echo "pi-gui is not running" >&2; exit 1; }
+pid="${1:-$(pgrep -n -f 'pistachio$|MacOS/pistachio' || true)}"
+[[ -n "$pid" ]] || { echo "pistachio is not running" >&2; exit 1; }
 
 rss_kb() { ps -o rss= -p "$1" | tr -d ' '; }
 mb() { awk -v kb="$1" 'BEGIN { printf "%.1f MB", kb / 1024 }'; }
 
-echo "pi-gui (pid $pid): $(mb "$(rss_kb "$pid")") RSS"
+echo "pistachio (pid $pid): $(mb "$(rss_kb "$pid")") RSS"
 if [[ "$(uname)" == "Darwin" ]] && command -v footprint >/dev/null; then
   # Physical footprint is what Activity Monitor shows as "Memory".
   footprint "$pid" 2>/dev/null | awk '

@@ -1,5 +1,5 @@
 //! Where a working folder lives: on this computer, or on another machine reached through a
-//! [`RemoteShell`] (in PI-gui: an SSH connection).
+//! [`RemoteShell`] (in Pistachio: an SSH connection).
 //!
 //! Remote operations are written as POSIX `sh` scripts that run on the other machine, so the
 //! same git CLI and directory listings work there without installing anything.

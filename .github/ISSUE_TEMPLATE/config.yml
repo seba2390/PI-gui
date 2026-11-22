@@ -1,7 +1,7 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security vulnerability
-    url: https://github.com/seba2390/PI-gui/security/advisories/new
+    url: https://github.com/seba2390/pistachio/security/advisories/new
     about: Please report security issues privately.
   - name: pi itself
     url: https://pi.dev

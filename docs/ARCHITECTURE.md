@@ -12,7 +12,7 @@ crates/
   term/         terminal backend: alacritty_terminal + PTY, UI-agnostic snapshots
   deepsearch/   chat web search (search / deep): search backends, public-only fetching, page text extraction,
                 passage ranking, settings, and the pi extension that runs them via the app
-  app/          the GPUI application (binary `pi-gui`)
+  app/          the GPUI application (binary `pistachio`)
 ```
 
 Only `app` depends on the UI toolkit; everything else is plain Rust with its own tests. The app
