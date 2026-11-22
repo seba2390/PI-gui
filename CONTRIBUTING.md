@@ -65,7 +65,7 @@ checks scriptable:
   `diff-expand-all` opens the Changes tab with every file expanded, and `expand-tools` expands
   every tool call in the chat (like Ctrl+O); `view-file:<path>` opens a file (relative to the
   folder) in the Files tab's viewer.
-- Sessions and popovers: `latest`, `attach`, `context`; `find:<text>` opens the find bar
+- Sessions and popovers: `latest`, `new-chat` (like ⌘N), `attach`, `context`; `find:<text>` opens the find bar
   searching for `<text>`.
 - Dialogs: `add-host`, `manage-hosts`, `add-model`, `add-provider`, `edit-models`.
 - Skills page: `skills`, `new-skill`, `open-skill:<path>`; the Settings page: `settings`.

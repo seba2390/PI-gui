@@ -48,6 +48,8 @@ All notable changes to PI-gui are listed here. The format follows
 
 ### Fixed
 
+- New session / New chat (and ⌘N) did nothing while the Skills or Settings page was open over a
+  conversation that was still empty; it now closes the page and shows that conversation.
 - Esc in the message box now interrupts the agent: the text box kept the key to itself.
 - Dragging the right panel wide no longer squeezes the chat until its header buttons and the
   message box controls overlap: the chat keeps at least 400 px, the title truncates, and in a

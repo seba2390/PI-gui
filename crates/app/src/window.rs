@@ -448,6 +448,7 @@ impl MainWindow {
                     return;
                 }
                 "code" => self.switch_to_mode(Mode::Code, window, cx),
+                "new-chat" => self.new_chat(&NewChat, window, cx),
                 "latest" => {
                     let dir = cx.global::<AppConfig>().sessions_dir.clone();
                     if let Some(latest) =
@@ -1789,6 +1790,13 @@ impl MainWindow {
             return;
         }
         if self.mode(cx) == mode && self.chat.read(cx).session().read(cx).is_empty() {
+            // The Skills or Settings page covers the chat: going back to it is the new
+            // conversation (otherwise the click seems to do nothing).
+            if self.page_open() {
+                self.close_skills(cx);
+                self.close_settings(cx);
+                cx.notify();
+            }
             focus_chat(&self.chat, window, cx);
             return;
         }
