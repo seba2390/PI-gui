@@ -2,10 +2,12 @@ name: CodeQL
 
 # Code scanning for the languages in this repository. Listed explicitly: automatic detection
 # also picks up the Swift helper script for the app icon, whose analysis fails.
+# Runs on main and weekly, not on pull requests: the Rust analysis takes a long time and is
+# not a required check, so pull requests only wait for CI.
 on:
   push:
     branches: [main]
-  pull_request:
+  workflow_dispatch:
   schedule:
     - cron: "17 4 * * 1"
 
