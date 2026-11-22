@@ -6,10 +6,19 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-22
+
 ### Added
 
 - New chats and Code sessions show the π field behind their empty screen; it fades out when
   the first message is sent.
+- A demo video in the README, recorded with the new scripted demo mode
+  (`PISTACHIO_DEMO=<storyboard.toml>`; re-record with `script/demo/record-demo.sh`).
+
+### Fixed
+
+- Debug builds no longer panic when a run of exploration steps ("Explored · N steps") appears
+  in the chat.
 
 ## [0.3.0] - 2026-11-22
 
@@ -114,7 +123,8 @@ chats, skills and model management. Changes since the last private build:
 - A corrupt `hosts.json` is kept as a backup.
 - A remembered terminal height can no longer squeeze out the chat.
 
-[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/seba2390/pistachio/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/seba2390/pistachio/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/seba2390/pistachio/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/seba2390/pistachio/releases/tag/v0.1.0
