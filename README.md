@@ -50,7 +50,14 @@ npm i -g @earendil-works/pi-coding-agent
 
 **2. Install Pistachio**
 
-- **macOS:** download `Pistachio-…-macos-universal.zip` from
+- **macOS** with [Homebrew](https://brew.sh):
+
+  ```bash
+  brew install --cask seba2390/tap/pistachio
+  ```
+
+  Update with `brew upgrade --cask pistachio`.
+- **macOS** without Homebrew: download `Pistachio-…-macos-universal.zip` from
   [Releases](https://github.com/seba2390/pistachio/releases), unzip it and move `Pistachio.app` to
   Applications.
   - The app isn't notarized yet, so macOS will block the first launch. Allow it once with:
