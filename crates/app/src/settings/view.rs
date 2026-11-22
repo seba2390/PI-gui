@@ -224,6 +224,7 @@ impl SettingsView {
                              Each has a light and a dark variant.",
                         ),
                     )
+                    .item(SettingItem::render(|_, _, cx| code_colors_preview(cx)))
                     .item(
                         SettingItem::new(
                             "Text size",
@@ -871,6 +872,43 @@ fn demo_theme_field() -> SettingField<SharedString> {
             });
         crate::demo::mark("theme-picker", button)
     })
+}
+
+/// The Code colors preview: a Python snippet drawn as chat draws code blocks, in the chosen
+/// palette. It redraws as soon as another palette is picked.
+fn code_colors_preview(cx: &App) -> AnyElement {
+    const SNIPPET: &str = r#"```python
+from dataclasses import dataclass
+
+@dataclass
+class Model:
+    """A model entry from models.json."""
+    id: str
+    context_window: int = 131_072
+    reasoning: bool = True
+
+    def label(self, short: bool = False) -> str | None:
+        name = self.id.split("/")[-1]  # drop the provider
+        return f"{name} ({self.context_window // 1024}k)" if not short else None
+```"#;
+    // Keyed by palette and mode, so a change never shows a stale highlight.
+    let id = format!(
+        "code-colors-preview-{}-{}",
+        cx.global::<AppSettings>().code_colors.id(),
+        if cx.theme().mode.is_dark() {
+            "dark"
+        } else {
+            "light"
+        },
+    );
+    div()
+        .w_full()
+        .text_sm()
+        .child(component::text::TextView::markdown(
+            SharedString::from(id),
+            SNIPPET,
+        ))
+        .into_any_element()
 }
 
 fn options(pairs: &[(&'static str, &'static str)]) -> Vec<(SharedString, SharedString)> {

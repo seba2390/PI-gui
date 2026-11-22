@@ -164,11 +164,6 @@ mod tests {
                 &["keyword", "string", "comment"],
             ),
             (
-                "sql",
-                "SELECT id FROM users WHERE name = 'x'; -- c\n",
-                &["keyword", "string", "comment"],
-            ),
-            (
                 "yaml",
                 "name: x\nok: true # c\n",
                 &["property", "boolean", "comment"],

@@ -43,7 +43,6 @@ gpui-kit = { version = "=0.10.0", default-features = false, features = [
     "tree-sitter-javascript",
     "tree-sitter-python",
     "tree-sitter-rust",
-    "tree-sitter-sql",
     "tree-sitter-toml",
     "tree-sitter-tsx",
     "tree-sitter-typescript",
