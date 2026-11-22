@@ -987,13 +987,16 @@ impl Composer {
                 },
             ));
 
+        // In a narrow column the left side (attach, device, folder) gives way and is clipped;
+        // the model, thinking level and send / stop always stay visible.
         h_flex()
             .w_full()
             .justify_between()
+            .gap_1()
             .px_2()
             .pb_2()
-            .child(left)
-            .child(right)
+            .child(left.flex_1().min_w_0().overflow_hidden())
+            .child(right.flex_none())
     }
 
     fn render_model_picker(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -1577,6 +1580,12 @@ impl Render for Composer {
                     cx.notify();
                     cx.stop_propagation();
                 }
+            }))
+            // The input binds Esc to its own `Escape` action, so the `escape` → `Interrupt`
+            // binding never matches while typing. What the input lets bubble up (it had no
+            // selection or completion to dismiss) interrupts the agent.
+            .on_action(cx.listener(|this, _: &Escape, window, cx| {
+                this.interrupt(&Interrupt, window, cx);
             }))
             .w_full()
             .rounded_xl()

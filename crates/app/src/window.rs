@@ -2132,8 +2132,10 @@ impl MainWindow {
                             div()
                                 .text_sm()
                                 .font_weight(FontWeight::MEDIUM)
-                                // The title keeps its width (up to a cap); the folder truncates first.
-                                .flex_shrink_0()
+                                // The title keeps its width (up to a cap) while there is room;
+                                // in a narrow column it truncates too, never running under the
+                                // buttons on the right.
+                                .min_w_0()
                                 .max_w(px(360.))
                                 .truncate()
                                 .text_color(theme.foreground)
@@ -2143,6 +2145,9 @@ impl MainWindow {
                             this.child(
                                 div()
                                     .text_xs()
+                                    // No width of its own (flex basis 0): only the room the
+                                    // title leaves, so the folder truncates (and goes) first.
+                                    .flex_1()
                                     .min_w_0()
                                     .truncate()
                                     .text_color(theme.muted_foreground)
@@ -2244,6 +2249,9 @@ impl MainWindow {
 const DEFAULT_TERMINAL_HEIGHT: f32 = 240.;
 const MIN_TERMINAL_HEIGHT: Pixels = px(100.);
 const MIN_CHAT_HEIGHT: Pixels = px(160.);
+/// The chat column is never squeezed narrower than this by the side panels: room for the
+/// header's buttons and the message box's model picker, thinking level and send button.
+const MIN_CHAT_WIDTH: Pixels = px(400.);
 
 /// What is dragged while resizing the terminal (no visible drag image).
 #[derive(Clone)]
@@ -2537,6 +2545,9 @@ impl Render for MainWindow {
         let chat_column = v_flex()
             .size_full()
             .min_w_0()
+            // Whatever does not fit a narrow column is clipped here, never drawn over the
+            // right panel.
+            .overflow_hidden()
             .child(self.render_chat_header(cx))
             .when_some(settings, |this, settings| {
                 this.child(div().flex_1().min_h_0().child(settings.cached(full())))
@@ -2619,7 +2630,13 @@ impl Render for MainWindow {
                             .size_range(px(200.)..px(440.))
                             .child(self.sidebar.clone().cached(full())),
                     )
-                    .child(resizable_panel().child(chat_column))
+                    .child(
+                        resizable_panel()
+                            // Dragging the right panel wide stops here, so the chat keeps room
+                            // for its header buttons and the message box's controls.
+                            .size_range(MIN_CHAT_WIDTH..Pixels::MAX)
+                            .child(chat_column),
+                    )
                     .child(
                         resizable_panel()
                             .visible(self.right_open)

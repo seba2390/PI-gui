@@ -46,6 +46,14 @@ All notable changes to PI-gui are listed here. The format follows
   added/removed backgrounds. Each side of a diff is colored as a whole, so a string or comment
   spanning several lines stays colored. They follow the Code colors setting.
 
+### Fixed
+
+- Esc in the message box now interrupts the agent: the text box kept the key to itself.
+- Dragging the right panel wide no longer squeezes the chat until its header buttons and the
+  message box controls overlap: the chat keeps at least 400 px, the title truncates, and in a
+  narrow column the left side of the message box toolbar is clipped while the model picker,
+  thinking level and send / stop button stay visible.
+
 ## [0.4.1] - 2026-11-22
 
 ### Added
