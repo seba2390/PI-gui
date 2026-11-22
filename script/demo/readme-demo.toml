@@ -1,0 +1,183 @@
+# The README showcase video (script/demo/record-demo.sh records it).
+# Each [[step]] is one action of the app's demo mode (crates/app/src/demo); `marker`s name
+# points that script/demo/post.py edits around ("end"; a `cut_out` / `cut_in` pair would cut
+# the stretch between them, with a crossfade).
+
+window_title = "Pistachio Demo"
+theme = "dark"
+require_model = "inkling-2-mini"
+
+# 1. Fresh start: the empty welcome window.
+[[step]]
+do = "wait"
+ms = 1800
+
+# 2. Code mode, in the demo project.
+[[step]]
+do = "mode"
+mode = "code"
+[[step]]
+do = "wait"
+ms = 800
+[[step]]
+do = "new_chat"
+folder = "/tmp/demo/snake"
+[[step]]
+do = "wait"
+ms = 700
+
+# 3. Model.
+[[step]]
+do = "pick_model"
+id = "inkling-2-mini"
+[[step]]
+do = "wait"
+ms = 400
+
+# 4. Thinking.
+[[step]]
+do = "thinking"
+level = "low"
+[[step]]
+do = "wait"
+ms = 700
+
+# 5. Prompt.
+[[step]]
+do = "type"
+text = "Write a tiny Rust program that prints an ASCII-art snake. Keep it in one binary crate with a Cargo.toml and src/main.rs."
+cps = 25
+[[step]]
+do = "wait"
+ms = 600
+[[step]]
+do = "send"
+
+# 6. The reply and tool actions stream in at real speed (until done, at most 12 s).
+[[step]]
+do = "move"
+x = 0.62
+y = 0.93
+[[step]]
+do = "wait"
+ms = 12000
+until_idle = true
+
+# 7. Context wheel.
+[[step]]
+do = "open_context"
+[[step]]
+do = "wait"
+ms = 3000
+[[step]]
+do = "close_context"
+[[step]]
+do = "move"
+x = 0.62
+y = 0.93
+[[step]]
+do = "wait"
+ms = 800
+
+# 8. The agent keeps working (fast-forwarded in post).
+[[step]]
+do = "wait_idle"
+timeout_s = 1500
+[[step]]
+do = "wait"
+ms = 800
+
+# 9. The diff.
+[[step]]
+do = "show_diff"
+[[step]]
+do = "wait"
+ms = 1000
+[[step]]
+do = "expand_diff"
+path = "src/main.rs"
+[[step]]
+do = "wait"
+ms = 900
+[[step]]
+do = "scroll_diff"
+lines = 25
+ms = 2500
+[[step]]
+do = "wait"
+ms = 900
+
+# 10. Switch to Chat mode and start a new chat.
+[[step]]
+do = "mode"
+mode = "chat"
+[[step]]
+do = "new_chat"
+[[step]]
+do = "move"
+x = 0.55
+y = 0.55
+[[step]]
+do = "wait"
+ms = 700
+[[step]]
+do = "pick_model"
+id = "inkling-2-mini"
+[[step]]
+do = "wait"
+ms = 300
+[[step]]
+do = "thinking"
+level = "low"
+[[step]]
+do = "wait"
+ms = 300
+[[step]]
+do = "web"
+mode = "search"
+[[step]]
+do = "wait"
+ms = 500
+[[step]]
+do = "type"
+text = "What is the latest stable Rust release, and what's one notable feature in it?"
+cps = 25
+[[step]]
+do = "wait"
+ms = 500
+[[step]]
+do = "send"
+[[step]]
+do = "move"
+x = 0.62
+y = 0.93
+[[step]]
+do = "wait"
+ms = 8000
+until_idle = true
+[[step]]
+do = "wait_idle"
+timeout_s = 900
+[[step]]
+do = "wait"
+ms = 2500
+
+# 11. Settings: switch to the light theme.
+[[step]]
+do = "open_settings"
+[[step]]
+do = "wait"
+ms = 1000
+[[step]]
+do = "theme"
+theme = "light"
+[[step]]
+do = "move"
+x = 0.6
+y = 0.6
+[[step]]
+do = "wait"
+ms = 1500
+[[step]]
+do = "marker"
+name = "end"

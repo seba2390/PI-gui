@@ -2,6 +2,7 @@
 
 use std::ffi::OsString;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use gpui_kit::Global;
 
@@ -23,6 +24,8 @@ pub struct AppConfig {
     /// Panels to open at startup (`PISTACHIO_OPEN=terminal,diff,files`), for scripted
     /// screenshots and responsiveness checks.
     pub open_at_startup: Vec<String>,
+    /// The storyboard to play (`PISTACHIO_DEMO=<file.toml>`, see [`crate::demo`]).
+    pub demo: Option<Arc<crate::demo::Storyboard>>,
 }
 
 impl Global for AppConfig {}
@@ -55,6 +58,7 @@ impl AppConfig {
             deepsearch_dir: std::env::temp_dir().join("pistachio-test-deepsearch"),
             exe: Some(PathBuf::from("/app/pistachio")),
             open_at_startup: Vec::new(),
+            demo: None,
         }
     }
 
@@ -82,6 +86,29 @@ impl AppConfig {
                         .collect()
                 })
                 .unwrap_or_default(),
+            demo: demo_storyboard(),
+        }
+    }
+
+    /// Whether the app runs scripted (`PISTACHIO_OPEN` or a demo): no session reopened at
+    /// start and no update check.
+    pub fn scripted(&self) -> bool {
+        !self.open_at_startup.is_empty() || self.demo.is_some()
+    }
+}
+
+/// The storyboard named by `PISTACHIO_DEMO`. A broken one ends the app: a recording must not
+/// start without it.
+fn demo_storyboard() -> Option<Arc<crate::demo::Storyboard>> {
+    let path = PathBuf::from(std::env::var_os("PISTACHIO_DEMO")?);
+    match crate::demo::Storyboard::load(&path) {
+        Ok(storyboard) => {
+            crate::demo::enable();
+            Some(Arc::new(storyboard))
+        }
+        Err(error) => {
+            log::error!("PISTACHIO_DEMO: {error:#}");
+            std::process::exit(2);
         }
     }
 }

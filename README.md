@@ -14,6 +14,10 @@
   <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue" alt="License"></a>
 </p>
 
+<p align="center">
+  <img src="docs/media/demo-hero.gif" width="900" alt="Pistachio demo">
+</p>
+
 Pistachio runs `pi --mode rpc` and draws pi's own event stream, so it behaves exactly like pi in
 the terminal. Your sessions, models, skills and extensions come from your normal pi setup. It is
 written in Rust and GPU-rendered with [GPUI](https://gpui.rs), and uses about 90 MB of memory
@@ -34,6 +38,13 @@ when idle.
   optional check for new releases that asks before downloading.
 
 See [docs/FEATURES.md](docs/FEATURES.md) for the full list and keyboard shortcuts.
+
+## Demo
+
+<!-- The full demo video (docs/media/demo.mp4). GitHub only plays MP4s uploaded through its
+web editor: drag docs/media/demo.mp4 into this README on github.com and paste the resulting
+https://github.com/user-attachments/assets/... link on the line below. -->
+
 
 ## Install
 

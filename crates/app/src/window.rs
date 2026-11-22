@@ -169,6 +169,8 @@ pub struct MainWindow {
     drag: WindowDrag,
     focus_handle: FocusHandle,
     chat_subscription: Subscription,
+    /// Demo mode: the cursor overlay and the storyboard being played.
+    demo: Option<(Entity<crate::demo::DemoCursor>, Task<()>)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -246,7 +248,7 @@ impl MainWindow {
             let settings = cx.default_global::<AppSettings>();
             (settings.reopen_last_session, settings.check_for_updates)
         };
-        let scripted = !open_at_startup.is_empty();
+        let scripted = cx.global::<AppConfig>().scripted();
         window.defer(cx, move |window, cx| {
             let _ = this.update(cx, |this, cx| {
                 if reopen && !scripted {
@@ -279,6 +281,11 @@ impl MainWindow {
             let host = target.host.clone();
             crate::hosts::hosts(cx).update(cx, |hosts, cx| hosts.connect_quietly(&host, cx));
         }
+        let demo = cx.global::<AppConfig>().demo.clone().map(|storyboard| {
+            let cursor = cx.new(|_| crate::demo::DemoCursor::new(point(px(0.), px(0.))));
+            let task = crate::demo::start(storyboard, cursor.clone(), window, cx);
+            (cursor, task)
+        });
         Self {
             sidebar,
             chat,
@@ -308,8 +315,19 @@ impl MainWindow {
             drag: WindowDrag::default(),
             focus_handle,
             chat_subscription,
+            demo,
             _subscriptions: subscriptions,
         }
+    }
+
+    /// The conversation in the chat column (demo mode drives it).
+    pub(crate) fn visible_chat(&self) -> &Entity<ChatView> {
+        &self.chat
+    }
+
+    /// The welcome screen is showing instead of a conversation.
+    pub(crate) fn welcome_visible(&self) -> bool {
+        self.welcome && !self.page_open()
     }
 
     /// Opens panels and dialogs named in `PISTACHIO_OPEN` (scripted screenshots and checks).
@@ -754,7 +772,12 @@ impl MainWindow {
             .update(cx, |sidebar, cx| sidebar.set_activity(activity, cx));
     }
 
-    fn new_chat_in(&mut self, cwd: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn new_chat_in(
+        &mut self,
+        cwd: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let chat = cx.new(|cx| ChatView::new(cwd, None, None, window, cx));
         self.show_chat(chat, window, cx);
     }
@@ -2115,7 +2138,8 @@ impl MainWindow {
                                     this.toggle_terminal(&ToggleTerminal, window, cx);
                                 })),
                         )
-                        .child(
+                        .child(crate::demo::mark(
+                            "show-diff",
                             Button::new("show-diff")
                                 .quiet(cx)
                                 .compact()
@@ -2128,7 +2152,7 @@ impl MainWindow {
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.show_diff(&ShowDiff, window, cx);
                                 })),
-                        )
+                        ))
                         .child(
                             Button::new("show-files")
                                 .quiet(cx)
@@ -2313,7 +2337,7 @@ impl MainWindow {
                     .text_color(muted)
                     .child(detail),
             )
-            .child(div().pt_2().child(button));
+            .child(div().pt_2().child(crate::demo::mark("welcome-new", button)));
         // The field is its own cached view: its frames re-render only it, and nothing runs
         // while it is still.
         div()
@@ -2550,5 +2574,9 @@ impl Render for MainWindow {
                             .child(self.right_panel.clone().cached(full())),
                     ),
             )
+            // Above menus and popovers (deferred at low priorities).
+            .when_some(self.demo.as_ref(), |this, (cursor, _)| {
+                this.child(deferred(cursor.clone()).with_priority(1000))
+            })
     }
 }

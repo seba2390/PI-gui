@@ -253,8 +253,11 @@ fn render_file(
     cx: &mut Context<DiffView>,
 ) -> AnyElement {
     let clicked = entry.clone();
+    let probe = crate::demo::probe(format!("diff-file:{}", entry.path().display()));
     h_flex()
         .id(("diff-file", ix))
+        .relative()
+        .children(probe)
         .h(FILE_ROW_HEIGHT)
         .w_full()
         .px_2()
@@ -458,6 +461,7 @@ impl Render for DiffView {
                     .track_scroll(&self.scroll),
                 )
                 .child(Scrollbar::vertical(&self.scroll))
+                .children(crate::demo::probe("diff-list"))
                 .into_any_element(),
         }
     }
