@@ -57,14 +57,19 @@ npm i -g @earendil-works/pi-coding-agent
   ```
 
   Update with `brew upgrade --cask pistachio`.
-- **macOS** without Homebrew: download `Pistachio-…-macos-universal.zip` from
-  [Releases](https://github.com/seba2390/pistachio/releases), unzip it and move `Pistachio.app` to
-  Applications.
-  - The app isn't notarized yet, so macOS will block the first launch. Allow it once with:
+  <details>
+  <summary>macOS without Homebrew</summary>
 
-    ```bash
-    xattr -dr com.apple.quarantine /Applications/Pistachio.app
-    ```
+  Download `Pistachio-…-macos-universal.zip` from
+  [Releases](https://github.com/seba2390/pistachio/releases), unzip it and move `Pistachio.app` to
+  Applications. The app isn't notarized yet, so macOS will block the first launch. Allow it once
+  with:
+
+  ```bash
+  xattr -dr com.apple.quarantine /Applications/Pistachio.app
+  ```
+
+  </details>
 
 - **Linux (x86_64):** download `pistachio-…-linux-x86_64.tar.gz` from
   [Releases](https://github.com/seba2390/pistachio/releases), unpack it and run `./install.sh`.
