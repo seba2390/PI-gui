@@ -1560,11 +1560,7 @@ mod tests {
         assert_eq!(mode, super::Mode::Code);
         let (process, events) = pi_rpc::PiProcess::spawn(&options).expect("spawn pi over ssh");
         let client = process.client().clone();
-        let state = block_on(client.get_state()).expect("get_state");
-        eprintln!(
-            "remote pi state: session {:?} file {:?}",
-            state.session_id, state.session_file
-        );
+        block_on(client.get_state()).expect("get_state");
         let response = block_on(client.request(pi_rpc::protocol::Command::Bash {
             command: "printf e2e > made-by-pi.txt && pwd -P".into(),
             exclude_from_context: false,
