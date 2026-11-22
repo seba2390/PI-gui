@@ -538,10 +538,12 @@ fn default_shell() -> Option<tty::Shell> {
     None
 }
 
+/// PowerShell, like other Windows terminals (`COMSPEC`, i.e. cmd.exe, is always set, so it
+/// would never be the fallback).
 #[cfg(windows)]
+#[allow(clippy::unnecessary_wraps)] // same signature as the Unix version
 fn default_shell() -> Option<tty::Shell> {
-    let program = std::env::var("COMSPEC").unwrap_or_else(|_| "powershell".to_owned());
-    Some(tty::Shell::new(program, Vec::new()))
+    Some(tty::Shell::new("powershell.exe".to_owned(), vec!["-NoLogo".to_owned()]))
 }
 
 #[cfg(test)]

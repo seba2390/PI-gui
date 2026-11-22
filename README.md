@@ -55,6 +55,10 @@ npm i -g @earendil-works/pi-coding-agent
 - **Linux (x86_64):** download `pi-gui-…-linux-x86_64.tar.gz` from
   [Releases](https://github.com/seba2390/PI-gui/releases), unpack it and run `./install.sh`.
   That installs for your user only and adds "PI" to your app launcher.
+- **Windows (x86_64, experimental):** download `pi-gui-…-windows-x86_64.zip` from
+  [Releases](https://github.com/seba2390/PI-gui/releases), unzip it and run `pi-gui.exe`.
+  - Windows may warn about an unknown publisher the first time (More info → Run anyway).
+  - SSH remotes are untested on Windows.
 - **From source** (any platform, needs [Rust](https://rustup.rs)):
 
   ```bash

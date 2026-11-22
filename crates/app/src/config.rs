@@ -63,7 +63,7 @@ impl AppConfig {
         let home = dirs_home();
         Self {
             pi_program: std::env::var_os("PI_GUI_PI_BIN")
-                .map_or_else(|| "pi".into(), PathBuf::from),
+                .map_or_else(default_pi_program, PathBuf::from),
             child_env,
             sessions_dir: pi_sessions::sessions_dir(),
             home,
@@ -84,6 +84,24 @@ impl AppConfig {
                 .unwrap_or_default(),
         }
     }
+}
+
+/// `pi` from `PATH`. On Windows npm installs it as `pi.cmd`, which `Command` only finds (and
+/// runs through `cmd.exe`) when given its full path, so it is looked up here.
+fn default_pi_program() -> PathBuf {
+    if cfg!(windows)
+        && let Some(path) = std::env::var_os("PATH")
+    {
+        for dir in std::env::split_paths(&path) {
+            for name in ["pi.exe", "pi.cmd", "pi.bat"] {
+                let candidate = dir.join(name);
+                if candidate.is_file() {
+                    return candidate;
+                }
+            }
+        }
+    }
+    PathBuf::from("pi")
 }
 
 fn dirs_home() -> Option<PathBuf> {

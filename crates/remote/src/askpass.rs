@@ -13,11 +13,17 @@
 use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Read as _, Write as _};
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
+
+// Unix: a socket file in a private folder. Windows (no Unix sockets in std): a loopback TCP
+// port; the random token is what keeps other local programs out.
+#[cfg(not(unix))]
+use std::net::{TcpListener as Listener, TcpStream as Stream};
+#[cfg(unix)]
+use std::os::unix::net::{UnixListener as Listener, UnixStream as Stream};
 
 const SOCKET_ENV: &str = "PI_GUI_ASKPASS_SOCKET";
 const TOKEN_ENV: &str = "PI_GUI_ASKPASS_TOKEN";
@@ -54,11 +60,7 @@ pub struct AskpassServer {
 impl AskpassServer {
     /// Listens on `<dir>/askpass-<pid>.sock`; every prompt is sent to `prompts`.
     pub fn start(dir: &Path, prompts: async_channel::Sender<Prompt>) -> io::Result<Self> {
-        // The socket answers ssh's password prompts: its folder must be ours alone.
-        crate::ssh::prepare_private_dir(dir)?;
-        let socket = dir.join(format!("askpass-{}.sock", std::process::id()));
-        let _ = fs::remove_file(&socket);
-        let listener = UnixListener::bind(&socket)?;
+        let (listener, socket) = bind(dir)?;
         let token = random_token();
         let expected = token.clone();
         thread::Builder::new()
@@ -93,11 +95,40 @@ impl AskpassServer {
 
 impl Drop for AskpassServer {
     fn drop(&mut self) {
+        #[cfg(unix)]
         let _ = fs::remove_file(&self.socket);
     }
 }
 
-fn serve(mut stream: UnixStream, expected: &str, prompts: &async_channel::Sender<Prompt>) {
+/// Listens for askpass clients; returns the listener and the address they connect to.
+#[cfg(unix)]
+fn bind(dir: &Path) -> io::Result<(Listener, PathBuf)> {
+    // The socket answers ssh's password prompts: its folder must be ours alone.
+    crate::ssh::prepare_private_dir(dir)?;
+    let socket = dir.join(format!("askpass-{}.sock", std::process::id()));
+    let _ = fs::remove_file(&socket);
+    Ok((Listener::bind(&socket)?, socket))
+}
+
+#[cfg(not(unix))]
+fn bind(_dir: &Path) -> io::Result<(Listener, PathBuf)> {
+    let listener = Listener::bind(("127.0.0.1", 0))?;
+    let address = listener.local_addr()?.to_string();
+    Ok((listener, PathBuf::from(address)))
+}
+
+fn connect(address: &Path) -> io::Result<Stream> {
+    #[cfg(unix)]
+    {
+        Stream::connect(address)
+    }
+    #[cfg(not(unix))]
+    {
+        Stream::connect(address.to_string_lossy().as_ref())
+    }
+}
+
+fn serve(mut stream: Stream, expected: &str, prompts: &async_channel::Sender<Prompt>) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
     let mut request = Vec::new();
     if stream.read_to_end(&mut request).is_err() {
@@ -148,7 +179,7 @@ pub fn run_client_if_requested() -> Option<i32> {
 
 /// The client side: sends `prompt` and waits for the answer (`None`: cancelled).
 fn ask(socket: &Path, token: &str, prompt: &str) -> io::Result<Option<String>> {
-    let mut stream = UnixStream::connect(socket)?;
+    let mut stream = connect(socket)?;
     stream.write_all(token.as_bytes())?;
     stream.write_all(&[0])?;
     stream.write_all(prompt.as_bytes())?;
@@ -163,10 +194,13 @@ fn random_token() -> String {
     let mut bytes = [0u8; 16];
     let read = fs::File::open("/dev/urandom").and_then(|mut file| file.read_exact(&mut bytes));
     if read.is_err() {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |time| time.as_nanos());
-        bytes = (nanos ^ (u128::from(std::process::id()) << 64)).to_le_bytes();
+        // No /dev/urandom (Windows): std seeds each `RandomState` from the OS random source.
+        use std::hash::{BuildHasher as _, Hasher as _};
+        for chunk in bytes.chunks_mut(8) {
+            let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+            hasher.write_u32(std::process::id());
+            chunk.copy_from_slice(&hasher.finish().to_le_bytes()[..chunk.len()]);
+        }
     }
     use std::fmt::Write as _;
     bytes

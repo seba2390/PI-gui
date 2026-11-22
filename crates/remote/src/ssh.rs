@@ -13,6 +13,7 @@
 use std::ffi::OsString;
 use std::fs;
 use std::io;
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -202,16 +203,24 @@ impl Ssh {
         control_path.push(escape_percent(&self.control_dir));
         control_path.push("/%C");
         let mut args: Vec<OsString> = Vec::new();
-        for option in [
-            OsString::from("ControlMaster=auto"),
-            control_path,
-            OsString::from("ControlPersist=600"),
+        // Windows' OpenSSH has no connection sharing (it needs Unix sockets), so each command
+        // there opens its own connection.
+        let sharing = if cfg!(unix) {
+            vec![
+                OsString::from("ControlMaster=auto"),
+                control_path,
+                OsString::from("ControlPersist=600"),
+            ]
+        } else {
+            Vec::new()
+        };
+        for option in sharing.into_iter().chain([
             OsString::from("BatchMode=yes"),
             OsString::from("ConnectTimeout=10"),
             OsString::from("ServerAliveInterval=15"),
             OsString::from("ServerAliveCountMax=3"),
             OsString::from("LogLevel=ERROR"),
-        ] {
+        ]) {
             args.push("-o".into());
             args.push(option);
         }
@@ -341,20 +350,19 @@ impl Ssh {
         if let Some(dir) = known.parent()
             && !dir.exists()
         {
-            fs::DirBuilder::new()
-                .recursive(true)
-                .mode(0o700)
-                .create(dir)
-                .map_err(fail)?;
+            let mut builder = fs::DirBuilder::new();
+            builder.recursive(true);
+            #[cfg(unix)]
+            builder.mode(0o700);
+            builder.create(dir).map_err(fail)?;
         }
         let needs_newline = fs::read(&known)
             .is_ok_and(|existing| !existing.is_empty() && !existing.ends_with(b"\n"));
-        let mut out = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .mode(0o600)
-            .open(&known)
-            .map_err(fail)?;
+        let mut options = fs::OpenOptions::new();
+        options.create(true).append(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut out = options.open(&known).map_err(fail)?;
         if needs_newline {
             out.write_all(b"\n").map_err(fail)?;
         }
@@ -582,6 +590,7 @@ impl Ssh {
 
 /// Creates `dir` with mode 0700, or checks that the existing one is a real directory owned by
 /// the current user (it may live in the shared `/tmp`) and tightens its mode.
+#[cfg(unix)]
 pub(crate) fn prepare_private_dir(dir: &Path) -> io::Result<()> {
     if let Some(parent) = dir.parent() {
         fs::create_dir_all(parent)?;
@@ -604,16 +613,32 @@ pub(crate) fn prepare_private_dir(dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Windows: the folder lives in the user's profile, which other users cannot write to.
+#[cfg(not(unix))]
+pub(crate) fn prepare_private_dir(dir: &Path) -> io::Result<()> {
+    fs::create_dir_all(dir)
+}
+
 /// The current user's uid, taken from the owner of their home directory.
+#[cfg(unix)]
 fn current_uid() -> Option<u32> {
     dirs::home_dir()
         .and_then(|home| fs::metadata(home).ok())
         .map(|meta| meta.uid())
 }
 
+#[cfg(not(unix))]
+fn current_uid() -> Option<u32> {
+    None
+}
+
 fn user_tag() -> String {
     current_uid().map_or_else(
-        || std::env::var("USER").unwrap_or_else(|_| "user".to_owned()),
+        || {
+            std::env::var("USER")
+                .or_else(|_| std::env::var("USERNAME"))
+                .unwrap_or_else(|_| "user".to_owned())
+        },
         |uid| uid.to_string(),
     )
 }
@@ -796,6 +821,7 @@ mod tests {
         items.iter().map(|s| (*s).to_owned()).collect()
     }
 
+    #[cfg(unix)]
     fn os(items: &[&str]) -> Vec<OsString> {
         items.iter().map(OsString::from).collect()
     }
@@ -857,6 +883,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)] // Unix shells, file modes or connection sharing
     #[test]
     fn base_args_for_alias_and_custom() {
         let alias = Ssh::with_control_dir(
@@ -915,6 +942,7 @@ mod tests {
         assert_eq!(custom.base_args(), expected);
     }
 
+    #[cfg(unix)] // Unix shells, file modes or connection sharing
     #[test]
     fn command_args() {
         let dir = tempfile::tempdir().unwrap();
@@ -991,6 +1019,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)] // Unix shells, file modes or connection sharing
     #[test]
     fn command_expands_tilde_and_prepends_program_dir() {
         let home = tempfile::tempdir().unwrap();
@@ -1082,6 +1111,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)] // Unix shells, file modes or connection sharing
     #[test]
     fn probe_script_runs_locally() {
         let home = tempfile::tempdir().unwrap();
@@ -1198,6 +1228,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)] // Unix shells, file modes or connection sharing
     #[test]
     fn private_dir_is_created_and_tightened() {
         let root = tempfile::tempdir().unwrap();

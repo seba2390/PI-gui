@@ -73,9 +73,32 @@ jobs:
           name: linux
           path: ${{ env.ASSET }}
 
+  windows:
+    name: Windows (x86_64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked
+      - name: Package
+        shell: bash
+        run: |
+          dir="pi-gui-${GITHUB_REF_NAME}-windows-x86_64"
+          mkdir -p "$dir"
+          cp target/release/pi-gui.exe "$dir/"
+          cp README.md LICENSE-MIT LICENSE-APACHE "$dir/"
+          python script/third-party-licenses.py x86_64-pc-windows-msvc > "$dir/THIRD-PARTY-LICENSES.txt"
+          7z a -tzip "$dir.zip" "$dir" > /dev/null
+          echo "ASSET=$dir.zip" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows
+          path: ${{ env.ASSET }}
+
   publish:
     name: Publish release
-    needs: [macos, linux]
+    needs: [macos, linux, windows]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:

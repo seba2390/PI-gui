@@ -3,6 +3,9 @@
 //! The GUI is a pure view over `pi --mode rpc`: every agent behaviour comes from pi
 //! itself; this binary only renders pi's event stream and forwards user input.
 
+// A GUI app: no console window on Windows. (Pipes still work, e.g. for ssh's askpass.)
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 mod actions;
 mod assets;
 mod chat;

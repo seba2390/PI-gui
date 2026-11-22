@@ -97,8 +97,8 @@ Everything PI-gui does, in detail. For installation see the [README](../README.m
     host in the session's folder, and the attach picker indexes the remote folder.
   - When the connection drops, the session offers to reconnect and resumes its session file.
   - Limits: csh/tcsh login shells are not supported (bash, zsh, dash, ksh and fish are; fish
-    is untested on a real host). Windows clients are untested: the `remote` crate uses Unix
-    sockets, and Windows' OpenSSH cannot share connections.
+    is untested on a real host). Windows clients are untested: Windows' OpenSSH cannot share
+    connections, so every command opens its own connection there.
 - **Skills** (Code mode): a Skills button under the Chat | Code switch shows the skills pi loaded
   for the session (personal ones from `~/.pi/agent/skills` and `~/.agents/skills`, project ones
   from `.pi/skills` and `.agents/skills`), as pi itself reports them, here or on the SSH host.
@@ -120,7 +120,7 @@ Everything PI-gui does, in detail. For installation see the [README](../README.m
 - Right panel: git changes and a file tree of the working folder.
 - Bottom panel: an integrated terminal in the working folder; drag its top edge to resize it
   (the height is remembered).
-- macOS and Linux (Windows best-effort). GPU-rendered with [GPUI](https://gpui.rs) via
+- macOS and Linux, plus an experimental Windows build. GPU-rendered with [GPUI](https://gpui.rs) via
   [gpui-kit](https://gpui-kit.com).
 
 ## Keyboard shortcuts

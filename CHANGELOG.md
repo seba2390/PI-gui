@@ -6,6 +6,15 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Windows build (experimental): a `pi-gui.exe` zip in each release. pi installed with npm
+  (`pi.cmd`) is found on `PATH`. CI builds and lints Windows; SSH remotes are untested there.
+
+### Changed
+
+- CodeQL runs from a workflow on `main` and weekly instead of on pull requests.
+
 ## [0.1.0] - 2026-11-22
 
 The first public release: chat and code sessions over pi's RPC mode, with streaming
