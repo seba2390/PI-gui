@@ -71,13 +71,28 @@ npm i -g @earendil-works/pi-coding-agent
 
   </details>
 
-- **Linux (x86_64 and ARM64):** download the package for your system from
-  [Releases](https://github.com/seba2390/pistachio/releases) (`amd64` / `x86_64` for Intel and
-  AMD, `arm64` / `aarch64` for ARM), then:
-  - Debian, Ubuntu: `sudo apt install ./pistachio_…_amd64.deb`
-  - Fedora and other RPM-based systems: `sudo dnf install ./pistachio-….x86_64.rpm`
-  - Anything else: unpack `pistachio-…-linux-x86_64.tar.gz` and run `./install.sh`. That installs
-    for your user only (no root) and adds "Pistachio" to your app launcher.
+- **Linux (x86_64 and ARM64):** paste the command for your system into a terminal. It picks the
+  right download for your processor.
+  - Debian, Ubuntu:
+
+    ```bash
+    curl -fLO https://github.com/seba2390/pistachio/releases/download/v0.4.1/pistachio_0.4.1-1_$(dpkg --print-architecture).deb && sudo apt install ./pistachio_0.4.1-1_$(dpkg --print-architecture).deb
+    ```
+
+  - Fedora and other RPM-based systems:
+
+    ```bash
+    sudo dnf install https://github.com/seba2390/pistachio/releases/download/v0.4.1/pistachio-0.4.1-1.$(uname -m).rpm
+    ```
+
+  - Any other distribution (installs for your user only, no root, and adds "Pistachio" to your
+    app launcher):
+
+    ```bash
+    curl -fL https://github.com/seba2390/pistachio/releases/download/v0.4.1/pistachio-v0.4.1-linux-$(uname -m).tar.gz | tar xz && pistachio-v0.4.1-linux-$(uname -m)/install.sh
+    ```
+
+  Or download the files yourself from [Releases](https://github.com/seba2390/pistachio/releases).
 - **Windows (x86_64, experimental):** download `pistachio-…-windows-x86_64.zip` from
   [Releases](https://github.com/seba2390/pistachio/releases), unzip it and run `pistachio.exe`.
   - Windows may warn about an unknown publisher the first time (More info → Run anyway).
