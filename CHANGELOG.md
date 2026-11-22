@@ -21,6 +21,10 @@ All notable changes to PI-gui are listed here. The format follows
 
 - The last session is reopened at start only with the new "Reopen the last session" setting
   (before, an SSH session came back on its own).
+- Saved SSH connections connect at start only with the new "Connect saved connections at
+  start" setting (off by default; before, they always did).
+- The sidebar's search field matches the Settings page's (search icon, regular size), and
+  switches in Settings show a hover effect.
 - Web search's `config.json` is written atomically and readable only by you.
 
 ### Fixed

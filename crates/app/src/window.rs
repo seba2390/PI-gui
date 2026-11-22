@@ -274,6 +274,11 @@ impl MainWindow {
                 })
                 .filter(|target| crate::hosts::hosts(cx).read(cx).get(&target.host).is_some())
         };
+        // Its host may not connect at start on its own (that is a separate setting).
+        if let Some(target) = &restore {
+            let host = target.host.clone();
+            crate::hosts::hosts(cx).update(cx, |hosts, cx| hosts.connect_quietly(&host, cx));
+        }
         Self {
             sidebar,
             chat,

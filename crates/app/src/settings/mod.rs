@@ -75,6 +75,8 @@ pub struct AppSettings {
     pub skipped_version: Option<String>,
     /// The `pi` to run (`PISTACHIO_PI_BIN` still wins); `None` finds it on `PATH`.
     pub pi_program: Option<String>,
+    /// Connect every saved SSH connection quietly when the app opens.
+    pub connect_hosts_at_start: bool,
 }
 
 impl Default for AppSettings {
@@ -89,6 +91,7 @@ impl Default for AppSettings {
             check_for_updates: true,
             skipped_version: None,
             pi_program: None,
+            connect_hosts_at_start: false,
         }
     }
 }

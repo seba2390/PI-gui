@@ -77,9 +77,10 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   renames them, changes the command that starts pi, copies your model settings and removes
   them. pi runs **on the remote** (its tools, `AGENTS.md`, skills and sessions all live there)
   through the system `ssh`, so your config, keys, ssh-agent and `known_hosts` apply.
-  - One shared connection per host (ControlMaster) makes later commands ~30 ms. Saved hosts
-    connect quietly in the background at startup; the dot shows green (ready), amber (working
-    or needs you), red (failed) or grey (not connected).
+  - One shared connection per host (ControlMaster) makes later commands ~30 ms. With
+    "Connect saved connections at start" (Settings → SSH connections, off by default) saved
+    hosts connect quietly in the background when the app opens. The dot shows green (ready),
+    amber (working or needs you), red (failed) or grey (not connected).
   - **pi is installed automatically** when a host does not have it, like an editor's remote
     server: into `~/.pistachio/server` on the host, with no root access, using the host's
     Node.js 22.19+ or a downloaded, checksum-verified standalone Node.js. Remove that folder
@@ -137,7 +138,8 @@ change is saved right away.
 - **Web search:** the search service (DuckDuckGo, SearXNG, Brave or Tavily, with API keys
   stored only on this computer), whether new chats search, limits per message, and local
   network access.
-- **SSH connections:** saved hosts with their status, connecting, adding and managing them.
+- **SSH connections:** whether saved connections connect when the app opens (off by
+  default), and the saved hosts with their status, connecting, adding and managing them.
 
 The app's own settings live in `~/.pi/agent/pistachio/settings.json`.
 

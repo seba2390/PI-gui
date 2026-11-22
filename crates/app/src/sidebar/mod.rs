@@ -748,9 +748,14 @@ impl Render for Sidebar {
             )))
             .child(
                 div()
-                    .px_3()
+                    .px_2()
                     .pb_1()
-                    .child(Input::new(&self.filter).small().cleanable(true)),
+                    // The same field as the Settings page's search: default size, search icon.
+                    .child(
+                        Input::new(&self.filter)
+                            .prefix(Icon::new(IconName::Search))
+                            .cleanable(true),
+                    ),
             )
             .child(
                 div()
