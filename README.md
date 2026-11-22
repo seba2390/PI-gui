@@ -5,7 +5,7 @@
 <h1 align="center">Pistachio</h1>
 
 <p align="center">
-  A fast, native desktop app for the <a href="https://pi.dev">pi coding agent</a>.
+  A fast, native desktop app for the <a href="https://pi.dev">pi coding agent</a> written in Rust.
 </p>
 
 <p align="center">
