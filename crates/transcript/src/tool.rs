@@ -318,7 +318,11 @@ mod tests {
                 "Bash",
                 "frobnicate -x",
             ),
-            (tool("edit", json!({"path":"/h/x.txt"})), "Edited", "~/x.txt"),
+            (
+                tool("edit", json!({"path":"/h/x.txt"})),
+                "Edited",
+                "~/x.txt",
+            ),
             (
                 tool("grep", json!({"pattern":"fn main","glob":"*.rs"})),
                 "Grep",
