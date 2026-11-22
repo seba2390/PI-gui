@@ -388,7 +388,14 @@ fn render_assistant(
 }
 
 fn element_id(prefix: &'static str, key: BlockKey) -> ElementId {
-    ElementId::NamedInteger(prefix.into(), key.item.0 * 1_000 + key.block as u64)
+    // Wrapping: a whole group's key uses `block: usize::MAX`.
+    ElementId::NamedInteger(
+        prefix.into(),
+        key.item
+            .0
+            .wrapping_mul(1_000)
+            .wrapping_add(key.block as u64),
+    )
 }
 
 fn toggle_handler(
@@ -968,4 +975,22 @@ fn render_working(status: &RunStatus, cx: &RowContext<'_>) -> AnyElement {
             )
         })
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BlockKey, element_id};
+    use transcript::ItemId;
+
+    #[test]
+    fn a_whole_group_has_an_element_id() {
+        let key = |block| BlockKey {
+            item: ItemId(7),
+            block,
+        };
+        assert_ne!(
+            element_id("explored", key(usize::MAX)),
+            element_id("explored", key(0))
+        );
+    }
 }
