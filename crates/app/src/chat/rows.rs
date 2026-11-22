@@ -264,7 +264,7 @@ fn render_item(item: &TranscriptItem, cx: &RowContext<'_>, bubble: Hsla, app: &A
                         .gap_1p5()
                         .text_xs()
                         .text_color(cx.palette.subtle)
-                        .child(crate::ui::hop::resting_pi(px(11.), cx.palette.accent))
+                        .child(crate::ui::spinner::resting_pi(px(11.), cx.palette.accent))
                         .child(label),
                 )
                 .child(turn_actions(item.id.0, cx, app))
@@ -1209,7 +1209,7 @@ fn render_working(status: &RunStatus, cx: &RowContext<'_>) -> AnyElement {
     };
     let elapsed = since.map(|since| since.elapsed());
     let frame = cx.chat.spinner_frame();
-    // The label gently pulses (about one breath per 2 s) while the π hops.
+    // The label gently pulses (about one breath per 2 s) while the π spins.
     #[allow(clippy::cast_precision_loss)]
     let phase = (frame % 25) as f32 / 25.0 * std::f32::consts::TAU;
     let label_color = cx.palette.accent.opacity(0.7 + 0.3 * phase.cos());
@@ -1217,11 +1217,9 @@ fn render_working(status: &RunStatus, cx: &RowContext<'_>) -> AnyElement {
         .w_full()
         .justify_center()
         .items_center()
-        // Room above for the hop.
-        .pt_2()
         .gap_2()
         .text_sm()
-        .child(crate::ui::hop::hopping_pi(
+        .child(crate::ui::spinner::spinning_pi(
             frame,
             px(14.),
             cx.palette.accent,

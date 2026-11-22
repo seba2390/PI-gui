@@ -61,7 +61,7 @@ pub enum Activity {
     Done,
 }
 
-/// How often the working π hops a frame: the chat's pace, so both hop alike; the sidebar is
+/// How often the working π steps a frame: the chat's pace, so both spin alike; the sidebar is
 /// cheap to repaint, and it only ticks while something works.
 const SPINNER_FRAME: Duration = Duration::from_millis(80);
 

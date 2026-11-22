@@ -3,9 +3,9 @@
 mod button;
 mod copy_button;
 mod drag;
-pub mod hop;
 mod icons;
 mod pi_field;
+pub mod spinner;
 mod text;
 
 pub use button::QuietButton;
