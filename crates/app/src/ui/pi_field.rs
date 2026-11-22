@@ -1,5 +1,6 @@
-//! The welcome screen's background: a field of small π glyphs that drift out of the way of the
-//! mouse and spring back.
+//! The background of the welcome screen and of new, empty chats: a field of small π glyphs
+//! that drift out of the way of the mouse and spring back, and fade away when the conversation
+//! starts.
 //!
 //! Built to cost nothing while idle: each glyph is one GPU sprite of the cached `pi-logo` SVG
 //! (three sizes, so three atlas tiles), the physics is a few float operations per glyph, and
@@ -29,6 +30,8 @@ const SPRING: f32 = 38.;
 const DAMPING: f32 = 7.5;
 /// The opening drift into place.
 const INTRO: Duration = Duration::from_millis(900);
+/// The fade when the conversation starts.
+const FADE: Duration = Duration::from_millis(700);
 
 struct Glyph {
     /// Resting place, relative to the field's top-left corner.
@@ -51,6 +54,8 @@ pub struct PiField {
     /// Mouse movement since the last frame, handed on to nearby glyphs.
     mouse_moved: Point<f32>,
     intro_started: Option<Instant>,
+    /// When the fade-out started ([`Self::fade_out`]).
+    fade_started: Option<Instant>,
     ticker: Option<Task<()>>,
     last_tick: Instant,
     /// Painted since the last tick: when the field is not on screen, animation stops.
@@ -65,6 +70,7 @@ impl PiField {
             mouse: None,
             mouse_moved: Point::default(),
             intro_started: None,
+            fade_started: None,
             ticker: None,
             last_tick: Instant::now(),
             painted: false,
@@ -74,7 +80,30 @@ impl PiField {
     /// Plays the opening drift again (when the welcome screen is shown anew).
     pub fn replay(&mut self, cx: &mut Context<Self>) {
         self.laid_out = Size::default();
+        self.fade_started = None;
         cx.notify();
+    }
+
+    /// Fades the glyphs away (the first message was sent).
+    pub fn fade_out(&mut self, cx: &mut Context<Self>) {
+        if self.fade_started.is_none() {
+            self.fade_started = Some(Instant::now());
+            self.wake(cx);
+        }
+    }
+
+    /// Whether the fade-out has finished (nothing is drawn any more).
+    pub fn is_faded(&self) -> bool {
+        self.fade_started
+            .is_some_and(|start| start.elapsed() >= FADE)
+    }
+
+    /// 1 before the fade-out, easing to 0 as it runs.
+    fn visibility(&self) -> f32 {
+        self.fade_started.map_or(1., |start| {
+            let t = (start.elapsed().as_secs_f32() / FADE.as_secs_f32()).min(1.);
+            1. - t * t * (3. - 2. * t)
+        })
     }
 
     /// Lays the glyphs out on a jittered grid (even, never clumped), the same for the same
@@ -169,7 +198,13 @@ impl PiField {
         let drag = std::mem::take(&mut self.mouse_moved);
         let mut moving = self
             .intro_started
-            .is_some_and(|start| start.elapsed() < INTRO);
+            .is_some_and(|start| start.elapsed() < INTRO)
+            || self
+                .fade_started
+                .is_some_and(|start| start.elapsed() < FADE);
+        if self.is_faded() {
+            return false;
+        }
         for glyph in &mut self.glyphs {
             let position = glyph.home + glyph.offset;
             let mut accel = Point::new(
@@ -214,6 +249,10 @@ impl PiField {
             self.wake(cx);
         }
         self.painted = true;
+        let visibility = self.visibility();
+        if visibility <= 0. {
+            return;
+        }
         let intro = self.intro_started.map_or(1., |start| {
             (start.elapsed().as_secs_f32() / INTRO.as_secs_f32()).min(1.)
         });
@@ -238,7 +277,7 @@ impl PiField {
             } else {
                 grey
             };
-            let alpha = (glyph.alpha + glow * 0.45) * (0.25 + 0.75 * clear) * intro;
+            let alpha = (glyph.alpha + glow * 0.45) * (0.25 + 0.75 * clear) * intro * visibility;
             if alpha < 0.01 {
                 continue;
             }
@@ -325,7 +364,9 @@ impl Random {
 mod tests {
     use gpui_kit::{Point, Size};
 
-    use super::{FRAME, MAX_GLYPHS, PiField};
+    use std::time::Instant;
+
+    use super::{FADE, FRAME, MAX_GLYPHS, PiField};
 
     #[test]
     fn settles_after_a_push_and_stays_idle() {
@@ -377,5 +418,23 @@ mod tests {
             .map(|glyph| glyph.home.y)
             .fold(0., f32::max);
         assert!(lowest > 3500., "glyphs must cover the whole field");
+    }
+
+    #[test]
+    fn a_finished_fade_stops_everything() {
+        let mut field = PiField::new();
+        field.lay_out(Size::new(800., 600.));
+        assert!((field.visibility() - 1.).abs() < f32::EPSILON);
+        // Mid-fade it keeps animating, even with every glyph at rest.
+        field.intro_started = None;
+        field.fade_started = Some(Instant::now());
+        assert!(field.step(FRAME.as_secs_f32()));
+        assert!(!field.is_faded());
+        // Once it has run, nothing moves or is drawn, even with the mouse over it.
+        field.fade_started = Instant::now().checked_sub(FADE * 2);
+        field.mouse = Some(Point::new(400., 300.));
+        assert!(field.is_faded());
+        assert!(field.visibility() <= 0.);
+        assert!(!field.step(FRAME.as_secs_f32()));
     }
 }

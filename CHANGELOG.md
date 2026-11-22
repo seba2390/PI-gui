@@ -6,6 +6,11 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- New chats and Code sessions show the π field behind their empty screen; it fades out when
+  the first message is sent.
+
 ## [0.3.0] - 2026-11-22
 
 ### Added
