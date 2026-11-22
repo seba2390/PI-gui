@@ -41,6 +41,7 @@ impl CodeColors {
         }
     }
 
+    #[cfg(test)]
     pub fn from_id(id: &str) -> Self {
         Self::ALL
             .into_iter()

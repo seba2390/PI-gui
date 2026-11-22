@@ -63,6 +63,23 @@ fn set_code_colors(cx: &mut App) {
     theme.dark_theme = dark;
 }
 
+/// The syntax colors `palette` uses in light or dark mode, without applying them: the
+/// Settings preview shows a palette while the pointer is on it.
+pub fn code_colors_syntax(
+    palette: crate::code_colors::CodeColors,
+    dark: bool,
+    cx: &App,
+) -> gpui_kit::component::highlighter::SyntaxColors {
+    palette.syntax(dark).unwrap_or_else(|| {
+        cx.try_global::<BaseThemes>()
+            .and_then(|base| {
+                let config = if dark { &base.dark } else { &base.light };
+                config.highlight.as_ref().map(|style| style.syntax.clone())
+            })
+            .unwrap_or_default()
+    })
+}
+
 /// Applies a changed Code colors setting to the open windows.
 pub fn apply_code_colors(cx: &mut App) {
     set_code_colors(cx);

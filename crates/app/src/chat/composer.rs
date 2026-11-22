@@ -296,7 +296,8 @@ impl Composer {
             })
             .small()
             .when(active, |button| button.primary())
-            .when(!active, |button| button.ghost())
+            // The toolbar's quiet style: a visible hover and press on the composer surface.
+            .when(!active, |button| button.quiet(cx))
             .loading(status == SpeechStatus::Connecting)
             .tooltip(tooltip)
             .on_click(cx.listener(|this, _, window, cx| this.toggle_dictation(window, cx)))
