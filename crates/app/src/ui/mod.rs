@@ -3,6 +3,7 @@
 mod button;
 mod copy_button;
 mod drag;
+pub mod hop;
 mod icons;
 mod pi_field;
 mod text;

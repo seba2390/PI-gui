@@ -15,6 +15,10 @@ All notable changes to PI-gui are listed here. The format follows
 
 ### Changed
 
+- The working indicator is a little green π that hops (crouch, jump, a flip every third hop,
+  squash on landing), in the chat and in the sidebar, where it now sits left of the
+  conversation's name. "Working… 12s · esc to interrupt" is centred, and "Worked for" has a
+  small π.
 - The model's text stands apart from its activity: runs of tool calls and thinking sit on a
   thin rail on the left, in a slightly smaller, muted style, with more room where they meet
   the text. An image read says "Read an image" instead of "Read 1 line".

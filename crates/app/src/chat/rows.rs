@@ -40,8 +40,6 @@ const PREVIEW_LINES: usize = 3;
 /// Expanded tool output is capped to keep rows cheap (at `search::MAX_OUTPUT_LINES`, which is
 /// what find searches); the rest is summarized.
 use transcript::search::{self, MAX_OUTPUT_LINES};
-/// Spinner glyphs, played forwards then backwards so the star "breathes"; one per chat tick.
-pub(crate) const SPINNER: [&str; 10] = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"];
 
 /// Everything a row needs besides the item itself.
 struct RowContext<'a> {
@@ -266,7 +264,7 @@ fn render_item(item: &TranscriptItem, cx: &RowContext<'_>, bubble: Hsla, app: &A
                         .gap_1p5()
                         .text_xs()
                         .text_color(cx.palette.subtle)
-                        .child(div().text_color(cx.palette.accent).child("✻"))
+                        .child(crate::ui::hop::resting_pi(px(11.), cx.palette.accent))
                         .child(label),
                 )
                 .child(turn_actions(item.id.0, cx, app))
@@ -1211,21 +1209,23 @@ fn render_working(status: &RunStatus, cx: &RowContext<'_>) -> AnyElement {
     };
     let elapsed = since.map(|since| since.elapsed());
     let frame = cx.chat.spinner_frame();
-    let glyph = SPINNER[frame % SPINNER.len()];
-    // The label gently pulses (about one breath per 2 s) alongside the spinner.
+    // The label gently pulses (about one breath per 2 s) while the π hops.
     #[allow(clippy::cast_precision_loss)]
     let phase = (frame % 25) as f32 / 25.0 * std::f32::consts::TAU;
     let label_color = cx.palette.accent.opacity(0.7 + 0.3 * phase.cos());
     h_flex()
+        .w_full()
+        .justify_center()
+        .items_center()
+        // Room above for the hop.
+        .pt_2()
         .gap_2()
         .text_sm()
-        .child(
-            div()
-                .w(px(14.))
-                .flex_none()
-                .text_color(cx.palette.accent)
-                .child(glyph),
-        )
+        .child(crate::ui::hop::hopping_pi(
+            frame,
+            px(14.),
+            cx.palette.accent,
+        ))
         .child(div().text_color(label_color).child(label))
         .when_some(elapsed, |this, elapsed| {
             this.child(

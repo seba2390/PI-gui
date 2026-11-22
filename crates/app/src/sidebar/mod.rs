@@ -61,9 +61,9 @@ pub enum Activity {
     Done,
 }
 
-/// How often the working spinner advances: slow enough that the sidebar's repaints cost
-/// almost nothing, and it only ticks while something works.
-const SPINNER_FRAME: Duration = Duration::from_millis(120);
+/// How often the working π hops a frame: the chat's pace, so both hop alike; the sidebar is
+/// cheap to repaint, and it only ticks while something works.
+const SPINNER_FRAME: Duration = Duration::from_millis(80);
 
 pub struct Sidebar {
     mode: Mode,

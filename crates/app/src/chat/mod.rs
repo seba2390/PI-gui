@@ -25,7 +25,6 @@ use transcript::{BlockKind, ItemId, ItemKind};
 
 use composer::Composer;
 pub use composer::ComposerEvent;
-pub(crate) use rows::SPINNER;
 use session::{PiSession, SessionEvent};
 
 use crate::theme::palette;

@@ -30,7 +30,6 @@ pub fn session_row(
     let active = sidebar.is_active(host, &session.path);
     let activity = sidebar.activity(host, &session.path);
     let colors = crate::theme::palette(cx);
-    let spinner = crate::chat::SPINNER[sidebar.spinner_frame % crate::chat::SPINNER.len()];
     let theme = cx.theme();
     let (hover_bg, active_bg) = (theme.secondary_hover, theme.accent);
     let host = host.cloned();
@@ -71,6 +70,14 @@ pub fn session_row(
         .when(active, |this| this.bg(active_bg))
         .hover(|style| style.bg(hover_bg))
         .on_click(cx.listener(move |_, _, _, cx| cx.emit(open.clone())))
+        // A working agent: the hopping π, before the name.
+        .when(activity == Some(Activity::Working), |this| {
+            this.child(crate::ui::hop::hopping_pi(
+                sidebar.spinner_frame,
+                px(12.),
+                colors.accent,
+            ))
+        })
         .child(
             div()
                 .flex_1()
@@ -81,14 +88,8 @@ pub fn session_row(
                 .child(session.title().to_owned()),
         )
         .child(match activity {
-            Some(Activity::Working) => div()
-                .flex_none()
-                .w(px(14.))
-                .text_sm()
-                .text_center()
-                .text_color(colors.accent)
-                .child(spinner)
-                .into_any_element(),
+            // The age gives way while it works (the π says so on the left).
+            Some(Activity::Working) => div().into_any_element(),
             other => h_flex()
                 .flex_none()
                 .gap_1p5()
