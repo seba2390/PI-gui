@@ -385,6 +385,13 @@ impl MainWindow {
                         crate::stt::ui::start_download(model, cx);
                     }
                 }
+                // `view-file:<path>`: the Files tab's viewer on that file (relative to the folder).
+                other if other.starts_with("view-file:") => {
+                    let path = PathBuf::from(&other["view-file:".len()..]);
+                    self.show_files(&ShowFiles, window, cx);
+                    self.right_panel
+                        .update(cx, |panel, cx| panel.open_file(path, window, cx));
+                }
                 other if other.starts_with("find:") => {
                     let chat = self.chat.clone();
                     let text = other["find:".len()..].to_owned();

@@ -22,12 +22,18 @@ All notable changes to PI-gui are listed here. The format follows
   with Enter / Shift+Enter (or ⌘G / ⌘⇧G) for the next / previous one and a "3 of 12" count;
   Esc closes it. Thinking, tool output and edits are searched too, and a collapsed row opens
   when it holds the current match.
+- File viewer: clicking a file in the Files tab opens it read-only in the panel, with syntax
+  colors and line numbers, also for folders on an SSH host. "Mention" in the viewer, the +
+  button on a row, or ⌥-click in the tree still put an `@path` mention in the message box.
+  Binary files show a notice; files over 512 KB open with their first 512 KB.
 - Settings → Appearance → Code colors: pick the syntax colors for code (Pistachio, One,
   GitHub, Solarized, Gruvbox or Catppuccin), each with a light and a dark variant. A Python
   snippet below the picker shows the chosen palette right away. Only code colors change; the
   rest of the app keeps its theme.
 
 ### Changed
+
+- Clicking a file in the Files tab opens it instead of mentioning it (⌥-click mentions it).
 
 - The models.json editor colors JSON: keys, strings, numbers, `true`/`false` and `null` each
   get their own color.

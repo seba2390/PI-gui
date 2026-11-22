@@ -3,6 +3,7 @@
 //! * [`git`] — repository status, per-file and whole-tree diffs (the "Diff" tab), implemented
 //!   on top of the `git` CLI.
 //! * [`files`] — lazily listed, gitignore-aware directory contents (the "Files" tab).
+//! * [`viewer`] — the start of a file, and whether it is text, for the read-only viewer.
 //! * [`watch`] — a debounced recursive filesystem watcher so the UI knows when to refresh.
 //! * [`Location`] — whether the folder is on this computer or on another machine reached
 //!   through a [`RemoteShell`] (SSH); `*_at` functions take one and run remotely as `sh`
@@ -15,6 +16,7 @@ mod error;
 pub mod files;
 pub mod git;
 mod location;
+pub mod viewer;
 pub mod watch;
 
 pub use error::WorkspaceError;

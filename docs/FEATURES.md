@@ -123,7 +123,11 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   Esc closes the bar. It searches prompts and replies as shown, thinking, tool output and the
   agent's edits, including collapsed rows: the row with the current match opens and the
   transcript scrolls to it. Case is ignored.
-- Right panel: git changes and a file tree of the working folder.
+- Right panel: git changes and a file tree of the working folder. Clicking a file opens it
+  read-only in the panel, with syntax colors and line numbers (← goes back to the tree);
+  **Mention** in its header, the **+** on a row, or ⌥-click in the tree puts an `@path`
+  mention in the message box instead. Binary files show a short notice, and files over
+  512 KB open with their first 512 KB. Files on an SSH host are read over the connection.
 - Syntax colors for code by file extension: chat code blocks, the agent's edits (its diffs
   in the chat), the files it reads, and the Changes panel's diffs. Diffs keep their red and
   green backgrounds with the code colors on top; the old and new text are rebuilt from each

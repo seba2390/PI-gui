@@ -28,6 +28,8 @@ const CHEVRON_WIDTH: Pixels = px(12.);
 pub enum FilesEvent {
     /// Mention this (absolute) path in the chat.
     Insert(PathBuf),
+    /// Show this (absolute) file in the viewer.
+    Open(PathBuf),
 }
 
 pub struct FilesView {
@@ -128,8 +130,11 @@ impl FilesView {
         if node.is_dir {
             self.toggle(&node.path, cx);
         } else {
-            if event.click_count() >= 2 {
+            // A click opens the file; ⌥-click mentions it in the chat, as clicking used to.
+            if event.modifiers().alt {
                 cx.emit(FilesEvent::Insert(node.path.clone()));
+            } else {
+                cx.emit(FilesEvent::Open(node.path.clone()));
             }
             cx.notify();
         }
@@ -204,7 +209,7 @@ impl FilesView {
                                             .xsmall()
                                             .icon(IconName::Plus)
                                             .accessibility_label("Mention in chat")
-                                            .tooltip("Mention in chat")
+                                            .tooltip("Mention in chat (⌥-click)")
                                             .on_click(cx.listener(move |_, _, window, cx| {
                                                 window.prevent_default();
                                                 cx.stop_propagation();
