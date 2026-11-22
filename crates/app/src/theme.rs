@@ -1,7 +1,7 @@
-//! The visual theme: warm neutrals with Kvantify's green as the accent, in light and dark.
+//! The visual theme: warm neutrals with a deep green accent, in light and dark.
 //!
 //! gpui-kit components read the semantic tokens from `assets/themes/pi.json`.
-//! A few app-specific colours (diff lines, the Kvantify green accent, sidebar surface) live
+//! A few app-specific colours (diff lines, the green accent, sidebar surface) live
 //! in [`Palette`], chosen by the active light/dark mode.
 
 use gpui_kit::component::{ActiveTheme as _, Theme, ThemeMode, ThemeRegistry};

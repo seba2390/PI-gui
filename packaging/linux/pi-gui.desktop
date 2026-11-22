@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=PI
+GenericName=Coding agent
+Comment=Desktop app for the pi coding agent
+Exec=pi-gui
+Icon=pi-gui
+Terminal=false
+Categories=Development;
+StartupWMClass=pi-gui

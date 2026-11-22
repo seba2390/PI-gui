@@ -1,0 +1,42 @@
+name: Bug report
+description: Something doesn't work as it should
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open a Code session in …
+        2. …
+  - type: input
+    id: version
+    attributes:
+      label: PI-gui version or commit
+      placeholder: v0.1.0 / abc1234
+    validations:
+      required: true
+  - type: input
+    id: pi
+    attributes:
+      label: pi version (`pi --version`)
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options: [macOS, Linux, Windows]
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Run `RUST_LOG=pi_gui=debug pi-gui` from a terminal and paste the relevant part. Remove anything private.
+      render: text

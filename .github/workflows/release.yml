@@ -1,0 +1,89 @@
+name: Release
+
+# Push a tag like `v0.2.0` to build the apps and publish a GitHub release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  macos:
+    name: macOS (universal)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked --target aarch64-apple-darwin
+      - run: cargo build --release --locked --target x86_64-apple-darwin
+      - name: Bundle PI.app
+        run: |
+          mkdir -p target/release
+          lipo -create -output target/release/pi-gui \
+            target/aarch64-apple-darwin/release/pi-gui \
+            target/x86_64-apple-darwin/release/pi-gui
+          script/bundle-macos.sh release
+          res=target/release/PI.app/Contents/Resources
+          cp LICENSE-MIT LICENSE-APACHE "$res/"
+          python3 script/third-party-licenses.py aarch64-apple-darwin > "$res/THIRD-PARTY-LICENSES.txt"
+          codesign --force --sign - target/release/PI.app
+          name="PI-${GITHUB_REF_NAME}-macos-universal.zip"
+          (cd target/release && ditto -c -k --keepParent PI.app "$name")
+          echo "ASSET=target/release/$name" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: ${{ env.ASSET }}
+
+  linux:
+    name: Linux (x86_64)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: System libraries (GPUI)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev \
+            libx11-xcb-dev libxcb1-dev libfontconfig-dev libfreetype-dev libzstd-dev
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked
+      - name: Package
+        run: |
+          dir="pi-gui-${GITHUB_REF_NAME}-linux-x86_64"
+          mkdir -p "$dir"
+          cp target/release/pi-gui "$dir/"
+          cp packaging/linux/pi-gui.desktop packaging/linux/install.sh "$dir/"
+          cp crates/app/assets/app-icon/icon-512.png "$dir/pi-gui.png"
+          cp README.md LICENSE-MIT LICENSE-APACHE "$dir/"
+          python3 script/third-party-licenses.py x86_64-unknown-linux-gnu > "$dir/THIRD-PARTY-LICENSES.txt"
+          tar -czf "$dir.tar.gz" "$dir"
+          echo "ASSET=$dir.tar.gz" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: ${{ env.ASSET }}
+
+  publish:
+    name: Publish release
+    needs: [macos, linux]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
