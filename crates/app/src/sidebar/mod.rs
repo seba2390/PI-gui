@@ -61,15 +61,10 @@ pub enum Activity {
     Done,
 }
 
-/// How often the working π steps a frame: the chat's pace, so both pulse alike; the sidebar is
-/// cheap to repaint, and it only ticks while something works.
-const SPINNER_FRAME: Duration = Duration::from_millis(80);
-
 pub struct Sidebar {
     mode: Mode,
     /// Sessions that are working, waiting for an answer or finished unseen, by host and file.
     activity: HashMap<(Option<HostId>, PathBuf), Activity>,
-    spinner_frame: usize,
     spinner: Option<Task<()>>,
     sessions: Vec<SessionSummary>,
     /// The open session: its host (`None`: this computer) and file.
@@ -112,7 +107,6 @@ impl Sidebar {
         let mut this = Self {
             mode,
             activity: HashMap::new(),
-            spinner_frame: 0,
             spinner: None,
             sessions: Vec::new(),
             active: None,
@@ -200,9 +194,12 @@ impl Sidebar {
         } else if self.spinner.is_none() {
             self.spinner = Some(cx.spawn(async move |this, cx| {
                 loop {
-                    cx.background_executor().timer(SPINNER_FRAME).await;
-                    let alive = this.update(cx, |this, cx| {
-                        this.spinner_frame = this.spinner_frame.wrapping_add(1);
+                    // The working π pulses; the sidebar is cheap to repaint, and only while something
+                    // works.
+                    cx.background_executor()
+                        .timer(crate::ui::spinner::FRAME)
+                        .await;
+                    let alive = this.update(cx, |_, cx| {
                         cx.notify();
                     });
                     if alive.is_err() {

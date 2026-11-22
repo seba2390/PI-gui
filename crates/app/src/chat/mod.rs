@@ -14,7 +14,6 @@ pub mod session;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::time::Duration;
 
 use gpui_kit::component::message_scroller::{MessageScroller, MessageScrollerState};
 use gpui_kit::component::text::{TextView, TextViewState};
@@ -34,8 +33,6 @@ actions!(chat, [ToggleThinking, ToggleToolOutput]);
 const CHAT_CONTEXT: &str = "Chat";
 /// Readable line length, like other agent UIs.
 pub const CONTENT_MAX_WIDTH: Pixels = px(780.);
-/// Frame interval of the "working" spinner.
-const SPINNER_FRAME: Duration = Duration::from_millis(80);
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
@@ -93,8 +90,6 @@ pub struct ChatView {
     expand_tools: bool,
     focus_handle: FocusHandle,
     ticker: Option<Task<()>>,
-    /// Advances every [`SPINNER_FRAME`] while the agent works.
-    spinner_frame: usize,
     /// The host was re-checked after this remote session ended.
     checked_host: bool,
     /// Shown in the window (false while it works in the background).
@@ -195,7 +190,6 @@ impl ChatView {
             expand_tools: false,
             focus_handle: cx.focus_handle(),
             ticker: None,
-            spinner_frame: 0,
             checked_host: false,
             visible: true,
             roles: Vec::new(),
@@ -537,18 +531,18 @@ impl ChatView {
         self.row_versions = new_versions;
         self.working_row = running;
 
-        // 4. While working, tick at the spinner's frame rate so it animates smoothly and the
-        //    timers advance. 12.5 fps keeps the redraw cost (the chat column) small; nothing
-        //    ticks while idle.
+        // 4. While working, repaint at the working π's frame rate so it pulses smoothly and
+        //    the timers advance; nothing ticks while idle.
         if running && self.ticker.is_none() {
             self.ticker = Some(cx.spawn(async move |this, cx| {
                 loop {
-                    cx.background_executor().timer(SPINNER_FRAME).await;
+                    cx.background_executor()
+                        .timer(crate::ui::spinner::FRAME)
+                        .await;
                     let keep = this
                         .update(cx, |this, cx| {
                             let running = this.session.read(cx).is_running();
                             if running {
-                                this.spinner_frame = this.spinner_frame.wrapping_add(1);
                                 cx.notify();
                             } else {
                                 this.ticker = None;
@@ -565,10 +559,6 @@ impl ChatView {
         // Matches move with the transcript (new text, a reload).
         self.refresh_find(cx);
         cx.notify();
-    }
-
-    pub(crate) fn spinner_frame(&self) -> usize {
-        self.spinner_frame
     }
 
     pub(crate) fn is_expanded(&self, key: BlockKey, is_thinking: bool) -> bool {

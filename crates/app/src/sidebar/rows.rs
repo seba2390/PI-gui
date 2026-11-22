@@ -72,11 +72,7 @@ pub fn session_row(
         .on_click(cx.listener(move |_, _, _, cx| cx.emit(open.clone())))
         // A working agent: the pulsing π, before the name.
         .when(activity == Some(Activity::Working), |this| {
-            this.child(crate::ui::spinner::pulsing_pi(
-                sidebar.spinner_frame,
-                px(12.),
-                colors.accent,
-            ))
+            this.child(crate::ui::spinner::pulsing_pi(px(12.), colors.accent))
         })
         .child(
             div()

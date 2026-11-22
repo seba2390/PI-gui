@@ -1,31 +1,52 @@
 //! The "working" indicator: a little π that pulses, gently shrinking and growing.
 //!
-//! The animation is stepped by the caller's existing ticker (the chat's and the sidebar's,
-//! every 80 ms while an agent works), so it adds no timers or per-frame work of its own.
+//! The pulse follows the wall clock, not a frame count, so it stays smooth however the frames
+//! fall, and every π on screen (chat and sidebar) breathes in step. Views showing one repaint
+//! every [`FRAME`] while an agent works, and not at all otherwise.
+
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use gpui_kit::component::Icon;
 use gpui_kit::*;
 
 use super::AppIcon;
 
-/// Frames per pulse (small → big → small): about 1.3 s at the 80 ms tick, a calm breath.
-const PULSE_FRAMES: usize = 16;
+/// How often a view showing the π repaints while an agent works: 30 fps is smooth for a slow
+/// pulse, and it only runs while something is working.
+pub const FRAME: Duration = Duration::from_millis(33);
+/// One breath (small → big → small).
+const PERIOD: f32 = 1.4;
 /// The pulse's smallest and largest scale.
 const PULSE: (f32, f32) = (0.72, 1.08);
 
-/// The π's scale at animation frame `frame`.
-#[allow(clippy::cast_precision_loss)]
-pub fn scale(frame: usize) -> f32 {
-    let phase = (frame % PULSE_FRAMES) as f32 / PULSE_FRAMES as f32 * std::f32::consts::TAU;
-    // 0 at the smallest, 1 at the largest; starts small and swells.
-    let swell = (1. - phase.cos()) / 2.;
-    PULSE.0 + (PULSE.1 - PULSE.0) * swell
+/// Seconds since the first π was drawn: the shared clock of every pulse.
+fn clock() -> f32 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_secs_f32()
 }
 
-/// The π at `frame` of its pulse, `size` square, in `color`. The box keeps its size; only the
-/// π grows and shrinks inside it, so nothing around it moves.
-pub fn pulsing_pi(frame: usize, size: Pixels, color: Hsla) -> Div {
-    let scale = scale(frame);
+/// How far into a breath `seconds` is: 0 at the smallest, 1 at the largest, eased (a cosine),
+/// so it slows at both ends like breathing.
+pub fn breath_at(seconds: f32) -> f32 {
+    let phase = (seconds / PERIOD).fract() * std::f32::consts::TAU;
+    (1. - phase.cos()) / 2.
+}
+
+/// The current breath, for things that pulse along with the π (the "Working…" label).
+pub fn breath() -> f32 {
+    breath_at(clock())
+}
+
+/// The π's scale `seconds` into the pulse.
+pub fn scale_at(seconds: f32) -> f32 {
+    PULSE.0 + (PULSE.1 - PULSE.0) * breath_at(seconds)
+}
+
+/// The π as it is now, `size` square, in `color`. The box keeps its size; only the π grows
+/// and shrinks inside it, so nothing around it moves.
+pub fn pulsing_pi(size: Pixels, color: Hsla) -> Div {
+    let scale = scale_at(clock());
     div().flex_none().size(size).child(
         Icon::from(AppIcon::PiLogo)
             .size(size)
@@ -44,23 +65,34 @@ pub fn resting_pi(size: Pixels, color: Hsla) -> Div {
 
 #[cfg(test)]
 mod tests {
-    use super::{PULSE, PULSE_FRAMES, scale};
+    use super::{FRAME, PERIOD, PULSE, scale_at};
 
     #[test]
     fn pulses_between_small_and_big() {
-        assert!((scale(0) - PULSE.0).abs() < 1e-5, "starts small");
+        assert!((scale_at(0.) - PULSE.0).abs() < 1e-5, "starts small");
         assert!(
-            (scale(PULSE_FRAMES / 2) - PULSE.1).abs() < 1e-5,
+            (scale_at(PERIOD / 2.) - PULSE.1).abs() < 1e-5,
             "swells to full"
         );
         assert!(
-            (scale(PULSE_FRAMES) - scale(0)).abs() < 1e-6,
+            (scale_at(PERIOD) - scale_at(0.)).abs() < 1e-4,
             "loops seamlessly"
         );
-        for frame in 0..PULSE_FRAMES * 2 {
-            assert!((PULSE.0 - 1e-5..=PULSE.1 + 1e-5).contains(&scale(frame)));
+        for step in 0..200 {
+            #[allow(clippy::cast_precision_loss)]
+            let scale = scale_at(step as f32 * 0.037);
+            assert!((PULSE.0 - 1e-5..=PULSE.1 + 1e-5).contains(&scale));
         }
-        // Grows, then shrinks.
-        assert!(scale(3) > scale(2) && scale(12) < scale(11));
+    }
+
+    #[test]
+    fn frames_change_it_by_small_steps() {
+        // Smooth: no frame moves the π by more than a few percent of its size.
+        let frame = FRAME.as_secs_f32();
+        for step in 0..100 {
+            #[allow(clippy::cast_precision_loss)]
+            let t = step as f32 * frame;
+            assert!((scale_at(t + frame) - scale_at(t)).abs() < 0.05);
+        }
     }
 }
