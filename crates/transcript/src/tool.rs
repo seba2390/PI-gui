@@ -104,6 +104,70 @@ pub fn header(tool: &ToolBlock, paths: PathContext<'_>) -> ToolHeader {
     }
 }
 
+/// What kind of step a tool call is, for the small icon at the start of its row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolKind {
+    /// Reads a file.
+    Read,
+    /// Creates, changes, moves or removes files.
+    Write,
+    /// Lists folders.
+    List,
+    /// Searches or checks (grep, find, `which`, versions).
+    Search,
+    /// Fetches or searches the web.
+    Web,
+    /// Installs packages.
+    Install,
+    /// Git.
+    Git,
+    /// Runs a command or script.
+    Shell,
+    /// Anything else (extension and MCP tools).
+    Other,
+}
+
+/// The kind of `tool`: by tool name, and for shell commands by what the command does (the
+/// first step of a recognized command, as its title shows).
+pub fn kind(tool: &ToolBlock) -> ToolKind {
+    match tool.name.as_str() {
+        "read" => ToolKind::Read,
+        "write" | "edit" => ToolKind::Write,
+        "ls" => ToolKind::List,
+        "grep" | "find" => ToolKind::Search,
+        "web_search" | "web_fetch" => ToolKind::Web,
+        "bash" => arg(&tool.args, "command")
+            .and_then(crate::command::summarize)
+            .and_then(|summary| summary.actions.first().map(action_kind))
+            .unwrap_or(ToolKind::Shell),
+        _ => ToolKind::Other,
+    }
+}
+
+fn action_kind(action: &crate::command::Action) -> ToolKind {
+    use crate::command::Action;
+    match action {
+        Action::Read(_) => ToolKind::Read,
+        Action::List(_) => ToolKind::List,
+        Action::Find { .. } | Action::Search { .. } | Action::Check(_) => ToolKind::Search,
+        Action::GitRead(_) | Action::Git(_) | Action::InitRepo => ToolKind::Git,
+        Action::Install { .. } => ToolKind::Install,
+        Action::CreateProject(_)
+        | Action::MakeDir(_)
+        | Action::Create(_)
+        | Action::Write(_)
+        | Action::Edit(_)
+        | Action::Remove(_)
+        | Action::Move(..)
+        | Action::Copy(..) => ToolKind::Write,
+        Action::Fetch(_) => ToolKind::Web,
+        Action::Remote {
+            inner: Some(inner), ..
+        } => inner.actions.first().map_or(ToolKind::Shell, action_kind),
+        _ => ToolKind::Shell,
+    }
+}
+
 /// A URL without its scheme and `www.`, at most 80 characters.
 fn short_url(url: &str) -> String {
     let short = url
@@ -303,6 +367,33 @@ mod tests {
             duration_ms: None,
             images: Vec::new(),
             nested: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn kinds_follow_the_tool_and_the_command() {
+        let bash = |command: &str| tool("bash", json!({ "command": command }));
+        let cases = [
+            (tool("read", json!({"path":"a.rs"})), ToolKind::Read),
+            (tool("edit", json!({"path":"a.rs"})), ToolKind::Write),
+            (tool("write", json!({"path":"a.rs"})), ToolKind::Write),
+            (tool("ls", json!({})), ToolKind::List),
+            (tool("grep", json!({"pattern":"x"})), ToolKind::Search),
+            (
+                tool("web_fetch", json!({"url":"https://x.dev"})),
+                ToolKind::Web,
+            ),
+            (tool("mcp__x", json!({})), ToolKind::Other),
+            (bash("ls -la"), ToolKind::List),
+            (bash("cat Cargo.toml"), ToolKind::Read),
+            (bash("rg foo src"), ToolKind::Search),
+            (bash("mkdir -p js"), ToolKind::Write),
+            (bash("git status"), ToolKind::Git),
+            (bash("npm install"), ToolKind::Install),
+            (bash("frobnicate --hard"), ToolKind::Shell),
+        ];
+        for (tool, expected) in cases {
+            assert_eq!(kind(&tool), expected, "{} {}", tool.name, tool.args);
         }
     }
 

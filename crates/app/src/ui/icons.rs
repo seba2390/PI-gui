@@ -12,11 +12,14 @@ pub enum AppIcon {
     Globe,
     Image,
     MessageSquare,
+    Package,
     Paperclip,
+    Pencil,
     PiLogo,
     RotateCcw,
     Sparkles,
     SquarePen,
+    Wrench,
 }
 
 impl AppIcon {
@@ -30,11 +33,14 @@ impl AppIcon {
             Self::Globe => "icons/globe.svg",
             Self::Image => "icons/image.svg",
             Self::MessageSquare => "icons/message-square.svg",
+            Self::Package => "icons/package.svg",
             Self::Paperclip => "icons/paperclip.svg",
+            Self::Pencil => "icons/pencil.svg",
             Self::PiLogo => "icons/pi-logo.svg",
             Self::RotateCcw => "icons/rotate-ccw.svg",
             Self::Sparkles => "icons/sparkles.svg",
             Self::SquarePen => "icons/square-pen.svg",
+            Self::Wrench => "icons/wrench.svg",
         }
     }
 }

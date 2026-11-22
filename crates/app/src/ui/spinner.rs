@@ -232,6 +232,12 @@ pub fn frame(style: IndicatorStyle, seconds: f32) -> Frame {
     frame
 }
 
+/// Opacity for something that breathes while running (a running tool call's icon), in step
+/// with the indicators.
+pub fn running_opacity() -> f32 {
+    0.45 + 0.55 * breath(clock(), 1.4)
+}
+
 /// Seconds since the first indicator was drawn: the shared clock of every indicator.
 fn clock() -> f32 {
     static START: OnceLock<Instant> = OnceLock::new();

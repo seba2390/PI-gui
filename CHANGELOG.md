@@ -26,6 +26,11 @@ All notable changes to PI-gui are listed here. The format follows
   π at a spinner's uneven speed while it glows and a shimmer crosses "Working…"; the others
   are a comet tail, a spinning π, a single dot, an atom ring, half-turn hops and a pulse. "Working… 12s · esc to interrupt" is centred, and "Worked for" has a
   small π.
+- Tool calls start with a small icon for what they did (a document for reads, a pencil for
+  changes, a terminal for commands, a magnifier for searches, a folder for listings, a globe
+  for the web), instead of a green dot. It is muted when the call is done, red when it failed,
+  breathing in the accent colour while it runs and faded when interrupted, so green is left
+  for the connection and running work.
 - The model's text stands apart from its activity: runs of tool calls and thinking sit on a
   thin rail on the left, in a slightly smaller, muted style, with more room where they meet
   the text. An image read says "Read an image" instead of "Read 1 line".

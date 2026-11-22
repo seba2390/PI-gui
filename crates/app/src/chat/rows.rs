@@ -12,7 +12,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use transcript::explore::{Group, RowRole};
 use transcript::search::Field;
-use transcript::tool::{self, DiffKind, PathContext};
+use transcript::tool::{self, DiffKind, PathContext, ToolKind};
 use transcript::{
     AssistantItem, BlockKind, ItemKind, NestedEntry, NoticeKind, RunStatus, ThinkingBlock,
     ToolBlock, ToolStatus, TranscriptItem, format_duration,
@@ -598,12 +598,12 @@ fn render_group(group: &Group, cx: &RowContext<'_>) -> AnyElement {
         .iter()
         .filter(|tool| tool.status == ToolStatus::Failed)
         .count();
-    let dot = if active {
-        cx.palette.accent
+    let marker_status = if active {
+        ToolStatus::Running
     } else if failed > 0 {
-        cx.palette.error
+        ToolStatus::Failed
     } else {
-        cx.palette.success
+        ToolStatus::Done
     };
     let mut detail = plural(tools.len(), "step");
     if failed > 0 {
@@ -619,14 +619,7 @@ fn render_group(group: &Group, cx: &RowContext<'_>) -> AnyElement {
         .gap_2()
         .cursor_pointer()
         .on_click(toggle_handler(cx, key))
-        .child(
-            div()
-                .mt(px(7.))
-                .size(px(7.))
-                .flex_none()
-                .rounded_full()
-                .bg(dot),
-        )
+        .child(tool_marker(ToolKind::Search, marker_status, px(13.), cx).mt(px(2.)))
         .child(
             h_flex()
                 .flex_1()
@@ -729,12 +722,6 @@ fn render_tool(key: BlockKey, tool: &ToolBlock, cx: &RowContext<'_>) -> AnyEleme
     let header = tool::header(tool, cx.paths);
     // A labelled bash call shows its command when expanded.
     let labelled = tool.name == "bash" && header.title != "Bash";
-    let dot = match tool.status {
-        ToolStatus::Done => cx.palette.success,
-        ToolStatus::Failed => cx.palette.error,
-        ToolStatus::Cancelled => cx.palette.subtle,
-        ToolStatus::Streaming | ToolStatus::Pending | ToolStatus::Running => cx.palette.accent,
-    };
     let diff = tool::diff_lines(tool);
 
     let nested_steps = tool
@@ -803,14 +790,7 @@ fn render_tool(key: BlockKey, tool: &ToolBlock, cx: &RowContext<'_>) -> AnyEleme
                 .gap_2()
                 .cursor_pointer()
                 .on_click(toggle_handler(cx, key))
-                .child(
-                    div()
-                        .mt(px(7.))
-                        .size(px(7.))
-                        .flex_none()
-                        .rounded_full()
-                        .bg(dot),
-                )
+                .child(tool_marker(tool::kind(tool), tool.status, px(13.), cx).mt(px(2.)))
                 .child(
                     h_flex()
                         .flex_1()
@@ -950,23 +930,48 @@ fn render_tool(key: BlockKey, tool: &ToolBlock, cx: &RowContext<'_>) -> AnyEleme
         .into_any_element()
 }
 
+/// The icon at the start of a tool row: what kind of step it is (a document for a read, a
+/// pencil for a change, a terminal for a command…), coloured only when that means something:
+/// muted when done, red when it failed, the accent and breathing while it runs, faded when it
+/// was interrupted. (Green is left for "connected" and "running".)
+fn tool_marker(kind: ToolKind, status: ToolStatus, size: Pixels, cx: &RowContext<'_>) -> Div {
+    let icon: Icon = match kind {
+        ToolKind::Read => IconName::FileText.into(),
+        ToolKind::Write => AppIcon::Pencil.into(),
+        ToolKind::List => IconName::Folder.into(),
+        ToolKind::Search => IconName::Search.into(),
+        ToolKind::Web => AppIcon::Globe.into(),
+        ToolKind::Install => AppIcon::Package.into(),
+        ToolKind::Git => AppIcon::GitBranch.into(),
+        ToolKind::Shell => IconName::SquareTerminal.into(),
+        ToolKind::Other => AppIcon::Wrench.into(),
+    };
+    let color = match status {
+        ToolStatus::Done => cx.muted,
+        ToolStatus::Failed => cx.palette.error,
+        ToolStatus::Cancelled => cx.palette.subtle.opacity(0.5),
+        ToolStatus::Streaming | ToolStatus::Pending | ToolStatus::Running => cx
+            .palette
+            .accent
+            .opacity(crate::ui::spinner::running_opacity()),
+    };
+    div()
+        .flex_none()
+        .size(size)
+        .child(icon.size(size).text_color(color))
+}
+
 /// The steps inside an expanded tool call: each nested call as a compact row, and what a
 /// nested assistant replied.
 fn render_nested(nested: &[NestedEntry], cx: &RowContext<'_>) -> AnyElement {
     let rows = nested.iter().map(|entry| match entry {
         NestedEntry::Tool(inner) => {
             let header = tool::header(inner, cx.paths);
-            let dot = match inner.status {
-                ToolStatus::Done => cx.palette.success,
-                ToolStatus::Failed => cx.palette.error,
-                ToolStatus::Cancelled => cx.palette.subtle,
-                _ => cx.palette.accent,
-            };
             h_flex()
                 .gap_1p5()
                 .items_center()
                 .text_xs()
-                .child(div().size(px(5.)).flex_none().rounded_full().bg(dot))
+                .child(tool_marker(tool::kind(inner), inner.status, px(11.), cx))
                 .child(
                     div()
                         .flex_none()
