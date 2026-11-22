@@ -57,6 +57,8 @@ pub fn header(tool: &ToolBlock, paths: PathContext<'_>) -> ToolHeader {
     };
     let path =
         |fallback: &str| path_arg(args).map_or_else(|| fallback.to_owned(), |p| paths.display(p));
+    // Titles are past tense, like the labels of recognized shell commands ("Listed",
+    // "Ran"); "Read" reads both ways. Grep, Find and Bash are tool names.
     let (title, detail) = match tool.name.as_str() {
         "read" => ("Read", format!("{}{}", path(""), line_range(args))),
         "bash" => {
@@ -72,9 +74,9 @@ pub fn header(tool: &ToolBlock, paths: PathContext<'_>) -> ToolHeader {
             }
             ("Bash", first_line(arg(args, "command").unwrap_or("")))
         }
-        "edit" => ("Edit", path("")),
-        "write" => ("Write", path("")),
-        "ls" => ("List", path(".")),
+        "edit" => ("Edited", path("")),
+        "write" => ("Wrote", path("")),
+        "ls" => ("Listed", path(".")),
         "grep" => {
             let detail = format!("/{}/ in {}", arg(args, "pattern").unwrap_or(""), path("."));
             match arg(args, "glob") {
@@ -87,7 +89,7 @@ pub fn header(tool: &ToolBlock, paths: PathContext<'_>) -> ToolHeader {
             format!("{} in {}", arg(args, "pattern").unwrap_or(""), path(".")),
         ),
         // Deep search (pistachio's chat extension).
-        "web_search" => ("Search", arg(args, "query").unwrap_or("").to_owned()),
+        "web_search" => ("Searched", arg(args, "query").unwrap_or("").to_owned()),
         "web_fetch" => ("Read", short_url(arg(args, "url").unwrap_or(""))),
         other => {
             return ToolHeader {
@@ -316,16 +318,16 @@ mod tests {
                 "Bash",
                 "frobnicate -x",
             ),
-            (tool("edit", json!({"path":"/h/x.txt"})), "Edit", "~/x.txt"),
+            (tool("edit", json!({"path":"/h/x.txt"})), "Edited", "~/x.txt"),
             (
                 tool("grep", json!({"pattern":"fn main","glob":"*.rs"})),
                 "Grep",
                 "/fn main/ in . (*.rs)",
             ),
-            (tool("ls", json!({})), "List", "."),
+            (tool("ls", json!({})), "Listed", "."),
             (
                 tool("web_search", json!({"query":"dgx spark price"})),
-                "Search",
+                "Searched",
                 "dgx spark price",
             ),
             (

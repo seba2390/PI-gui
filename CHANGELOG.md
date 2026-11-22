@@ -6,6 +6,11 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Tool calls in the chat read in the past tense like the rest: "Wrote", "Edited", "Listed" and
+  "Searched" instead of "Write", "Edit", "List" and "Search".
+
 ## [0.4.2] - 2026-11-22
 
 ### Added
