@@ -197,7 +197,7 @@ impl TerminalPanel {
             .collect();
         config
             .env
-            .push(("TERM_PROGRAM".to_owned(), "pi-gui".to_owned()));
+            .push(("TERM_PROGRAM".to_owned(), "pistachio".to_owned()));
 
         match Terminal::spawn(config) {
             Ok((terminal, events)) => {
@@ -725,7 +725,7 @@ mod tests {
             let focus = panel.read(cx).focus_handle(cx);
             window.focus(&focus, cx);
         });
-        cx.simulate_input("echo pi-gui-$((6*7))");
+        cx.simulate_input("echo pistachio-$((6*7))");
         cx.simulate_keystrokes("enter");
 
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -740,7 +740,7 @@ mod tests {
                 assert!(matches!(panel.state, State::Running(_)));
                 panel.snapshot.borrow().text()
             });
-            if text.contains("pi-gui-42") {
+            if text.contains("pistachio-42") {
                 break;
             }
             assert!(Instant::now() < deadline, "no output; screen:\n{text}");

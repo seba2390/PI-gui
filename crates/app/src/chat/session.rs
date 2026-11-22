@@ -208,7 +208,7 @@ impl PiSession {
             let hosts = cx.try_global::<crate::hosts::HostsHandle>()?.0.read(cx);
             let mut saved = hosts.get(id).cloned()?;
             // Prefer the exact path the probe found (conda / nvm installs may only be on an
-            // interactive shell's PATH; pi-gui's own install is not on PATH at all).
+            // interactive shell's PATH; pistachio's own install is not on PATH at all).
             saved.pi_command = hosts.pi_command(id);
             Some(saved)
         });
@@ -285,7 +285,7 @@ impl PiSession {
                 this.lifecycle = Lifecycle::Exited {
                     message: format!(
                         "Could not start `{}`: {error}. Is pi installed and on your PATH? \
-                         (Set PI_GUI_PI_BIN to override.)",
+                         (Set PISTACHIO_PI_BIN to override.)",
                         options.program.display()
                     ),
                 };
@@ -1010,7 +1010,7 @@ impl PiSession {
             return;
         };
         let env = cx.global::<AppConfig>().child_env.clone();
-        let dir = std::env::temp_dir().join(format!("pi-gui-share-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("pistachio-share-{}", std::process::id()));
         let file = dir.join("session.html");
         self.push_notice(NoticeKind::Info, "Creating a secret gist…", cx);
         cx.spawn(async move |this, cx| {
@@ -1464,7 +1464,7 @@ mod tests {
         assert!(extension.exists());
         assert!(chat.env.contains(&(
             deepsearch::BIN_ENV.into(),
-            std::ffi::OsString::from("/app/pi-gui")
+            std::ffi::OsString::from("/app/pistachio")
         )));
 
         let project = std::env::temp_dir().join("some-project");
@@ -1517,12 +1517,12 @@ mod tests {
     /// pi is started through the same launch path as a remote session, runs a shell command
     /// on the host through pi's RPC, its session file is listed from the host, and the
     /// session resumes with its history. No model is needed.
-    /// `PI_GUI_SSH_TEST_HOST=<alias> cargo test -p pi-gui -- --ignored real_pi_over_ssh`
+    /// `PISTACHIO_SSH_TEST_HOST=<alias> cargo test -p pistachio -- --ignored real_pi_over_ssh`
     #[test]
-    #[ignore = "runs pi on PI_GUI_SSH_TEST_HOST"]
+    #[ignore = "runs pi on PISTACHIO_SSH_TEST_HOST"]
     fn real_pi_over_ssh() {
         use futures::executor::block_on;
-        let Ok(alias) = std::env::var("PI_GUI_SSH_TEST_HOST") else {
+        let Ok(alias) = std::env::var("PISTACHIO_SSH_TEST_HOST") else {
             return;
         };
         let ssh = remote::Ssh::new(remote::Target::Alias {
@@ -1536,7 +1536,7 @@ mod tests {
         // key), and a custom pi command (a wrapper) that points pi at those settings.
         let scratch = ssh
             .exec(&format!(
-                "d=$(mktemp -d /tmp/pi-gui-e2e.XXXXXX) && cd \"$d\" && mkdir -p proj agent && \
+                "d=$(mktemp -d /tmp/pistachio-e2e.XXXXXX) && cd \"$d\" && mkdir -p proj agent && \
                  (cd proj && git init -q) && \
                  printf '%s' '{{\"providers\":{{\"dummy\":{{\"baseUrl\":\"http://127.0.0.1:9/v1\",\"api\":\"openai-completions\",\"apiKey\":\"none\",\"models\":[{{\"id\":\"none\",\"name\":\"None\"}}]}}}}}}' > agent/models.json && \
                  printf '%s' '{{\"defaultProvider\":\"dummy\",\"defaultModel\":\"none\"}}' > agent/settings.json && \
@@ -1634,7 +1634,7 @@ mod tests {
     /// The "Add model" flow against real pi (`pi` on PATH): pi starts without the model, the
     /// model is added to models.json the way the dialog does it, pi is restarted (as the
     /// window does after saving), and the new model gets selected.
-    /// `cargo test -p pi-gui -- --ignored added_model_is_loaded_and_selected`
+    /// `cargo test -p pistachio -- --ignored added_model_is_loaded_and_selected`
     #[cfg(unix)]
     #[gpui_kit::test]
     #[ignore = "needs pi on PATH"]
@@ -1662,13 +1662,13 @@ mod tests {
                 .read(cx)
                 .models()
                 .iter()
-                .all(|m| m.provider != "pigui-test")
+                .all(|m| m.provider != "pistachio-test")
         }));
 
         let mut file = pi_config::ModelsFile::parse("").unwrap();
         let provider = pi_config::NewProvider {
-            id: "pigui-test".into(),
-            name: "PI-gui test".into(),
+            id: "pistachio-test".into(),
+            name: "Pistachio test".into(),
             base_url: "http://127.0.0.1:9/v1".into(),
             api: "openai-completions".into(),
             api_key: "none".into(),
@@ -1679,14 +1679,14 @@ mod tests {
             context_window: Some(32_000),
             ..pi_config::ModelSpec::default()
         };
-        file.add_model("pigui-test", Some(&provider), &model)
+        file.add_model("pistachio-test", Some(&provider), &model)
             .unwrap();
         std::fs::write(agent.path().join("models.json"), file.to_text()).unwrap();
         drop(before);
 
         let after = cx.new(|cx| PiSession::new(project.path().into(), None, None, cx));
         after.update(cx, |session, cx| {
-            session.select_model_when_ready("pigui-test".into(), "added-model".into(), cx);
+            session.select_model_when_ready("pistachio-test".into(), "added-model".into(), cx);
         });
         wait_ready(&after, cx).await;
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
@@ -1697,7 +1697,7 @@ mod tests {
                     .model()
                     .map(pi_rpc::protocol::Model::qualified_id)
             });
-            if current.as_deref() == Some("pigui-test/added-model") {
+            if current.as_deref() == Some("pistachio-test/added-model") {
                 break;
             }
             assert!(

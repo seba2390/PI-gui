@@ -13,6 +13,7 @@
 use std::ffi::OsString;
 use std::fs;
 use std::io;
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -42,8 +43,11 @@ const KEYSCAN_TIMEOUT: Duration = Duration::from_secs(20);
 /// node script installed next to its `node` (nvm, Homebrew) finds it.
 pub(crate) const LAUNCH_SCRIPT: &str = r#"d=$1; shift; case $d in "") ;; "~") cd || exit 1 ;; "~/"*) cd -- "$HOME/${d#??}" || exit 1 ;; *) cd -- "$d" || exit 1 ;; esac; case $1 in "~/"*) p=$HOME/${1#??}; shift; set -- "$p" "$@" ;; esac; case $1 in /*) PATH=${1%/*}:$PATH; export PATH ;; esac; exec "$@""#;
 
-/// Where pi-gui installs its own copy of pi on a host (relative to `$HOME`).
-pub const MANAGED_DIR: &str = ".pi-gui/server";
+/// Where pistachio installs its own copy of pi on a host (relative to `$HOME`).
+pub const MANAGED_DIR: &str = ".pistachio/server";
+
+/// Where installs made before the rename from PI-gui live; still used when found.
+pub const LEGACY_MANAGED_DIR: &str = ".pi-gui/server";
 
 /// Sets `PATH` to the login shell's (run through fish's own syntax when that is the login
 /// shell). Shared by the scripts below; `$s` is the login shell afterwards.
@@ -54,14 +58,14 @@ case ${s##*/} in
 esac
 case $lp in /*) PATH=$lp:$PATH; export PATH ;; esac"#;
 
-/// Probes the host. `$1` is the pi command. Prints `PIGUI_*=` marker lines so whatever the
+/// Probes the host. `$1` is the pi command. Prints `PISTACHIO_*=` marker lines so whatever the
 /// user's profile scripts print is ignored. pi is looked up on the login shell's `PATH`, then
-/// an interactive shell's (where `.bashrc` additions such as nvm live), then pi-gui's own
+/// an interactive shell's (where `.bashrc` additions such as nvm live), then pistachio's own
 /// install. Also reports pi's agent and sessions folders (honouring `PI_CODING_AGENT_DIR`,
 /// `PI_CODING_AGENT_SESSION_DIR` and an absolute `sessionDir` setting) and whether
 /// `models.json` exists there.
-const PROBE_SCRIPT: &str = r#"printf 'PIGUI_HOME=%s\n' "$HOME"
-printf 'PIGUI_SYSTEM=%s\n' "$(uname -sm)"
+const PROBE_SCRIPT: &str = r#"printf 'PISTACHIO_HOME=%s\n' "$HOME"
+printf 'PISTACHIO_SYSTEM=%s\n' "$(uname -sm)"
 c=$1; case $c in "~/"*) c=$HOME/${c#??} ;; esac
 ENV_SCRIPT
 p=$(command -v "$c" 2>/dev/null)
@@ -69,13 +73,14 @@ case ${s##*/} in fish) ;; *)
   case $p in /*) ;; *) p=$("$s" -ic 'command -v "$1"' sh "$c" </dev/null 2>/dev/null | tail -n 1) ;; esac ;;
 esac
 m=$HOME/MANAGED_DIR/bin/pi
+[ -x "$m" ] || m=$HOME/LEGACY_MANAGED_DIR/bin/pi
 case $p in /*) ;; *) [ "$c" = pi ] && [ -x "$m" ] && p=$m ;; esac
 case $p in /*)
-  printf 'PIGUI_PI=%s\n' "$p"
+  printf 'PISTACHIO_PI=%s\n' "$p"
   v=$(PATH=${p%/*}:$PATH "$p" --version </dev/null 2>/dev/null | tail -n 1)
-  printf 'PIGUI_VERSION=%s\n' "$v" ;;
+  printf 'PISTACHIO_VERSION=%s\n' "$v" ;;
 esac
-ev() { "$s" -lc "printenv $1 | sed 's/^/PIGUI_EV=/'" </dev/null 2>/dev/null | sed -n 's/^PIGUI_EV=//p' | tail -n 1; }
+ev() { "$s" -lc "printenv $1 | sed 's/^/PISTACHIO_EV=/'" </dev/null 2>/dev/null | sed -n 's/^PISTACHIO_EV=//p' | tail -n 1; }
 a=$(ev PI_CODING_AGENT_DIR)
 case $a in /*|"~/"*) ;; *) a= ;; esac
 [ -n "$a" ] || a=$HOME/.pi/agent
@@ -87,9 +92,9 @@ if [ -z "$d" ] && [ -f "$a/settings.json" ]; then
   case $d in /*) ;; *) d= ;; esac
 fi
 [ -n "$d" ] || d=$a/sessions
-printf 'PIGUI_AGENT=%s\n' "$a"
-printf 'PIGUI_SESSIONS=%s\n' "$d"
-[ -f "$a/models.json" ] && printf 'PIGUI_MODELS=1\n'
+printf 'PISTACHIO_AGENT=%s\n' "$a"
+printf 'PISTACHIO_SESSIONS=%s\n' "$d"
+[ -f "$a/models.json" ] && printf 'PISTACHIO_MODELS=1\n'
 exit 0"#;
 
 /// Lists subfolders of `$1` (empty or `~` = home): the canonical path, then every directory
@@ -179,13 +184,13 @@ impl Ssh {
         PathBuf::from("ssh")
     }
 
-    /// `<agent dir>/pi-gui/cm`, or `/tmp/pi-gui-cm-<uid>` when that path is too long for a
+    /// `<agent dir>/pistachio/cm`, or `/tmp/pistachio-cm-<uid>` when that path is too long for a
     /// control socket.
     pub fn default_control_dir() -> PathBuf {
         pi_sessions::agent_dir()
-            .map(|agent| agent.join("pi-gui").join("cm"))
+            .map(|agent| agent.join(pi_sessions::APP_DIR).join("cm"))
             .filter(|dir| dir.is_absolute() && dir.as_os_str().len() <= MAX_CONTROL_DIR_LEN)
-            .unwrap_or_else(|| PathBuf::from(format!("/tmp/pi-gui-cm-{}", user_tag())))
+            .unwrap_or_else(|| PathBuf::from(format!("/tmp/pistachio-cm-{}", user_tag())))
     }
 
     /// Options shared by every invocation, then the target's own options and destination:
@@ -202,16 +207,24 @@ impl Ssh {
         control_path.push(escape_percent(&self.control_dir));
         control_path.push("/%C");
         let mut args: Vec<OsString> = Vec::new();
-        for option in [
-            OsString::from("ControlMaster=auto"),
-            control_path,
-            OsString::from("ControlPersist=600"),
+        // Windows' OpenSSH has no connection sharing (it needs Unix sockets), so each command
+        // there opens its own connection.
+        let sharing = if cfg!(unix) {
+            vec![
+                OsString::from("ControlMaster=auto"),
+                control_path,
+                OsString::from("ControlPersist=600"),
+            ]
+        } else {
+            Vec::new()
+        };
+        for option in sharing.into_iter().chain([
             OsString::from("BatchMode=yes"),
             OsString::from("ConnectTimeout=10"),
             OsString::from("ServerAliveInterval=15"),
             OsString::from("ServerAliveCountMax=3"),
             OsString::from("LogLevel=ERROR"),
-        ] {
+        ]) {
             args.push("-o".into());
             args.push(option);
         }
@@ -341,20 +354,19 @@ impl Ssh {
         if let Some(dir) = known.parent()
             && !dir.exists()
         {
-            fs::DirBuilder::new()
-                .recursive(true)
-                .mode(0o700)
-                .create(dir)
-                .map_err(fail)?;
+            let mut builder = fs::DirBuilder::new();
+            builder.recursive(true);
+            #[cfg(unix)]
+            builder.mode(0o700);
+            builder.create(dir).map_err(fail)?;
         }
         let needs_newline = fs::read(&known)
             .is_ok_and(|existing| !existing.is_empty() && !existing.ends_with(b"\n"));
-        let mut out = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .mode(0o600)
-            .open(&known)
-            .map_err(fail)?;
+        let mut options = fs::OpenOptions::new();
+        options.create(true).append(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut out = options.open(&known).map_err(fail)?;
         if needs_newline {
             out.write_all(b"\n").map_err(fail)?;
         }
@@ -435,7 +447,7 @@ impl Ssh {
     /// TTY, for a long-running process such as `pi --mode rpc`.
     ///
     /// The remote command is
-    /// `exec "${SHELL:-/bin/sh}" -lc '<launch script>' pi-gui <cwd> <argv…>`: the login shell
+    /// `exec "${SHELL:-/bin/sh}" -lc '<launch script>' pistachio <cwd> <argv…>`: the login shell
     /// provides the user's full `PATH`, and the working folder and arguments travel as
     /// positional parameters, so they are quoted exactly once and the login shell never
     /// re-parses them. `cwd` and a program may start with `~/`; an absolute program's folder is
@@ -582,6 +594,7 @@ impl Ssh {
 
 /// Creates `dir` with mode 0700, or checks that the existing one is a real directory owned by
 /// the current user (it may live in the shared `/tmp`) and tightens its mode.
+#[cfg(unix)]
 pub(crate) fn prepare_private_dir(dir: &Path) -> io::Result<()> {
     if let Some(parent) = dir.parent() {
         fs::create_dir_all(parent)?;
@@ -604,16 +617,32 @@ pub(crate) fn prepare_private_dir(dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Windows: the folder lives in the user's profile, which other users cannot write to.
+#[cfg(not(unix))]
+pub(crate) fn prepare_private_dir(dir: &Path) -> io::Result<()> {
+    fs::create_dir_all(dir)
+}
+
 /// The current user's uid, taken from the owner of their home directory.
+#[cfg(unix)]
 fn current_uid() -> Option<u32> {
     dirs::home_dir()
         .and_then(|home| fs::metadata(home).ok())
         .map(|meta| meta.uid())
 }
 
+#[cfg(not(unix))]
+fn current_uid() -> Option<u32> {
+    None
+}
+
 fn user_tag() -> String {
     current_uid().map_or_else(
-        || std::env::var("USER").unwrap_or_else(|_| "user".to_owned()),
+        || {
+            std::env::var("USER")
+                .or_else(|_| std::env::var("USERNAME"))
+                .unwrap_or_else(|_| "user".to_owned())
+        },
         |uid| uid.to_string(),
     )
 }
@@ -636,6 +665,7 @@ fn ssh_failure(output: &Output) -> RemoteError {
 fn probe_script() -> String {
     PROBE_SCRIPT
         .replace("ENV_SCRIPT", LOGIN_PATH)
+        .replace("LEGACY_MANAGED_DIR", LEGACY_MANAGED_DIR)
         .replace("MANAGED_DIR", MANAGED_DIR)
 }
 
@@ -650,8 +680,8 @@ case ${{s##*/}} in
   fish)
     lp=$("$s" -lc 'string join : $PATH' </dev/null 2>/dev/null | tail -n 1)
     case $lp in /*) PATH=$lp; export PATH ;; esac
-    exec /bin/sh -c "$L" pi-gui "$@" ;;
-  *) exec "$s" -lc "$L" pi-gui "$@" ;;
+    exec /bin/sh -c "$L" pistachio "$@" ;;
+  *) exec "$s" -lc "$L" pistachio "$@" ;;
 esac"#,
         sh_quote(LAUNCH_SCRIPT)
     )
@@ -661,7 +691,7 @@ esac"#,
 fn remote_launch_command(cwd: Option<&str>, argv: &[String]) -> String {
     let mut remote = String::from("exec /bin/sh -c ");
     remote.push_str(&remote_word(&outer_launch_script()));
-    remote.push_str(" pi-gui ");
+    remote.push_str(" pistachio ");
     remote.push_str(&remote_word(cwd.unwrap_or("")));
     for arg in argv {
         remote.push(' ');
@@ -725,13 +755,13 @@ fn parse_probe(stdout: &str) -> Result<Probe, RemoteError> {
         };
         let value = Some(value.trim().to_owned()).filter(|value| !value.is_empty());
         match key {
-            "PIGUI_HOME" => home = value,
-            "PIGUI_SYSTEM" => system = value,
-            "PIGUI_PI" => pi_path = value,
-            "PIGUI_VERSION" => pi_version = value,
-            "PIGUI_AGENT" => agent_dir = value,
-            "PIGUI_SESSIONS" => sessions_dir = value,
-            "PIGUI_MODELS" => has_models = value.is_some(),
+            "PISTACHIO_HOME" => home = value,
+            "PISTACHIO_SYSTEM" => system = value,
+            "PISTACHIO_PI" => pi_path = value,
+            "PISTACHIO_VERSION" => pi_version = value,
+            "PISTACHIO_AGENT" => agent_dir = value,
+            "PISTACHIO_SESSIONS" => sessions_dir = value,
+            "PISTACHIO_MODELS" => has_models = value.is_some(),
             _ => {}
         }
     }
@@ -796,6 +826,7 @@ mod tests {
         items.iter().map(|s| (*s).to_owned()).collect()
     }
 
+    #[cfg(unix)]
     fn os(items: &[&str]) -> Vec<OsString> {
         items.iter().map(OsString::from).collect()
     }
@@ -857,6 +888,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)] // Unix shells, file modes or connection sharing
     #[test]
     fn base_args_for_alias_and_custom() {
         let alias = Ssh::with_control_dir(
@@ -915,6 +947,7 @@ mod tests {
         assert_eq!(custom.base_args(), expected);
     }
 
+    #[cfg(unix)] // Unix shells, file modes or connection sharing
     #[test]
     fn command_args() {
         let dir = tempfile::tempdir().unwrap();
@@ -935,7 +968,7 @@ mod tests {
         assert_eq!(
             args[args.len() - 1],
             OsString::from(format!(
-                "exec /bin/sh -c {} pi-gui '/home/me/my project' pi --mode rpc",
+                "exec /bin/sh -c {} pistachio '/home/me/my project' pi --mode rpc",
                 remote_word(&outer_launch_script())
             ))
         );
@@ -991,6 +1024,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)] // Unix shells, file modes or connection sharing
     #[test]
     fn command_expands_tilde_and_prepends_program_dir() {
         let home = tempfile::tempdir().unwrap();
@@ -1082,6 +1116,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)] // Unix shells, file modes or connection sharing
     #[test]
     fn probe_script_runs_locally() {
         let home = tempfile::tempdir().unwrap();
@@ -1112,7 +1147,7 @@ mod tests {
         assert_eq!(probe.pi_version.as_deref(), Some("fakepi 1.2.3"));
         assert_ne!(probe.system, "");
 
-        let missing = run("definitely-not-a-command-pigui");
+        let missing = run("definitely-not-a-command-pistachio");
         assert_eq!(missing.pi_path, None);
         assert_eq!(missing.pi_version, None);
         assert_eq!(missing.agent_dir, format!("{}/.pi/agent", home.display()));
@@ -1122,7 +1157,7 @@ mod tests {
         );
         assert!(!missing.has_models);
 
-        // pi-gui's own install is found when `pi` is not on PATH; settings move sessions.
+        // pistachio's own install is found when `pi` is not on PATH; settings move sessions.
         let managed = home.join(MANAGED_DIR).join("bin");
         fs::create_dir_all(&managed).unwrap();
         fs::copy(&tool, managed.join("pi")).unwrap();
@@ -1141,9 +1176,9 @@ mod tests {
 
     #[test]
     fn parses_probe_output() {
-        let stdout = "Welcome to Ubuntu!\nPIGUI_HOME=/home/me\nPIGUI_SYSTEM=Linux aarch64\n\
-                      PIGUI_PI=/home/me/.nvm/versions/node/v22/bin/pi\nPIGUI_VERSION=0.45.3\n\
-                      PIGUI_AGENT=/home/me/.pi/agent\nPIGUI_SESSIONS=/data/sessions\nPIGUI_MODELS=1\n";
+        let stdout = "Welcome to Ubuntu!\nPISTACHIO_HOME=/home/me\nPISTACHIO_SYSTEM=Linux aarch64\n\
+                      PISTACHIO_PI=/home/me/.nvm/versions/node/v22/bin/pi\nPISTACHIO_VERSION=0.45.3\n\
+                      PISTACHIO_AGENT=/home/me/.pi/agent\nPISTACHIO_SESSIONS=/data/sessions\nPISTACHIO_MODELS=1\n";
         assert_eq!(
             parse_probe(stdout).unwrap(),
             Probe {
@@ -1156,12 +1191,14 @@ mod tests {
                 system: "Linux aarch64".into(),
             }
         );
-        let no_pi = parse_probe("PIGUI_HOME=/Users/me\nPIGUI_SYSTEM=Darwin arm64\n").unwrap();
+        let no_pi =
+            parse_probe("PISTACHIO_HOME=/Users/me\nPISTACHIO_SYSTEM=Darwin arm64\n").unwrap();
         assert_eq!(no_pi.pi_path, None);
         assert_eq!(no_pi.sessions_dir, "/Users/me/.pi/agent/sessions");
         assert!(!no_pi.has_models);
         assert_eq!(no_pi.pi_version, None);
-        let empty_version = parse_probe("PIGUI_HOME=/h\nPIGUI_PI=/h/pi\nPIGUI_VERSION=\n").unwrap();
+        let empty_version =
+            parse_probe("PISTACHIO_HOME=/h\nPISTACHIO_PI=/h/pi\nPISTACHIO_VERSION=\n").unwrap();
         assert_eq!(empty_version.pi_version, None);
         assert!(matches!(
             parse_probe("garbage"),
@@ -1198,6 +1235,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)] // Unix shells, file modes or connection sharing
     #[test]
     fn private_dir_is_created_and_tightened() {
         let root = tempfile::tempdir().unwrap();

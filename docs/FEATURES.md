@@ -1,6 +1,6 @@
 # Features
 
-Everything PI-gui does, in detail. For installation see the [README](../README.md).
+Everything Pistachio does, in detail. For installation see the [README](../README.md).
 
 - Chat in the centre: streaming markdown, collapsible thinking (“Thought for 4s”), tool calls with
   results and inline edit diffs, and “Worked for 1m 3s” after every turn.
@@ -26,7 +26,7 @@ Everything PI-gui does, in detail. For installation see the [README](../README.m
     (collapsible, "+" for a new session there), including ones started from the terminal.
   - **Chat**: plain conversation with **no file or shell tools**: the model cannot read, write
     or run anything on your computer. Chats run pi in a dedicated empty folder
-    (`~/.pi/agent/pi-gui/chat`) with only deep search's two web tools (`--tools
+    (`~/.pi/agent/pistachio/chat`) with only deep search's two web tools (`--tools
     web_search,web_fetch --no-mcp`), which stay off until you turn web search on. Text
     attachments are pasted into the prompt instead of being referenced by path, and `!`
     shell commands are disabled.
@@ -43,7 +43,7 @@ Everything PI-gui does, in detail. For installation see the [README](../README.m
     are read without JavaScript, reduced to their main text, and long pages are cut down to
     the passages that match what the model is looking for. Only public addresses are fetched
     (no localhost or private networks), and each message has a limit on searches and page
-    reads. Settings live in `~/.pi/agent/pi-gui/deepsearch/` and apply to the next message,
+    reads. Settings live in `~/.pi/agent/pistachio/deepsearch/` and apply to the next message,
     no restart:
     - `config.json`: `backend` (`duckduckgo` by default, no key; `searxng` with
       `searxng.url`, e.g. a self-hosted instance with `json` enabled in its `settings.yml`;
@@ -55,8 +55,8 @@ Everything PI-gui does, in detail. For installation see the [README](../README.m
     - `prompt-search.md` and `prompt-deep.md`: each mode's instructions (`{{date}}`,
       `{{max_searches}}` and `{{max_fetches}}` are filled in). Delete a file to get the
       default back.
-    - Try settings without the GUI: `pi-gui --deepsearch-tool search <query>` and
-      `pi-gui --deepsearch-tool fetch <url> [what to look for]` print what the model would
+    - Try settings without the GUI: `pistachio --deepsearch-tool search <query>` and
+      `pistachio --deepsearch-tool fetch <url> [what to look for]` print what the model would
       see.
   - Search, rename and move to trash in both modes.
   - **Background work**: switching away from a chat that is working (or still has messages
@@ -73,7 +73,7 @@ Everything PI-gui does, in detail. For installation see the [README](../README.m
 - **SSH** (Code mode): the device button next to the folder ("This computer", with a status
   light) runs pi on another machine. "Add SSH connection…" lists the hosts in your
   `~/.ssh/config` (following `Include`), or takes a custom host, user, port, key and jump host;
-  connections are saved in `~/.pi/agent/pi-gui/hosts.json` and "Manage SSH connections…"
+  connections are saved in `~/.pi/agent/pistachio/hosts.json` and "Manage SSH connections…"
   renames them, changes the command that starts pi, copies your model settings and removes
   them. pi runs **on the remote** (its tools, `AGENTS.md`, skills and sessions all live there)
   through the system `ssh`, so your config, keys, ssh-agent and `known_hosts` apply.
@@ -81,11 +81,11 @@ Everything PI-gui does, in detail. For installation see the [README](../README.m
     connect quietly in the background at startup; the dot shows green (ready), amber (working
     or needs you), red (failed) or grey (not connected).
   - **pi is installed automatically** when a host does not have it, like an editor's remote
-    server: into `~/.pi-gui/server` on the host, with no root access, using the host's
+    server: into `~/.pistachio/server` on the host, with no root access, using the host's
     Node.js 22.19+ or a downloaded, checksum-verified standalone Node.js. Remove that folder
     to undo it. If the host has no model settings, the connect dialog offers to copy your
     `models.json` (credentials in `auth.json` only if you tick the box; an existing file is
-    kept as `*.bak-pi-gui`).
+    kept as `*.bak-pistachio`).
   - Passwords, key passphrases and one-time codes are asked for in the app (ssh's
     `SSH_ASKPASS`); nothing is stored. Unknown host keys are shown for confirmation; a changed
     host key is explained, and you can remove the old key and confirm the new one.
@@ -97,8 +97,8 @@ Everything PI-gui does, in detail. For installation see the [README](../README.m
     host in the session's folder, and the attach picker indexes the remote folder.
   - When the connection drops, the session offers to reconnect and resumes its session file.
   - Limits: csh/tcsh login shells are not supported (bash, zsh, dash, ksh and fish are; fish
-    is untested on a real host). Windows clients are untested: the `remote` crate uses Unix
-    sockets, and Windows' OpenSSH cannot share connections.
+    is untested on a real host). Windows clients are untested: Windows' OpenSSH cannot share
+    connections, so every command opens its own connection there.
 - **Skills** (Code mode): a Skills button under the Chat | Code switch shows the skills pi loaded
   for the session (personal ones from `~/.pi/agent/skills` and `~/.agents/skills`, project ones
   from `.pi/skills` and `.agents/skills`), as pi itself reports them, here or on the SSH host.
@@ -115,12 +115,12 @@ Everything PI-gui does, in detail. For installation see the [README](../README.m
   OpenAI-, Anthropic- or Gemini-compatible endpoint), and can list the server's models to pick
   from. The other tab edits the file directly, with validation. It is the file the session's pi
   reads (on the SSH host for remote sessions); the previous version is kept as
-  `models.json.bak-pi-gui`. pi reads the file only when it starts, so after saving it restarts
+  `models.json.bak-pistachio`. pi reads the file only when it starts, so after saving it restarts
   on the same session (after the current turn, if one is running) and selects the new model.
 - Right panel: git changes and a file tree of the working folder.
 - Bottom panel: an integrated terminal in the working folder; drag its top edge to resize it
   (the height is remembered).
-- macOS and Linux (Windows best-effort). GPU-rendered with [GPUI](https://gpui.rs) via
+- macOS and Linux, plus an experimental Windows build. GPU-rendered with [GPUI](https://gpui.rs) via
   [gpui-kit](https://gpui-kit.com).
 
 ## Keyboard shortcuts

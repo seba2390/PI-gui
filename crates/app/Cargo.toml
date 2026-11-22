@@ -1,5 +1,5 @@
 [package]
-name = "pi-gui"
+name = "pistachio"
 description = "A lean desktop GUI for the pi coding agent"
 version.workspace = true
 edition.workspace = true
@@ -9,7 +9,7 @@ license.workspace = true
 repository.workspace = true
 
 [[bin]]
-name = "pi-gui"
+name = "pistachio"
 path = "src/main.rs"
 
 [dependencies]

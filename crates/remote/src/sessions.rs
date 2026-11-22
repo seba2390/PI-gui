@@ -20,10 +20,10 @@ else
 fi
 exit 0"#;
 
-/// For each file argument: `PIGUI_FILE`, its path, its first line, its last `session_info`
+/// For each file argument: `PISTACHIO_FILE`, its path, its first line, its last `session_info`
 /// line and its first user-message line (cut to a few kB), all NUL-terminated.
 const READ_SCRIPT: &str = r#"for f; do
-  printf 'PIGUI_FILE\000%s\000' "$f"
+  printf 'PISTACHIO_FILE\000%s\000' "$f"
   head -n 1 "$f" 2>/dev/null | cut -c 1-4000; printf '\000'
   grep '^{"type":"session_info"' "$f" 2>/dev/null | tail -n 1 | cut -c 1-4000; printf '\000'
   grep -m 1 '"role":"user"' "$f" 2>/dev/null | cut -c 1-8000; printf '\000'
@@ -176,7 +176,7 @@ fn parse_reads(stdout: &[u8]) -> Vec<(String, String, String, String)> {
     let mut out = Vec::new();
     let mut index = 0;
     while index + 4 < fields.len() {
-        if fields[index] != "PIGUI_FILE" {
+        if fields[index] != "PISTACHIO_FILE" {
             index += 1;
             continue;
         }

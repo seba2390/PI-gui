@@ -1,6 +1,6 @@
 //! Installing pi on a host automatically, the way editors install their remote server.
 //!
-//! Everything goes into `~/.pi-gui/server` on the host ([`MANAGED_DIR`](crate::ssh::MANAGED_DIR)):
+//! Everything goes into `~/.pistachio/server` on the host ([`MANAGED_DIR`](crate::ssh::MANAGED_DIR)):
 //! a standalone Node.js when the host has none recent enough, and pi from npm. Nothing needs
 //! root, nothing outside that folder changes, and removing the folder undoes it.
 
@@ -21,7 +21,7 @@ pub(crate) fn install_script() -> String {
 }
 
 impl Ssh {
-    /// Installs pi into `~/.pi-gui/server` on the host (blocking; may take minutes) and returns
+    /// Installs pi into `~/.pistachio/server` on the host (blocking; may take minutes) and returns
     /// the path of the installed `pi`. `on_step` receives short progress messages such as
     /// "Downloading Node.js".
     pub fn install_pi(&self, mut on_step: impl FnMut(&str)) -> Result<String, RemoteError> {
@@ -30,9 +30,9 @@ impl Ssh {
         let mut log: Vec<String> = Vec::new();
         let output =
             process::run_streaming(self.script_command(&script), INSTALL_TIMEOUT, |line| {
-                if let Some(step) = line.strip_prefix("PIGUI_STEP=") {
+                if let Some(step) = line.strip_prefix("PISTACHIO_STEP=") {
                     on_step(step);
-                } else if let Some(path) = line.strip_prefix("PIGUI_INSTALLED=") {
+                } else if let Some(path) = line.strip_prefix("PISTACHIO_INSTALLED=") {
                     installed = Some(path.trim().to_owned());
                 } else if !line.trim().is_empty() {
                     log.push(line.to_owned());
@@ -90,7 +90,7 @@ mod tests {
         let stdout = String::from_utf8_lossy(&out.stdout);
         eprintln!("{stdout}\n{}", String::from_utf8_lossy(&out.stderr));
         assert!(out.status.success());
-        assert!(stdout.contains("PIGUI_INSTALLED="));
-        assert!(home.path().join(".pi-gui/server/bin/pi").exists());
+        assert!(stdout.contains("PISTACHIO_INSTALLED="));
+        assert!(home.path().join(".pistachio/server/bin/pi").exists());
     }
 }

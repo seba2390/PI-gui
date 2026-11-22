@@ -1,10 +1,10 @@
-# Contributing to PI-gui
+# Contributing to Pistachio
 
 Thanks for helping! Bug reports, ideas and pull requests are all welcome.
 
 ## Ground rules
 
-- **PI-gui is a view over pi.** Agent behaviour belongs in pi, not here: the app renders pi's
+- **Pistachio is a view over pi.** Agent behaviour belongs in pi, not here: the app renders pi's
   RPC events and forwards your input. If a change re-implements something pi does, it
   probably belongs upstream.
 - **Keep the UI crate thin.** Logic goes into the UI-agnostic crates (`transcript`,
@@ -49,15 +49,15 @@ cargo test --workspace
 ## Handy tools
 
 ```bash
-script/bundle-macos.sh [debug|release]   # wrap the binary in PI.app (macOS)
+script/bundle-macos.sh [debug|release]   # wrap the binary in Pistachio.app (macOS)
 script/shot.sh <folder> out.png terminal,diff   # relaunch the debug app and screenshot it
 script/measure-memory.sh                 # memory of a running instance and its pi children
 script/make-icon.sh                      # regenerate the .icns / PNG from icon.svg
 ```
 
-`script/shot.sh` stops any running `PI.app` first.
+`script/shot.sh` stops any running `Pistachio.app` first.
 
-**Opening views at startup.** `PI_GUI_OPEN` takes a comma-separated list, which makes layout
+**Opening views at startup.** `PISTACHIO_OPEN` takes a comma-separated list, which makes layout
 checks scriptable:
 
 - Mode and panels: `chat`, `code`, `terminal`, `diff`, `files`, `no-sidebar`.
@@ -72,14 +72,14 @@ own state, so it won't touch your normal pi sessions or settings.
 
 ## Tests against real hosts
 
-These tests are all `#[ignore]`d. Run them with `PI_GUI_SSH_TEST_HOST=<alias>`:
+These tests are all `#[ignore]`d. Run them with `PISTACHIO_SSH_TEST_HOST=<alias>`:
 
 - `cargo test -p remote --test live -- --ignored`: connection, probe, quoting, remote git,
   files, sessions and trash in a scratch folder.
   - `live_install` installs pi on the host, so it writes to the host.
-- `cargo test -p pi-gui -- --ignored`: RPC over SSH with a scripted fake pi.
+- `cargo test -p pistachio -- --ignored`: RPC over SSH with a scripted fake pi.
   - `real_pi_over_ssh` starts real pi the way a remote session does.
-  - `askpass_prompt_reaches_the_app` also needs `PI_GUI_SSH_PASSWORD_HOST`, a host that
+  - `askpass_prompt_reaches_the_app` also needs `PISTACHIO_SSH_PASSWORD_HOST`, a host that
     offers password login.
 
 `crates/transcript/tests/fixtures` holds sanitized recordings of real `pi --mode rpc`

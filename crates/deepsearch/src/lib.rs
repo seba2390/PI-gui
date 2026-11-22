@@ -1,4 +1,4 @@
-//! Deep search for pi-gui: web search and page reading for pi, done in Rust.
+//! Deep search for pistachio: web search and page reading for pi, done in Rust.
 //!
 //! Chats have three modes ([`config::Mode`]): off, search (a quick lookup) and deep (a
 //! thorough investigation). pi gets its tools from TypeScript extensions, so a small embedded
@@ -23,11 +23,11 @@ use std::path::{Path, PathBuf};
 /// The pi extension that connects the tools to pi.
 pub const EXTENSION_SOURCE: &str = include_str!("extension.ts");
 /// The environment variable that tells the extension which executable runs the tools.
-pub const BIN_ENV: &str = "PI_GUI_DEEPSEARCH_BIN";
+pub const BIN_ENV: &str = "PISTACHIO_DEEPSEARCH_BIN";
 /// The tools the extension registers (the allowlist chat sessions start pi with).
 pub const TOOL_NAMES: [&str; 2] = ["web_search", "web_fetch"];
 /// The extension's `setStatus` key; its text is the chat's [`config::Mode`] (absent: off).
-pub const STATUS_KEY: &str = "pi-gui-deepsearch";
+pub const STATUS_KEY: &str = "pistachio-deepsearch";
 /// The extension's command that sets the mode: `/websearch off|search|deep`.
 pub const COMMAND: &str = "websearch";
 

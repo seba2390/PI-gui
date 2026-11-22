@@ -372,7 +372,8 @@ mod tests {
 
     /// A fresh git repository with one untracked file and one subdirectory.
     fn scratch_repo() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("pi-gui-right-panel-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("pistachio-right-panel-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(dir.join("notes.txt"), "one\ntwo\n").unwrap();

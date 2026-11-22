@@ -16,4 +16,4 @@ body:
     id: pi
     attributes:
       label: Does pi's terminal already do this?
-      description: PI-gui mirrors pi; if this is agent behaviour, it may belong in pi itself.
+      description: Pistachio mirrors pi; if this is agent behaviour, it may belong in pi itself.

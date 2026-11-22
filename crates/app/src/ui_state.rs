@@ -1,7 +1,7 @@
 //! Small pieces of UI state remembered across launches: the sidebar mode, which Code
 //! folders are collapsed, and the conversation last open in each mode (so a session on an SSH
 //! host comes back after a restart). Stored as JSON next to the chat folder
-//! (`<agent dir>/pi-gui/state.json`), written off the UI thread whenever it changes.
+//! (`<agent dir>/pistachio/state.json`), written off the UI thread whenever it changes.
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -51,7 +51,7 @@ impl Global for UiState {}
 impl UiState {
     /// Where the state lives, or `None` if pi's agent dir is unknown.
     pub fn path() -> Option<PathBuf> {
-        pi_sessions::agent_dir().map(|agent| agent.join("pi-gui").join("state.json"))
+        pi_sessions::app_dir().map(|dir| dir.join("state.json"))
     }
 
     /// Reads the saved state; a missing or unreadable file yields the defaults.

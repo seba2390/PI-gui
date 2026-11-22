@@ -86,7 +86,7 @@ pub fn header(tool: &ToolBlock, paths: PathContext<'_>) -> ToolHeader {
             "Find",
             format!("{} in {}", arg(args, "pattern").unwrap_or(""), path(".")),
         ),
-        // Deep search (pi-gui's chat extension).
+        // Deep search (pistachio's chat extension).
         "web_search" => ("Search", arg(args, "query").unwrap_or("").to_owned()),
         "web_fetch" => ("Read", short_url(arg(args, "url").unwrap_or(""))),
         other => {

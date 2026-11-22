@@ -24,19 +24,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release --locked --target aarch64-apple-darwin
       - run: cargo build --release --locked --target x86_64-apple-darwin
-      - name: Bundle PI.app
+      - name: Bundle Pistachio.app
         run: |
           mkdir -p target/release
-          lipo -create -output target/release/pi-gui \
-            target/aarch64-apple-darwin/release/pi-gui \
-            target/x86_64-apple-darwin/release/pi-gui
+          lipo -create -output target/release/pistachio \
+            target/aarch64-apple-darwin/release/pistachio \
+            target/x86_64-apple-darwin/release/pistachio
           script/bundle-macos.sh release
-          res=target/release/PI.app/Contents/Resources
+          res=target/release/Pistachio.app/Contents/Resources
           cp LICENSE-MIT LICENSE-APACHE "$res/"
           python3 script/third-party-licenses.py aarch64-apple-darwin > "$res/THIRD-PARTY-LICENSES.txt"
-          codesign --force --sign - target/release/PI.app
-          name="PI-${GITHUB_REF_NAME}-macos-universal.zip"
-          (cd target/release && ditto -c -k --keepParent PI.app "$name")
+          codesign --force --sign - target/release/Pistachio.app
+          name="Pistachio-${GITHUB_REF_NAME}-macos-universal.zip"
+          (cd target/release && ditto -c -k --keepParent Pistachio.app "$name")
           echo "ASSET=target/release/$name" >> "$GITHUB_ENV"
       - uses: actions/upload-artifact@v7
         with:
@@ -59,11 +59,11 @@ jobs:
       - run: cargo build --release --locked
       - name: Package
         run: |
-          dir="pi-gui-${GITHUB_REF_NAME}-linux-x86_64"
+          dir="pistachio-${GITHUB_REF_NAME}-linux-x86_64"
           mkdir -p "$dir"
-          cp target/release/pi-gui "$dir/"
-          cp packaging/linux/pi-gui.desktop packaging/linux/install.sh "$dir/"
-          cp crates/app/assets/app-icon/icon-512.png "$dir/pi-gui.png"
+          cp target/release/pistachio "$dir/"
+          cp packaging/linux/pistachio.desktop packaging/linux/install.sh "$dir/"
+          cp crates/app/assets/app-icon/icon-512.png "$dir/pistachio.png"
           cp README.md LICENSE-MIT LICENSE-APACHE "$dir/"
           python3 script/third-party-licenses.py x86_64-unknown-linux-gnu > "$dir/THIRD-PARTY-LICENSES.txt"
           tar -czf "$dir.tar.gz" "$dir"
@@ -73,9 +73,32 @@ jobs:
           name: linux
           path: ${{ env.ASSET }}
 
+  windows:
+    name: Windows (x86_64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked
+      - name: Package
+        shell: bash
+        run: |
+          dir="pistachio-${GITHUB_REF_NAME}-windows-x86_64"
+          mkdir -p "$dir"
+          cp target/release/pistachio.exe "$dir/"
+          cp README.md LICENSE-MIT LICENSE-APACHE "$dir/"
+          python script/third-party-licenses.py x86_64-pc-windows-msvc > "$dir/THIRD-PARTY-LICENSES.txt"
+          7z a -tzip "$dir.zip" "$dir" > /dev/null
+          echo "ASSET=$dir.zip" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows
+          path: ${{ env.ASSET }}
+
   publish:
     name: Publish release
-    needs: [macos, linux]
+    needs: [macos, linux, windows]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:

@@ -60,7 +60,7 @@ while ! mkdir "$l" 2>/dev/null; do
   sleep 0.1
 done
 trap 'rmdir "$l"' EXIT
-cat > "$f.pi-gui-tmp" && mv -- "$f.pi-gui-tmp" "$f""#;
+cat > "$f.pistachio-tmp" && mv -- "$f.pistachio-tmp" "$f""#;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SkillsEvent {
@@ -1195,7 +1195,7 @@ mod tests {
     /// With real pi (`pi` on PATH): a personal and a project skill written the way the page
     /// writes them are not loaded by a running pi, but after trusting the project (as the page
     /// does) and restarting pi, both are, with their files and scopes, and the page lists them.
-    /// `cargo test -p pi-gui -- --ignored skills_load_after_restart`
+    /// `cargo test -p pistachio -- --ignored skills_load_after_restart`
     #[cfg(unix)]
     #[gpui_kit::test]
     #[ignore = "needs pi on PATH"]
@@ -1335,11 +1335,11 @@ mod tests {
     }
 
     /// The scan, skill files and trust writes over SSH, in a scratch folder on the host (not
-    /// its real pi settings). `PI_GUI_SSH_TEST_HOST=<alias> cargo test -p pi-gui -- --ignored skills_over_ssh`
+    /// its real pi settings). `PISTACHIO_SSH_TEST_HOST=<alias> cargo test -p pistachio -- --ignored skills_over_ssh`
     #[test]
-    #[ignore = "needs PI_GUI_SSH_TEST_HOST"]
+    #[ignore = "needs PISTACHIO_SSH_TEST_HOST"]
     fn skills_over_ssh() {
-        let Ok(alias) = std::env::var("PI_GUI_SSH_TEST_HOST") else {
+        let Ok(alias) = std::env::var("PISTACHIO_SSH_TEST_HOST") else {
             return;
         };
         let ssh = std::sync::Arc::new(remote::Ssh::new(remote::Target::Alias {
@@ -1347,7 +1347,7 @@ mod tests {
         }));
         ssh.connect(false).unwrap();
         let root = ssh
-            .exec("d=$(mktemp -d /tmp/pi-gui-skills.XXXXXX) && cd \"$d\" && mkdir proj && (cd proj && git init -q) && pwd -P")
+            .exec("d=$(mktemp -d /tmp/pistachio-skills.XXXXXX) && cd \"$d\" && mkdir proj && (cd proj && git init -q) && pwd -P")
             .unwrap()
             .trim()
             .to_owned();

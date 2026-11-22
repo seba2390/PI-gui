@@ -13,7 +13,7 @@ pub const CONFIG_FILE: &str = "config.json";
 pub const SEARCH_PROMPT_FILE: &str = "prompt-search.md";
 pub const DEEP_PROMPT_FILE: &str = "prompt-deep.md";
 /// The environment variable that overrides [`default_dir`] (set by the app for pi's children).
-pub const DIR_ENV: &str = "PI_GUI_DEEPSEARCH_DIR";
+pub const DIR_ENV: &str = "PISTACHIO_DEEPSEARCH_DIR";
 
 /// The instructions added to the system prompt in each mode. `{{date}}`, `{{max_searches}}`
 /// and `{{max_fetches}}` are filled in.
@@ -52,7 +52,7 @@ impl Mode {
     }
 }
 
-/// `$PI_GUI_DEEPSEARCH_DIR`, else `<pi config dir>/pi-gui/deepsearch` (pi's config dir is
+/// `$PISTACHIO_DEEPSEARCH_DIR`, else `<pi config dir>/pistachio/deepsearch` (pi's config dir is
 /// `$PI_CODING_AGENT_DIR` or `~/.pi/agent`).
 pub fn default_dir() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os(DIR_ENV) {
@@ -65,7 +65,7 @@ pub fn default_dir() -> Option<PathBuf> {
                 .or_else(|| std::env::var_os("USERPROFILE"))
                 .map(|home| PathBuf::from(home).join(".pi").join("agent"))
         })?;
-    Some(agent.join("pi-gui").join("deepsearch"))
+    Some(agent.join("pistachio").join("deepsearch"))
 }
 
 /// Which search service answers `web_search`.

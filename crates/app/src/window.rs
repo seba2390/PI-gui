@@ -71,7 +71,7 @@ pub fn open_main_window(cx: &mut App) {
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         window_min_size: Some(size(px(560.), px(420.))),
-        app_id: Some("pi-gui".into()),
+        app_id: Some("pistachio".into()),
         ..TitleBar::window_options()
     };
     let opened = open_window(options, cx, |window, cx| {
@@ -140,9 +140,9 @@ pub struct MainWindow {
     /// The remote session to open when its host is ready: from the connect dialog's
     /// "connect, then open" mode, or restored at startup (`quiet`: no dialog).
     pending_remote: Option<(RemoteTarget, bool)>,
-    /// `PI_GUI_OPEN` panels to open once a remote session is shown.
+    /// `PISTACHIO_OPEN` panels to open once a remote session is shown.
     after_remote: Vec<String>,
-    /// `PI_GUI_OPEN=remote-latest:…`: open this host's newest session once it is listed.
+    /// `PISTACHIO_OPEN=remote-latest:…`: open this host's newest session once it is listed.
     pending_latest: Option<HostId>,
     /// models.json changed while the agent worked: restart pi (and select this model) once
     /// it settles.
@@ -290,7 +290,7 @@ impl MainWindow {
         }
     }
 
-    /// Opens panels and dialogs named in `PI_GUI_OPEN` (scripted screenshots and checks).
+    /// Opens panels and dialogs named in `PISTACHIO_OPEN` (scripted screenshots and checks).
     fn open_panels(&mut self, panels: &[String], window: &mut Window, cx: &mut Context<Self>) {
         for (index, panel) in panels.iter().enumerate() {
             // Panels need a session: scripted runs open one in the launch folder.
@@ -379,7 +379,7 @@ impl MainWindow {
                     let composer = self.chat.read(cx).composer().clone();
                     composer.update(cx, |composer, cx| composer.open_attach_picker(window, cx));
                 }
-                other => log::warn!("PI_GUI_OPEN: unknown panel {other:?}"),
+                other => log::warn!("PISTACHIO_OPEN: unknown panel {other:?}"),
             }
         }
     }

@@ -1,20 +1,20 @@
 <p align="center">
-  <img src="crates/app/assets/app-icon/icon-512.png" width="128" alt="PI-gui logo">
+  <img src="crates/app/assets/app-icon/icon-512.png" width="128" alt="Pistachio logo">
 </p>
 
-<h1 align="center">PI-gui</h1>
+<h1 align="center">Pistachio</h1>
 
 <p align="center">
   A fast, native desktop app for the <a href="https://pi.dev">pi coding agent</a>.
 </p>
 
 <p align="center">
-  <a href="https://github.com/seba2390/PI-gui/actions/workflows/ci.yml"><img src="https://github.com/seba2390/PI-gui/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/seba2390/PI-gui/releases"><img src="https://img.shields.io/github/v/release/seba2390/PI-gui?include_prereleases" alt="Release"></a>
+  <a href="https://github.com/seba2390/pistachio/actions/workflows/ci.yml"><img src="https://github.com/seba2390/pistachio/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/seba2390/pistachio/releases"><img src="https://img.shields.io/github/v/release/seba2390/pistachio?include_prereleases" alt="Release"></a>
   <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue" alt="License"></a>
 </p>
 
-PI-gui runs `pi --mode rpc` and draws pi's own event stream, so it behaves exactly like pi in
+Pistachio runs `pi --mode rpc` and draws pi's own event stream, so it behaves exactly like pi in
 the terminal. Your sessions, models, skills and extensions come from your normal pi setup. It is
 written in Rust and GPU-rendered with [GPUI](https://gpui.rs), and uses about 90 MB of memory
 when idle.
@@ -26,7 +26,7 @@ when idle.
   Shell commands are labelled by what they do ("Read Cargo.toml", "Ran cargo test").
 - **Side panels and a terminal** in the session's folder: git changes, a file tree, and an
   integrated terminal.
-- **SSH remotes.** Run pi on another machine, and PI-gui installs pi there if it's missing.
+- **SSH remotes.** Run pi on another machine, and Pistachio installs pi there if it's missing.
 - **Web search** for chats: quick lookups or multi-step deep research.
 - **Background sessions.** Chats keep working while you switch, plus branching, model and
   skill management.
@@ -41,30 +41,34 @@ See [docs/FEATURES.md](docs/FEATURES.md) for the full list and keyboard shortcut
 npm i -g @earendil-works/pi-coding-agent
 ```
 
-**2. Install PI-gui**
+**2. Install Pistachio**
 
-- **macOS:** download `PI-…-macos-universal.zip` from
-  [Releases](https://github.com/seba2390/PI-gui/releases), unzip it and move `PI.app` to
+- **macOS:** download `Pistachio-…-macos-universal.zip` from
+  [Releases](https://github.com/seba2390/pistachio/releases), unzip it and move `Pistachio.app` to
   Applications.
   - The app isn't notarized yet, so macOS will block the first launch. Allow it once with:
 
     ```bash
-    xattr -dr com.apple.quarantine /Applications/PI.app
+    xattr -dr com.apple.quarantine /Applications/Pistachio.app
     ```
 
-- **Linux (x86_64):** download `pi-gui-…-linux-x86_64.tar.gz` from
-  [Releases](https://github.com/seba2390/PI-gui/releases), unpack it and run `./install.sh`.
-  That installs for your user only and adds "PI" to your app launcher.
+- **Linux (x86_64):** download `pistachio-…-linux-x86_64.tar.gz` from
+  [Releases](https://github.com/seba2390/pistachio/releases), unpack it and run `./install.sh`.
+  That installs for your user only and adds "Pistachio" to your app launcher.
+- **Windows (x86_64, experimental):** download `pistachio-…-windows-x86_64.zip` from
+  [Releases](https://github.com/seba2390/pistachio/releases), unzip it and run `pistachio.exe`.
+  - Windows may warn about an unknown publisher the first time (More info → Run anyway).
+  - SSH remotes are untested on Windows.
 - **From source** (any platform, needs [Rust](https://rustup.rs)):
 
   ```bash
-  cargo install --locked --git https://github.com/seba2390/PI-gui pi-gui
+  cargo install --locked --git https://github.com/seba2390/pistachio pistachio
   ```
 
   Linux also needs the GPUI system libraries listed in [CONTRIBUTING.md](CONTRIBUTING.md#setup).
 
-Then launch **PI** (or run `pi-gui`). If pi isn't on your `PATH`, point to it with
-`PI_GUI_PI_BIN=/path/to/pi`.
+Then launch **Pistachio** (or run `pistachio`). If pi isn't on your `PATH`, point to it with
+`PISTACHIO_PI_BIN=/path/to/pi`.
 
 ## Usage
 
@@ -87,7 +91,7 @@ security issues privately ([SECURITY.md](SECURITY.md)).
 
 ## Acknowledgements
 
-PI-gui is an independent project. It is not affiliated with or endorsed by the authors of pi.
+Pistachio is an independent project. It is not affiliated with or endorsed by the authors of pi.
 It is built on:
 
 - [pi](https://github.com/earendil-works/pi) by Mario Zechner (MIT), the agent this app is a

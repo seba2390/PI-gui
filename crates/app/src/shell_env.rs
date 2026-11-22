@@ -5,10 +5,13 @@
 //! Zed, we ask the user's login shell for its environment once at startup.
 
 use std::ffi::OsString;
+#[cfg(unix)]
 use std::process::Command;
+#[cfg(unix)]
 use std::time::Duration;
 
 /// Environment variables worth importing from the login shell.
+#[cfg(unix)]
 const IMPORTED: &[&str] = &[
     "PATH",
     "NVM_DIR",
@@ -27,7 +30,7 @@ pub fn login_shell_env() -> Vec<(OsString, OsString)> {
     #[cfg(unix)]
     {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned());
-        let marker = "__PI_GUI_ENV__";
+        let marker = "__PISTACHIO_ENV__";
         let script = format!("echo {marker}; env; echo {marker}");
         let output = run_with_timeout(
             Command::new(&shell).args(["-l", "-i", "-c", &script]),

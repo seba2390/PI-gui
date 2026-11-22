@@ -333,7 +333,7 @@ impl ConnectFlow {
                     .child(progress(format!("Setting up pi on {label}: {step}…"), cx))
                     .child(div().text_xs().text_color(muted).child(format!(
                         "pi isn't installed on {label} yet, so it is being installed into \
-                         ~/.pi-gui/server there (no admin rights needed; Node.js is downloaded \
+                         ~/.pistachio/server there (no admin rights needed; Node.js is downloaded \
                          too if the host has no recent one). This happens only once."
                     )))
                     .into_any_element()
