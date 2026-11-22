@@ -79,6 +79,12 @@ pub struct AppSettings {
     pub pi_program: Option<String>,
     /// Connect every saved SSH connection quietly when the app opens.
     pub connect_hosts_at_start: bool,
+    /// The speech-to-text model to dictate with (a `stt::catalog` id).
+    pub speech_model: String,
+    /// The language Whisper models transcribe; empty to detect it.
+    pub speech_language: String,
+    /// How long a silence ends dictation.
+    pub speech_auto_stop: crate::stt::AutoStop,
 }
 
 impl Default for AppSettings {
@@ -95,6 +101,9 @@ impl Default for AppSettings {
             skipped_version: None,
             pi_program: None,
             connect_hosts_at_start: false,
+            speech_model: crate::stt::catalog::DEFAULT_MODEL.to_owned(),
+            speech_language: String::new(),
+            speech_auto_stop: crate::stt::AutoStop::default(),
         }
     }
 }

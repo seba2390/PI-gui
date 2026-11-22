@@ -8,8 +8,8 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::setting::{
-    NumberFieldOptions, RenderOptions, SettingField, SettingGroup, SettingItem, SettingPage,
-    Settings,
+    NumberFieldOptions, RenderOptions, SelectIndex, SettingField, SettingGroup, SettingItem,
+    SettingPage, Settings,
 };
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme as _, IconName, Sizable as _, h_flex, v_flex};
@@ -59,6 +59,8 @@ pub struct SettingsView {
     models: Vec<(SharedString, SharedString)>,
     /// `pi --version` of the configured `pi`, once known.
     pi_version: Option<String>,
+    /// The page shown first (scripted runs open Speech to text directly).
+    start_page: usize,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -92,6 +94,8 @@ impl SettingsView {
         let brave_key = key_input(brave, "From BRAVE_API_KEY if empty", window, cx);
         let tavily_key = key_input(tavily, "From TAVILY_API_KEY if empty", window, cx);
         let subscriptions = vec![
+            // Speech to text: download progress and installed models.
+            cx.observe(&crate::stt::models::models(cx), |_, _, cx| cx.notify()),
             cx.subscribe(&brave_key, |_, input, event: &InputEvent, cx| {
                 if let InputEvent::Change = event {
                     let key = input.read(cx).value().trim().to_owned();
@@ -127,6 +131,7 @@ impl SettingsView {
             tavily_key,
             models,
             pi_version: None,
+            start_page: 0,
             _subscriptions: subscriptions,
         };
         this.probe_pi_version(cx);
@@ -800,18 +805,91 @@ impl SettingsView {
     }
 }
 
+impl SettingsView {
+    /// Opens on the Speech to text page (before the first render).
+    pub fn start_on_speech(&mut self) {
+        self.start_page = 4;
+    }
+
+    fn speech_page(&self) -> SettingPage {
+        use crate::stt::{AutoStop, catalog};
+        SettingPage::new("Speech to text")
+            .icon(IconName::Mic)
+            .description(
+                "Dictate messages with the microphone button. Speech is transcribed by a model \
+                 that runs on this computer; nothing is sent anywhere.",
+            )
+            .group(
+                SettingGroup::new()
+                    .title("Models")
+                    .item(SettingItem::render(|_, _, cx| {
+                        crate::stt::ui::settings_model_rows(cx)
+                    })),
+            )
+            .group(
+                SettingGroup::new()
+                    .title("Dictation")
+                    .item(
+                        SettingItem::new(
+                            "Stop listening",
+                            SettingField::dropdown(
+                                AutoStop::ALL
+                                    .into_iter()
+                                    .map(|stop| (stop.id().into(), stop.label().into()))
+                                    .collect(),
+                                |cx| cx.global::<AppSettings>().speech_auto_stop.id().into(),
+                                |value, cx| {
+                                    let stop = AutoStop::from_id(value.as_ref());
+                                    AppSettings::update(cx, |s| s.speech_auto_stop = stop);
+                                },
+                            ),
+                        )
+                        .description(
+                            "Dictation ends by itself after this much silence. Enter or the stop \
+                             button end it at any time; Esc discards it.",
+                        ),
+                    )
+                    .item(
+                        SettingItem::new(
+                            "Language (Whisper)",
+                            SettingField::dropdown(
+                                catalog::LANGUAGES
+                                    .iter()
+                                    .map(|(code, label)| ((*code).into(), (*label).into()))
+                                    .collect(),
+                                |cx| cx.global::<AppSettings>().speech_language.clone().into(),
+                                |value, cx| {
+                                    let language = value.to_string();
+                                    AppSettings::update(cx, |s| s.speech_language = language);
+                                },
+                            ),
+                        )
+                        .description(
+                            "Whisper is more accurate when told the language. Parakeet detects \
+                             it by itself; Moonshine understands English only.",
+                        ),
+                    ),
+            )
+    }
+}
+
 impl Render for SettingsView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let weak = cx.weak_entity();
-        div()
-            .size_full()
-            .bg(cx.theme().background)
-            .child(Settings::new("app-settings").pages([
-                self.general_page(&weak),
-                self.pi_page(&weak, cx),
-                self.web_search_page(),
-                self.ssh_page(&weak),
-            ]))
+        div().size_full().bg(cx.theme().background).child(
+            Settings::new("app-settings")
+                .default_selected_index(SelectIndex {
+                    page_ix: self.start_page,
+                    group_ix: None,
+                })
+                .pages([
+                    self.general_page(&weak),
+                    self.pi_page(&weak, cx),
+                    self.web_search_page(),
+                    self.ssh_page(&weak),
+                    self.speech_page(),
+                ]),
+        )
     }
 }
 

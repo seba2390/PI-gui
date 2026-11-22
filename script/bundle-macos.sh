@@ -29,6 +29,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
+  <key>NSMicrophoneUsageDescription</key><string>Pistachio listens while you dictate a message. Speech is transcribed on this Mac and is not sent anywhere.</string>
 </dict>
 </plist>
 PLIST

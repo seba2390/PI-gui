@@ -21,6 +21,7 @@ mod settings;
 mod shell_env;
 mod sidebar;
 mod skills;
+mod stt;
 mod syntax;
 mod theme;
 mod ui;
@@ -65,6 +66,7 @@ fn main() {
         ));
         theme::init(cx);
         syntax::init();
+        stt::init(cx);
         settings::init_text_size(cx);
         actions::init(cx);
         cx.set_global(config);

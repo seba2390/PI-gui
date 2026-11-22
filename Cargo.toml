@@ -29,6 +29,8 @@ term = { path = "crates/term" }
 gpui-kit = { version = "=0.10.0", default-features = false, features = [
     "component",
     "assets",
+    # Microphone capture and the speech widgets; the recognizer is our own (src/stt).
+    "speech",
     "tree-sitter",
     "tree-sitter-markdown",
     "tree-sitter-bash",

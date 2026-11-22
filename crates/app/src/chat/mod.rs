@@ -158,6 +158,8 @@ impl ChatView {
         let scroller = cx.new(|cx| MessageScrollerState::new(0, cx));
 
         let subscriptions = vec![
+            // The speech model download banner.
+            cx.observe(&crate::stt::models::models(cx), |_, _, cx| cx.notify()),
             // The reconnect banner shows the host's live status.
             cx.observe(&crate::hosts::hosts(cx), |this, _, cx| {
                 if this.session.read(cx).host().is_some() {
@@ -766,6 +768,7 @@ impl Render for ChatView {
             .size_full()
             .min_h_0()
             .bg(background)
+            .children(crate::stt::ui::download_banner(cx))
             // Behind everything else (painted first), across the whole chat.
             .when_some(pi_field, |this, field| {
                 this.child(

@@ -20,6 +20,7 @@ use gpui_kit::component::list::{List, ListState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::progress::ProgressCircle;
+use gpui_kit::component::speech::{SpeechEvent, SpeechState, SpeechStatus, SpeechWaveform};
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, IndexPath, Sizable as _, h_flex, v_flex,
 };
@@ -104,7 +105,19 @@ pub struct Composer {
     mention: Option<Mention>,
     /// ↑ / ↓ through earlier prompts.
     history: History,
+    /// Dictation: microphone, local recognizer and the live transcript.
+    speech: Entity<SpeechState>,
+    /// While dictating: the draft as it was when dictation began, and the transcript so far.
+    dictation: Option<Dictation>,
+    /// Focus for the dictation view (it replaces the input while dictating).
+    dictation_focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
+}
+
+/// A dictation in progress.
+struct Dictation {
+    draft: String,
+    transcript: SharedString,
 }
 
 /// The `@` mention at the cursor and the files that match it.
@@ -132,7 +145,20 @@ impl Composer {
                 .submit_on_enter(true)
                 .placeholder(placeholder)
         });
-        let subscriptions =
+        let speech = cx.new(|cx| {
+            let state = SpeechState::new(cx)
+                .recognizer(crate::stt::engine::LocalRecognizer {
+                    config: Box::new(crate::stt::session_config),
+                })
+                // Only the local model: the system recognizers may send audio to a service.
+                .system_fallback(false)
+                .stop_timeout(Duration::from_secs(15));
+            match crate::stt::engine::WavInput::from_env() {
+                Some(input) => state.input(input),
+                None => state,
+            }
+        });
+        let mut subscriptions =
             vec![
                 cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
                     match event {
@@ -151,6 +177,13 @@ impl Composer {
                 // Repaint the device button's status dot.
                 cx.observe(&crate::hosts::hosts(cx), |_, _, cx| cx.notify()),
             ];
+        subscriptions.push(cx.subscribe_in(
+            &speech,
+            window,
+            |this, _, event: &SpeechEvent, window, cx| this.on_speech(event, window, cx),
+        ));
+        subscriptions.push(cx.observe(&speech, |_, _, cx| cx.notify()));
+        subscriptions.push(cx.observe(&crate::stt::models::models(cx), |_, _, cx| cx.notify()));
         let weak = cx.weak_entity();
         let root = session.read(cx).cwd().to_path_buf();
         let location = match session.read(cx).host().cloned() {
@@ -176,8 +209,169 @@ impl Composer {
             context_open: false,
             mention: None,
             history: History::default(),
+            speech,
+            dictation: None,
+            dictation_focus: cx.focus_handle(),
             _subscriptions: subscriptions,
         }
+    }
+
+    /// The microphone button: starts or stops dictation; the first time, offers to
+    /// download a model.
+    pub fn toggle_dictation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if crate::stt::session_config(cx).is_none() {
+            if let Some(download) = crate::stt::models::models(cx).read(cx).download() {
+                use gpui_kit::component::notification::Notification;
+                let message = format!(
+                    "{} is still downloading ({:.0}%). You can keep typing meanwhile.",
+                    download.model.name,
+                    download.fraction() * 100.
+                );
+                window.push_notification(Notification::info(message), cx);
+            } else {
+                crate::stt::ui::open_download_dialog(window, cx);
+            }
+            return;
+        }
+        self.speech.update(cx, |speech, cx| speech.toggle(cx));
+    }
+
+    fn on_speech(&mut self, event: &SpeechEvent, window: &mut Window, cx: &mut Context<Self>) {
+        match event {
+            SpeechEvent::Started => {
+                self.mention = None;
+                self.dictation = Some(Dictation {
+                    draft: self.input.read(cx).value().to_string(),
+                    transcript: SharedString::default(),
+                });
+                self.dictation_focus.focus(window, cx);
+            }
+            SpeechEvent::Partial(text) => {
+                if let Some(dictation) = self.dictation.as_mut() {
+                    dictation.transcript = text.clone();
+                }
+            }
+            SpeechEvent::Final(text) => {
+                if let Some(dictation) = self.dictation.take() {
+                    let text = append_dictation(&dictation.draft, text);
+                    self.set_text(&text, window, cx);
+                }
+            }
+            SpeechEvent::Cancelled => {
+                if self.dictation.take().is_some() {
+                    self.focus_handle(cx).focus(window, cx);
+                }
+            }
+            SpeechEvent::Error(error) => {
+                use gpui_kit::component::notification::Notification;
+                if self.dictation.take().is_some() {
+                    self.focus_handle(cx).focus(window, cx);
+                }
+                window.push_notification(
+                    Notification::error(format!("Dictation stopped: {error}")),
+                    cx,
+                );
+            }
+        }
+        cx.notify();
+    }
+
+    /// The microphone (or stop) button at the right of the input.
+    fn render_mic(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let status = self.speech.read(cx).status();
+        let active = status.is_active();
+        let downloading = crate::stt::models::models(cx).read(cx).download().is_some()
+            && crate::stt::session_config(cx).is_none();
+        let tooltip = match status {
+            SpeechStatus::Connecting => "Loading the speech model…",
+            _ if active => "Stop dictation (Enter)",
+            _ if downloading => "Speech model is downloading…",
+            _ => "Dictate (speech to text)",
+        };
+        Button::new("dictate")
+            .icon(if active {
+                IconName::Square
+            } else {
+                IconName::Mic
+            })
+            .small()
+            .when(active, |button| button.primary())
+            .when(!active, |button| button.ghost())
+            .loading(status == SpeechStatus::Connecting)
+            .tooltip(tooltip)
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_dictation(window, cx)))
+    }
+
+    /// While dictating: the draft as it was, then the live transcript greyed out.
+    fn render_dictation(&self, dictation: &Dictation, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let muted = theme.muted_foreground;
+        let status = self.speech.read(cx).status();
+        let separator = if dictation.draft.is_empty()
+            || dictation.draft.ends_with(char::is_whitespace)
+            || dictation.transcript.is_empty()
+        {
+            ""
+        } else {
+            " "
+        };
+        let placeholder = match status {
+            SpeechStatus::Connecting => crate::stt::models::active_model(cx)
+                .map(|model| format!("Loading {}…", model.name))
+                .unwrap_or_default(),
+            SpeechStatus::Stopping => "Finishing…".to_owned(),
+            _ => "Listening… speak now".to_owned(),
+        };
+        let shown_transcript = if dictation.transcript.is_empty() {
+            placeholder
+        } else {
+            dictation.transcript.to_string()
+        };
+        let text = format!("{}{separator}{shown_transcript}", dictation.draft);
+        let grey = dictation.draft.len() + separator.len()..text.len();
+        let italic = dictation.transcript.is_empty();
+        v_flex()
+            .id("dictation")
+            .track_focus(&self.dictation_focus)
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                match event.keystroke.key.as_str() {
+                    "enter" => this.speech.update(cx, |speech, cx| speech.stop(cx)),
+                    "escape" => this.speech.update(cx, |speech, cx| speech.cancel(cx)),
+                    _ => return,
+                }
+                cx.stop_propagation();
+            }))
+            .w_full()
+            .min_h(px(24.))
+            // The textarea's own padding (medium size), so the text does not move when the
+            // transcript becomes the draft.
+            .px(px(10.))
+            .py(px(8.))
+            .gap_1()
+            .child(
+                div()
+                    .w_full()
+                    .child(StyledText::new(text).with_highlights([(
+                        grey,
+                        HighlightStyle {
+                            color: Some(muted),
+                            font_style: italic.then_some(FontStyle::Italic),
+                            ..Default::default()
+                        },
+                    )])),
+            )
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(SpeechWaveform::new(&self.speech).w(px(96.)).h(px(16.)))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .child("Enter to finish · Esc to discard"),
+                    ),
+            )
+            .into_any_element()
     }
 
     pub fn focus_handle(&self, cx: &App) -> FocusHandle {
@@ -1336,20 +1530,48 @@ impl Render for Composer {
                     .px_3()
                     .pt_3()
                     .pb_1()
-                    .child({
-                        let weak = cx.weak_entity();
-                        Textarea::new(&self.input)
-                            .aria_label("Message")
-                            .appearance(false)
-                            .on_paste(move |item, _, cx| {
-                                weak.update(cx, |this, cx| this.paste(item, cx))
-                                    .unwrap_or(false)
-                            })
-                    })
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .items_start()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(match self.dictation.as_ref() {
+                                        Some(dictation) => self.render_dictation(dictation, cx),
+                                        None => {
+                                            let weak = cx.weak_entity();
+                                            Textarea::new(&self.input)
+                                                .aria_label("Message")
+                                                .appearance(false)
+                                                .on_paste(move |item, _, cx| {
+                                                    weak.update(cx, |this, cx| this.paste(item, cx))
+                                                        .unwrap_or(false)
+                                                })
+                                                .into_any_element()
+                                        }
+                                    }),
+                            )
+                            .child(self.render_mic(cx)),
+                    )
                     .children(crate::demo::probe("composer-input")),
             )
             .child(self.render_toolbar(cx))
             .children(status)
+    }
+}
+
+/// The composer text after dictating `spoken` into a composer holding `draft`.
+fn append_dictation(draft: &str, spoken: &str) -> String {
+    let spoken = spoken.trim();
+    if spoken.is_empty() {
+        draft.to_owned()
+    } else if draft.is_empty() || draft.ends_with(char::is_whitespace) {
+        format!("{draft}{spoken}")
+    } else {
+        format!("{draft} {spoken}")
     }
 }
 
@@ -1620,6 +1842,15 @@ fn folder_menu(
 #[cfg(test)]
 mod inline_tests {
     use super::inline_file_block;
+
+    #[test]
+    fn dictation_joins_the_draft() {
+        use super::append_dictation;
+        assert_eq!(append_dictation("", " Hello there. "), "Hello there.");
+        assert_eq!(append_dictation("Fix", "the tests"), "Fix the tests");
+        assert_eq!(append_dictation("Fix\n", "the tests"), "Fix\nthe tests");
+        assert_eq!(append_dictation("Keep", "  "), "Keep");
+    }
 
     #[test]
     fn inlined_files_use_a_fence_longer_than_their_backticks() {

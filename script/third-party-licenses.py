@@ -61,6 +61,27 @@ def main() -> None:
         out.write("\n".join(labels) + "\n\n")
         out.write(text + "\n\n")
 
+    # Native libraries linked statically through crates (not crates themselves).
+    out.write("=" * 78 + "\n")
+    out.write("ONNX Runtime (MIT) https://github.com/microsoft/onnxruntime\n")
+    out.write("linked into sherpa-onnx's prebuilt libraries (speech to text)\n\n")
+    out.write(
+        "Copyright (c) Microsoft Corporation\n\n"
+        "Permission is hereby granted, free of charge, to any person obtaining a copy of this "
+        "software and associated documentation files (the \"Software\"), to deal in the Software "
+        "without restriction, including without limitation the rights to use, copy, modify, "
+        "merge, publish, distribute, sublicense, and/or sell copies of the Software, and to "
+        "permit persons to whom the Software is furnished to do so, subject to the following "
+        "conditions:\n\nThe above copyright notice and this permission notice shall be included "
+        "in all copies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED "
+        "\"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED "
+        "TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND "
+        "NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY "
+        "CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, "
+        "ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN "
+        "THE SOFTWARE.\n\n"
+    )
+
     # Packages that ship no license file are covered by these standard texts (each of them
     # is MIT, Apache-2.0, or offers one of the two).
     root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

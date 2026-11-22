@@ -21,7 +21,7 @@ You need stable Rust (see `rust-toolchain.toml`) and [pi](https://pi.dev) on you
 - **Linux (Debian/Ubuntu):**
 
   ```bash
-  sudo apt-get install libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev libx11-xcb-dev libxcb1-dev libfontconfig-dev libfreetype-dev libzstd-dev
+  sudo apt-get install libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev libx11-xcb-dev libxcb1-dev libfontconfig-dev libfreetype-dev libzstd-dev libasound2-dev
   ```
 
 Then:

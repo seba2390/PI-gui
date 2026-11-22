@@ -8,6 +8,13 @@ All notable changes to PI-gui are listed here. The format follows
 
 ### Added
 
+- Speech to text: dictate with the microphone button in the message box. The text appears
+  greyed out while you speak and becomes normal text when you stop. A model runs on your
+  computer (Parakeet v3, Whisper large-v3 turbo, Whisper small or Moonshine v2); none ship
+  with the app. The first press offers to download one, with its size, speed and languages;
+  it downloads in the background with a progress bar at the top of the chat, and is checked
+  against its SHA-256. Settings → Speech to text manages the models, when a silence ends
+  dictation and the language for Whisper.
 - Settings → Appearance → Code colors: pick the syntax colors for code (Pistachio, One,
   GitHub, Solarized, Gruvbox or Catppuccin), each with a light and a dark variant. A Python
   snippet below the picker shows the chosen palette right away. Only code colors change; the

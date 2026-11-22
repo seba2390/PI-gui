@@ -210,6 +210,13 @@ impl MainWindow {
                 crate::theme::sync_with_window(window, cx);
             }),
             cx.subscribe_in(
+                &crate::stt::models::models(cx),
+                window,
+                |_, _, event: &crate::stt::models::SpeechModelsEvent, window, cx| {
+                    crate::stt::ui::notify_download(event, window, cx);
+                },
+            ),
+            cx.subscribe_in(
                 &crate::hosts::hosts(cx),
                 window,
                 |this, hosts, event: &HostsEvent, window, cx| match event {
@@ -353,6 +360,22 @@ impl MainWindow {
                 "manage-hosts" => self.open_manage_hosts(window, cx),
                 "skills" => self.toggle_skills(window, cx),
                 "settings" => self.open_settings(&OpenSettings, window, cx),
+                "settings-speech" => {
+                    self.open_settings(&OpenSettings, window, cx);
+                    if let Some(settings) = self.settings.as_ref().map(|s| s.0.clone()) {
+                        settings.update(cx, |settings, _| settings.start_on_speech());
+                    }
+                }
+                "speech-download" => crate::stt::ui::open_download_dialog(window, cx),
+                "dictate" => {
+                    let composer = self.chat.read(cx).composer().clone();
+                    composer.update(cx, |composer, cx| composer.toggle_dictation(window, cx));
+                }
+                other if other.starts_with("speech-get:") => {
+                    if let Some(model) = crate::stt::catalog::model(&other["speech-get:".len()..]) {
+                        crate::stt::ui::start_download(model, cx);
+                    }
+                }
                 other if other.starts_with("open-skill:") => {
                     let path = other.trim_start_matches("open-skill:").to_owned();
                     self.toggle_skills(window, cx);

@@ -124,12 +124,33 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
 - macOS and Linux, plus an experimental Windows build. GPU-rendered with [GPUI](https://gpui.rs) via
   [gpui-kit](https://gpui-kit.com).
 
+## Speech to text
+
+The microphone button at the right of the message box dictates instead of typing. Speech is
+transcribed on this computer by a model downloaded once (none ship with the app); the first
+press offers the choice:
+
+| Model | Download | Languages | Speed |
+|---|---|---|---|
+| Parakeet v3 (NVIDIA, recommended) | 671 MB | 25 European languages, incl. English and Danish | very fast |
+| Whisper large-v3 turbo (OpenAI) | 1.0 GB | about 99 languages | slower |
+| Whisper small (OpenAI) | 375 MB | about 99 languages | fast |
+| Moonshine v2 (Moonshine AI) | 141 MB | English only | fastest |
+
+The download runs in the background with a progress bar at the top of the chat, from a pinned
+Hugging Face revision, and every file is checked against its SHA-256 before the model is used.
+While you speak, the text appears greyed out and keeps improving; when you stop talking (after
+the silence set in Settings, 2.5 s by default), press Enter or press stop, it becomes normal
+text in the message box, ready to edit or send. Esc discards it. Models live in
+`~/.pi/agent/pistachio/speech/`.
+
 ## Settings and updates
 
 Settings opens from the Pistachio menu (⌘,) or the button at the bottom of the sidebar. Every
 change is saved right away.
 
-- **General:** theme (follow the system, light or dark), text size (scales the interface),
+- **General:** theme (follow the system, light or dark), code colors (the syntax palette for
+  code in chat, skills and `models.json`, with a live preview), text size (scales the interface),
   whether to open in Chat, Code or the mode used last, reopening the last session, and
   notifications for chats working in the background.
 - **pi & models:** which `pi` to run (`PISTACHIO_PI_BIN` still wins), the model and thinking
@@ -140,6 +161,8 @@ change is saved right away.
   network access.
 - **SSH connections:** whether saved connections connect when the app opens (off by
   default), and the saved hosts with their status, connecting, adding and managing them.
+- **Speech to text:** the dictation models (download, use, remove), how long a silence ends
+  dictation, and the language for Whisper models.
 
 The app's own settings live in `~/.pi/agent/pistachio/settings.json`.
 
