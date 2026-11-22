@@ -61,6 +61,8 @@ pub struct AppSettings {
     pub theme: ThemeChoice,
     /// The palette for code (syntax colors only; the rest of the theme is unchanged).
     pub code_colors: crate::code_colors::CodeColors,
+    /// How a working agent is shown (chat and sidebar).
+    pub working_indicator: crate::ui::spinner::IndicatorStyle,
     pub text_size: TextSize,
     pub start_mode: StartMode,
     /// Open the last session of the start mode (on this computer or an SSH host) at start,
@@ -92,6 +94,7 @@ impl Default for AppSettings {
         Self {
             theme: ThemeChoice::default(),
             code_colors: crate::code_colors::CodeColors::default(),
+            working_indicator: crate::ui::spinner::IndicatorStyle::default(),
             text_size: TextSize::default(),
             start_mode: StartMode::default(),
             reopen_last_session: false,

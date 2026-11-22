@@ -1208,19 +1208,26 @@ fn render_working(status: &RunStatus, cx: &RowContext<'_>) -> AnyElement {
         RunStatus::Idle => ("Working…".to_owned(), None),
     };
     let elapsed = since.map(|since| since.elapsed());
-    // The label breathes along with the π.
-    let label_color = cx
-        .palette
-        .accent
-        .opacity(0.7 + 0.3 * crate::ui::spinner::breath());
+    let style = cx
+        .app
+        .global::<crate::settings::AppSettings>()
+        .working_indicator;
     h_flex()
         .w_full()
         .justify_center()
         .items_center()
-        .gap_2()
+        .gap_1p5()
         .text_sm()
-        .child(crate::ui::spinner::pulsing_pi(px(14.), cx.palette.accent))
-        .child(div().text_color(label_color).child(label))
+        .child(crate::ui::spinner::working_indicator(
+            style,
+            px(13.),
+            cx.palette.accent,
+        ))
+        .child(crate::ui::spinner::working_label(
+            style,
+            label.into(),
+            cx.palette.accent,
+        ))
         .when_some(elapsed, |this, elapsed| {
             this.child(
                 div()

@@ -70,9 +70,14 @@ pub fn session_row(
         .when(active, |this| this.bg(active_bg))
         .hover(|style| style.bg(hover_bg))
         .on_click(cx.listener(move |_, _, _, cx| cx.emit(open.clone())))
-        // A working agent: the pulsing π, before the name.
+        // A working agent: its indicator, before the name.
         .when(activity == Some(Activity::Working), |this| {
-            this.child(crate::ui::spinner::pulsing_pi(px(12.), colors.accent))
+            this.child(crate::ui::spinner::working_indicator(
+                cx.global::<crate::settings::AppSettings>()
+                    .working_indicator,
+                px(9.),
+                colors.accent,
+            ))
         })
         .child(
             div()

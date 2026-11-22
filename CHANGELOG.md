@@ -20,8 +20,11 @@ All notable changes to PI-gui are listed here. The format follows
   has started and sent it (around a second). pi's own history replaces it only if it
   differs; sessions with compactions or context edits, and sessions on SSH hosts, still wait
   for pi.
-- The working indicator is a little green π that pulses, in the chat and in
-  the sidebar, where it now sits left of the conversation's name. "Working… 12s · esc to interrupt" is centred, and "Worked for" has a
+- The working indicator is a little green π with dots orbiting it, in the chat and in the
+  sidebar, where it now sits left of the conversation's name. Settings → Appearance →
+  Working indicator picks the style, with a live preview: by default two dots chase round the
+  π at a spinner's uneven speed while it glows and a shimmer crosses "Working…"; the others
+  are a comet tail, a spinning π, a single dot, an atom ring, half-turn hops and a pulse. "Working… 12s · esc to interrupt" is centred, and "Worked for" has a
   small π.
 - The model's text stands apart from its activity: runs of tool calls and thinking sit on a
   thin rail on the left, in a slightly smaller, muted style, with more room where they meet

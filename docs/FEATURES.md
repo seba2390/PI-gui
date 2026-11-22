@@ -122,6 +122,9 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   of an "Explored" group, with "+N"); pictures attached to a prompt show above it. Clicking one
   opens a full-window viewer: ← / → or the arrows browse all of that call's, group's or
   prompt's pictures, Esc closes it.
+- **Working indicator**: a little green π with orbiting dots shows a working agent in the
+  chat ("Working… 12s · esc to interrupt", centred) and before its name in the sidebar. Settings
+  → Appearance → Working indicator picks the style, with a live preview.
 - **Transcript layout**: the model's text is the main voice. Tool calls and thinking sit on a
   thin rail on the left in a quieter style, with more room where they meet the text.
 - **Find in chat** (⌘F): a search bar over the conversation. Every match is highlighted;
@@ -171,7 +174,8 @@ Settings opens from the Pistachio menu (⌘,) or the button at the bottom of the
 change is saved right away.
 
 - **General:** theme (follow the system, light or dark), code colors (the syntax palette for
-  code in chat, diffs, skills and `models.json`, with a live preview), text size (scales the interface),
+  code in chat, diffs, skills and `models.json`, with a live preview), the working indicator's
+  style (with a live preview), text size (scales the interface),
   whether to open in Chat, Code or the mode used last, reopening the last session, and
   notifications for chats working in the background.
 - **pi & models:** which `pi` to run (`PISTACHIO_PI_BIN` still wins), the model and thinking
