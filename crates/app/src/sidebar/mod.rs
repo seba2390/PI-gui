@@ -404,6 +404,10 @@ impl Sidebar {
             let selected = self.mode == mode;
             div()
                 .id(label)
+                .role(Role::Tab)
+                .aria_label(label)
+                .aria_selected(selected)
+                .aria_keyshortcuts(shortcut)
                 .flex_1()
                 .h(px(28.))
                 .flex()
@@ -435,6 +439,9 @@ impl Sidebar {
                 .child(label)
         };
         h_flex()
+            .id("mode-switch")
+            .role(Role::TabList)
+            .aria_label("Mode")
             .mx_2()
             .mb_2()
             .p_0p5()
@@ -693,6 +700,7 @@ impl Render for Sidebar {
                                 .quiet(cx)
                                 .compact()
                                 .child(crate::ui::top_bar_icon(IconName::PanelLeftClose))
+                                .accessibility_label("Hide sidebar (⌘B)")
                                 .tooltip("Hide sidebar (⌘B)")
                                 .on_click(
                                     cx.listener(|_, _, _, cx| cx.emit(SidebarEvent::Collapse)),

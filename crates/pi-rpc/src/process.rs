@@ -113,6 +113,10 @@ impl PiProcess {
         for (key, value) in &options.env {
             command.env(key, value);
         }
+        // Its own process group, so a pi that hangs on shutdown can be stopped together
+        // with the commands its tools started.
+        #[cfg(unix)]
+        std::os::unix::process::CommandExt::process_group(&mut command, 0);
         let mut child = command.spawn()?;
 
         let stdin = child.stdin.take().expect("stdin is piped");
@@ -181,6 +185,7 @@ impl Drop for PiProcess {
                     match child.try_wait() {
                         Ok(Some(_)) | Err(_) => return,
                         Ok(None) if Instant::now() >= deadline => {
+                            kill_group(child.id());
                             let _ = child.kill();
                             let _ = child.wait();
                             return;
@@ -195,6 +200,21 @@ impl Drop for PiProcess {
             log::warn!("could not spawn pi reaper thread: {error}");
         }
     }
+}
+
+/// Kills the process group led by `pid` (pi and anything its tools left running).
+fn kill_group(pid: u32) {
+    #[cfg(unix)]
+    {
+        let _ = OsCommand::new("kill")
+            .args(["-KILL", "--", &format!("-{pid}")])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    #[cfg(not(unix))]
+    let _ = pid;
 }
 
 #[cfg(test)]

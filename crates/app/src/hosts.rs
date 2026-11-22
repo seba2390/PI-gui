@@ -357,13 +357,7 @@ impl Hosts {
         let (Some(path), store) = (HostStore::path(), self.store.clone()) else {
             return;
         };
-        cx.background_executor()
-            .spawn(async move {
-                if let Err(error) = store.save(&path) {
-                    log::warn!("could not save SSH hosts to {}: {error}", path.display());
-                }
-            })
-            .detach();
+        crate::persist::save_in_background(cx, path, move |path| store.save(path));
     }
 
     fn set_status(&mut self, id: &HostId, status: HostStatus, cx: &mut Context<Self>) {
@@ -449,27 +443,26 @@ impl Hosts {
             let pi = host.pi_command().to_owned();
             let probe_pi = pi.clone();
             let worker = ssh.clone();
-            let result = cx
-                .background_executor()
-                .spawn(async move {
-                    let connected = match worker.connect(mode == ConnectMode::Trust) {
-                        Err(RemoteError::AuthFailed(_)) if askpass_env.is_some() => {
-                            worker.connect_interactive(askpass_env.as_deref().unwrap_or(&[]))
+            let result =
+                cx.background_executor()
+                    .spawn(async move {
+                        let trust = mode == ConnectMode::Trust;
+                        let connected = match worker.connect(trust) {
+                            Err(RemoteError::AuthFailed(_)) if askpass_env.is_some() => worker
+                                .connect_interactive(askpass_env.as_deref().unwrap_or(&[]), trust),
+                            other => other,
+                        };
+                        match connected {
+                            Ok(()) => worker.probe(&probe_pi).map(Connected::Probe),
+                            // Only a key that was actually fetched can be confirmed.
+                            Err(RemoteError::HostKeyUnknown) => {
+                                worker.host_key_fingerprint().map(Connected::Untrusted)
+                            }
+                            Err(RemoteError::HostKeyChanged) => Ok(Connected::KeyChanged),
+                            Err(error) => Err(error),
                         }
-                        other => other,
-                    };
-                    match connected {
-                        Ok(()) => worker.probe(&probe_pi).map(Connected::Probe),
-                        Err(RemoteError::HostKeyUnknown) => Ok(Connected::Untrusted(
-                            worker
-                                .host_key_fingerprint()
-                                .unwrap_or_else(|error| error.to_string()),
-                        )),
-                        Err(RemoteError::HostKeyChanged) => Ok(Connected::KeyChanged),
-                        Err(error) => Err(error),
-                    }
-                })
-                .await;
+                    })
+                    .await;
             let install = this
                 .update(cx, |this, cx| {
                     let (status, install) = match result {
@@ -837,7 +830,7 @@ mod tests {
             assert!(prompt.is_secret());
             prompt.answer(None);
         });
-        let result = ssh.connect_interactive(&server.env(&exe));
+        let result = ssh.connect_interactive(&server.env(&exe), false);
         eprintln!("connect after cancelling: {result:?}");
         answerer.join().unwrap();
         assert!(result.is_err());

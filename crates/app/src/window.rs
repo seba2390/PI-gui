@@ -34,10 +34,39 @@ use crate::ui::{AppIcon, TOP_BAR_HEIGHT, TRAFFIC_LIGHT_INSET, WindowDrag};
 use crate::ui_state::{LastSession, UiState};
 use remote::HostId;
 
-pub fn open_main_window(cx: &mut App) {
+/// Registers the window's key bindings and global models, once per process.
+pub fn init(cx: &mut App) {
     crate::chat::init(cx);
     crate::panels::terminal_panel::init(cx);
     crate::hosts::init(cx);
+}
+
+/// Brings the main window back (Dock icon clicked, or a closed window on macOS), opening a
+/// new one only if none exists.
+pub fn reopen(cx: &mut App) {
+    let windows = cx.windows();
+    if windows.is_empty() {
+        open_main_window(cx);
+    } else {
+        for handle in windows {
+            let _ = handle.update(cx, |_, window, _| window.activate_window());
+        }
+    }
+    cx.activate(true);
+}
+
+/// Hides the app instead of closing its window (macOS): chats that are still working keep
+/// running, and clicking the Dock icon brings everything back as it was.
+fn keep_alive_on_close(window: &mut Window, cx: &mut App) {
+    if cfg!(target_os = "macos") {
+        window.on_window_should_close(cx, |_, cx| {
+            cx.hide();
+            false
+        });
+    }
+}
+
+pub fn open_main_window(cx: &mut App) {
     let bounds = Bounds::centered(None, size(px(1320.), px(860.)), cx);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -47,6 +76,7 @@ pub fn open_main_window(cx: &mut App) {
     };
     let opened = open_window(options, cx, |window, cx| {
         crate::theme::sync_with_window(window, cx);
+        keep_alive_on_close(window, cx);
         cx.new(|cx| MainWindow::new(window, cx))
     });
     if let Err(error) = opened {
@@ -66,9 +96,19 @@ fn focus_chat(chat: &Entity<ChatView>, window: &mut Window, cx: &mut App) {
     focus.focus(window, cx);
 }
 
-/// A restart of pi that waits for the agent to settle, and the model to select afterwards.
+/// What changed on disk that pi reads only when it starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReloadReason {
+    Models,
+    Skills,
+}
+
+/// A restart of one chat's pi that waits for its agent to settle, and the model to select
+/// afterwards.
 #[derive(Debug, Clone)]
 struct PendingReload {
+    /// The [`ChatView`] to restart; other chats are never touched.
+    chat: EntityId,
     select: Option<(String, String)>,
 }
 
@@ -92,6 +132,9 @@ pub struct MainWindow {
     finished: HashSet<(Option<HostId>, PathBuf)>,
     right_panel: Entity<RightPanel>,
     terminal: Option<Entity<TerminalPanel>>,
+    /// Terminals of other folders or machines, kept running (a dev server, a long build)
+    /// until their shell exits; shown again when their folder's terminal is opened.
+    parked_terminals: Vec<Entity<TerminalPanel>>,
     /// Events of the open SSH dialog (add host / connect flow / manage hosts).
     dialog_subscription: Option<Subscription>,
     /// The remote session to open when its host is ready: from the connect dialog's
@@ -103,7 +146,7 @@ pub struct MainWindow {
     pending_latest: Option<HostId>,
     /// models.json changed while the agent worked: restart pi (and select this model) once
     /// it settles.
-    models_reload: Option<PendingReload>,
+    models_reload: Vec<PendingReload>,
     /// The Skills page, shown in the chat column instead of the chat while `skills_open`.
     skills: Option<(Entity<crate::skills::SkillsView>, Subscription)>,
     skills_open: bool,
@@ -146,7 +189,10 @@ impl MainWindow {
                 window,
                 |this, _, event: &RightPanelEvent, window, cx| {
                     let RightPanelEvent::InsertPath(path) = event;
-                    let mention = format!("@{} ", path.display());
+                    let mention = format!(
+                        "{} ",
+                        crate::chat::mention::file_reference(&path.display().to_string())
+                    );
                     let chat = this.chat.clone();
                     chat.read(cx).composer().clone().update(cx, |composer, cx| {
                         composer.insert_text(&mention, window, cx);
@@ -218,6 +264,7 @@ impl MainWindow {
             background: Vec::new(),
             right_panel,
             terminal: None,
+            parked_terminals: Vec::new(),
             dialog_subscription: None,
             pending_remote: restore.map(|target| (target, true)),
             after_remote: Vec::new(),
@@ -225,7 +272,7 @@ impl MainWindow {
             welcome: true,
             finished: HashSet::new(),
             pi_field: cx.new(|_| crate::ui::PiField::new()),
-            models_reload: None,
+            models_reload: Vec::new(),
             skills: None,
             skills_open: false,
             keep_skills: false,
@@ -544,6 +591,8 @@ impl MainWindow {
             self.terminal_open = false;
         }
         focus_chat(&chat, window, cx);
+        // Back to a chat whose restart waited while it worked in the background.
+        self.run_pending_reload(window, cx);
         cx.notify();
     }
 
@@ -558,7 +607,35 @@ impl MainWindow {
     /// Drops background chats with nothing left to do.
     fn prune_background(&mut self, cx: &mut Context<Self>) {
         self.background.retain(|(chat, _)| keeps_working(chat, cx));
+        // A chat that was let go starts a fresh pi when opened again: nothing to restart.
+        let visible = self.chat.entity_id();
+        let background = &self.background;
+        self.models_reload.retain(|pending| {
+            pending.chat == visible
+                || background
+                    .iter()
+                    .any(|(chat, _)| chat.entity_id() == pending.chat)
+        });
         self.update_activity(cx);
+    }
+
+    /// Restarts the visible chat's pi if a restart waits for it and it has settled.
+    /// Returns whether it did.
+    fn run_pending_reload(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let visible = self.chat.entity_id();
+        let Some(index) = self
+            .models_reload
+            .iter()
+            .position(|pending| pending.chat == visible)
+        else {
+            return false;
+        };
+        if self.chat.read(cx).session().read(cx).is_busy() {
+            return false;
+        }
+        let pending = self.models_reload.remove(index);
+        self.reload_models(pending.select, ReloadReason::Models, window, cx);
+        true
     }
 
     /// A chat working in the background changed: it finished, or it asks something.
@@ -577,8 +654,20 @@ impl MainWindow {
             .display_title()
             .unwrap_or_else(|| "A chat".to_owned());
         match event {
+            ChatEvent::Stopped => {
+                window.push_notification(Notification::error(format!("{title}: pi stopped")), cx);
+                if !window.is_window_active() {
+                    window.request_attention();
+                }
+                self.update_activity(cx);
+            }
             ChatEvent::BusyChanged | ChatEvent::SessionChanged => {
-                if keeps_working(chat, cx) {
+                let stopped = matches!(
+                    chat.read(cx).session().read(cx).lifecycle(),
+                    crate::chat::session::Lifecycle::Exited { .. }
+                );
+                // A pi that stopped is reported by `Stopped`, not as finished work.
+                if stopped || keeps_working(chat, cx) {
                     self.update_activity(cx);
                     return;
                 }
@@ -763,10 +852,14 @@ impl MainWindow {
     fn reconnect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (host, folder, file) = {
             let session = self.chat.read(cx).session().read(cx);
-            let Some(host) = session.host().cloned() else {
-                return;
-            };
-            (host, session.cwd().to_path_buf(), session.session_file())
+            match session.host().cloned() {
+                Some(host) => (host, session.cwd().to_path_buf(), session.session_file()),
+                None => {
+                    // A local pi: start it again on the same session file.
+                    self.reload_models(None, ReloadReason::Models, window, cx);
+                    return;
+                }
+            }
         };
         self.pending_remote = Some((
             RemoteTarget {
@@ -830,13 +923,8 @@ impl MainWindow {
         cx: &mut Context<Self>,
     ) {
         match event {
-            ChatEvent::SessionChanged
-                if self.models_reload.is_some()
-                    && !self.chat.read(cx).session().read(cx).is_running() =>
-            {
-                let select = self.models_reload.take().and_then(|reload| reload.select);
-                self.reload_models(select, window, cx);
-            }
+            ChatEvent::SessionChanged | ChatEvent::BusyChanged
+                if self.run_pending_reload(window, cx) => {}
             ChatEvent::SessionChanged => {
                 let session_file = self.chat.read(cx).session().read(cx).session_file();
                 let host = self.host(cx);
@@ -854,7 +942,9 @@ impl MainWindow {
                 cx.notify();
             }
             ChatEvent::Reconnect => self.reconnect(window, cx),
-            ChatEvent::BusyChanged | ChatEvent::NeedsAttention => self.update_activity(cx),
+            ChatEvent::BusyChanged | ChatEvent::NeedsAttention | ChatEvent::Stopped => {
+                self.update_activity(cx);
+            }
             ChatEvent::Composer(event) => match event {
                 ComposerEvent::ChangeFolder(folder) => self.new_chat_in(folder.clone(), window, cx),
                 ComposerEvent::ChooseHost(None) => {
@@ -969,7 +1059,7 @@ impl MainWindow {
             |this, _, event: &ModelsDialogEvent, window, cx| {
                 let ModelsDialogEvent::Saved { select } = event;
                 window.close_dialog(cx);
-                this.reload_models(select.clone(), window, cx);
+                this.reload_models(select.clone(), ReloadReason::Models, window, cx);
             },
         ));
         let view = dialog.clone();
@@ -988,17 +1078,28 @@ impl MainWindow {
     fn reload_models(
         &mut self,
         select: Option<(String, String)>,
+        reason: ReloadReason,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.chat.read(cx).session().read(cx).is_running() {
-            self.models_reload = Some(PendingReload { select });
-            window.push_notification(
-                "Saved models.json. pi reloads it when the current turn finishes.",
-                cx,
-            );
+        // Anything in flight (a run, a prompt being sent or waiting) must not be cut off.
+        if self.chat.read(cx).session().read(cx).is_busy() {
+            let chat = self.chat.entity_id();
+            self.models_reload.retain(|pending| pending.chat != chat);
+            self.models_reload.push(PendingReload { chat, select });
+            let message = match reason {
+                ReloadReason::Models => {
+                    "Saved models.json. pi reloads it when the current turn finishes."
+                }
+                ReloadReason::Skills => {
+                    "Saved. pi reloads its skills when the current turn finishes."
+                }
+            };
+            window.push_notification(message, cx);
             return;
         }
+        let chat_id = self.chat.entity_id();
+        self.models_reload.retain(|pending| pending.chat != chat_id);
         let (cwd, file, host) = {
             let session = self.chat.read(cx).session().read(cx);
             (
@@ -1051,7 +1152,9 @@ impl MainWindow {
                 window,
                 |this, _, event: &crate::skills::SkillsEvent, window, cx| match event {
                     // pi reads skills (and project trust) only when it starts.
-                    crate::skills::SkillsEvent::Changed => this.reload_models(None, window, cx),
+                    crate::skills::SkillsEvent::Changed => {
+                        this.reload_models(None, ReloadReason::Skills, window, cx);
+                    }
                 },
             );
             self.skills = Some((skills, subscription));
@@ -1064,6 +1167,8 @@ impl MainWindow {
 
     fn close_skills(&mut self, cx: &mut Context<Self>) {
         self.skills_open = false;
+        // The page holds its chat's pi session; keeping it would keep that pi running.
+        self.skills = None;
         self.sidebar
             .update(cx, |sidebar, cx| sidebar.set_skills_active(false, cx));
     }
@@ -1441,7 +1546,7 @@ impl MainWindow {
                 let reuse = self.terminal.as_ref().is_some_and(|terminal| {
                     terminal.read(cx).cwd() == cwd && terminal.read(cx).host().is_none()
                 });
-                if !reuse {
+                if !reuse && !self.unpark_terminal(&cwd, None, cx) {
                     let terminal = cx.new(|cx| TerminalPanel::new(cwd, window, cx));
                     self.set_terminal(terminal, window, cx);
                 }
@@ -1461,7 +1566,7 @@ impl MainWindow {
         let reuse = self.terminal.as_ref().is_some_and(|terminal| {
             terminal.read(cx).cwd() == cwd && terminal.read(cx).host() == Some(&host)
         });
-        if !reuse {
+        if !reuse && !self.unpark_terminal(&cwd, Some(&host), cx) {
             let (label, ssh) = {
                 let hosts = crate::hosts::hosts(cx);
                 let hosts = hosts.read(cx);
@@ -1486,7 +1591,8 @@ impl MainWindow {
             window,
             |this, terminal, event, window, cx| match event {
                 TerminalPanelEvent::Closed => {
-                    // Only the current terminal; a replaced one may still report its exit.
+                    // A parked terminal's shell exited: let it go.
+                    this.parked_terminals.retain(|parked| parked != terminal);
                     if this.terminal.as_ref() == Some(terminal) {
                         this.terminal_open = false;
                         this.terminal = None;
@@ -1496,7 +1602,25 @@ impl MainWindow {
                 }
             },
         ));
-        self.terminal = Some(terminal);
+        if let Some(previous) = self.terminal.replace(terminal) {
+            self.parked_terminals.push(previous);
+        }
+    }
+
+    /// Makes the parked terminal for `cwd` on `host` the current one (parking the current
+    /// one). Returns whether there was one.
+    fn unpark_terminal(&mut self, cwd: &std::path::Path, host: Option<&HostId>, cx: &App) -> bool {
+        let Some(index) = self.parked_terminals.iter().position(|terminal| {
+            let terminal = terminal.read(cx);
+            terminal.cwd() == cwd && terminal.host() == host
+        }) else {
+            return false;
+        };
+        let terminal = self.parked_terminals.remove(index);
+        if let Some(previous) = self.terminal.replace(terminal) {
+            self.parked_terminals.push(previous);
+        }
+        true
     }
 
     fn show_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1646,6 +1770,7 @@ impl MainWindow {
                             .quiet(cx)
                             .compact()
                             .child(crate::ui::top_bar_icon(IconName::PanelLeftOpen))
+                            .accessibility_label("Show sidebar (⌘B)")
                             .tooltip("Show sidebar (⌘B)")
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.toggle_sidebar(&ToggleSidebar, window, cx);
@@ -1658,6 +1783,7 @@ impl MainWindow {
                             .child(crate::ui::top_bar_icon(component::Icon::from(
                                 AppIcon::SquarePen,
                             )))
+                            .accessibility_label("New chat (⌘N)")
                             .tooltip("New chat (⌘N)")
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.new_chat(&NewChat, window, cx);
@@ -1714,6 +1840,7 @@ impl MainWindow {
                                 .compact()
                                 .child(crate::ui::top_bar_icon(IconName::SquareTerminal))
                                 .selected(self.terminal_open)
+                                .accessibility_label("Terminal (ctrl+`)")
                                 .tooltip("Terminal (ctrl+`)")
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.toggle_terminal(&ToggleTerminal, window, cx);
@@ -1727,6 +1854,7 @@ impl MainWindow {
                                     AppIcon::GitCompare,
                                 )))
                                 .selected(self.right_open && tab == RightTab::Diff)
+                                .accessibility_label("Changes (⌘⇧D)")
                                 .tooltip("Changes (⌘⇧D)")
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.show_diff(&ShowDiff, window, cx);
@@ -1740,6 +1868,7 @@ impl MainWindow {
                                     AppIcon::Files,
                                 )))
                                 .selected(self.right_open && tab == RightTab::Files)
+                                .accessibility_label("Files (⌘⇧E)")
                                 .tooltip("Files (⌘⇧E)")
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.show_files(&ShowFiles, window, cx);
@@ -1754,6 +1883,7 @@ impl MainWindow {
                                 } else {
                                     IconName::PanelRightOpen
                                 }))
+                                .accessibility_label("Toggle side panel (⌘⌥B)")
                                 .tooltip("Toggle side panel (⌘⌥B)")
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.toggle_right_panel(&ToggleRightPanel, window, cx);
@@ -2079,6 +2209,9 @@ impl Render for MainWindow {
                                 v_flex()
                                     .flex_none()
                                     .h(self.terminal_height)
+                                    // A height remembered on a bigger screen must not
+                                    // squeeze out the chat and its message box.
+                                    .max_h(relative(0.75))
                                     .child(render_terminal_edge(cx))
                                     .child(div().flex_1().min_h_0().child(terminal.cached(full()))),
                             )
@@ -2099,6 +2232,15 @@ impl Render for MainWindow {
             .on_action(cx.listener(Self::show_chat_mode))
             .on_action(cx.listener(Self::show_code_mode))
             .on_action(cx.listener(Self::resume_session))
+            .on_action(|_: &crate::actions::CloseWindow, window, cx| {
+                if cfg!(target_os = "macos") {
+                    cx.hide();
+                } else {
+                    window.remove_window();
+                }
+            })
+            .on_action(|_: &crate::actions::Minimize, window, _| window.minimize_window())
+            .on_action(|_: &crate::actions::Zoom, window, _| window.zoom_window())
             .size_full()
             .bg(background)
             .text_color(foreground)

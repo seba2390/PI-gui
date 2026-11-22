@@ -54,7 +54,8 @@ pub struct AskpassServer {
 impl AskpassServer {
     /// Listens on `<dir>/askpass-<pid>.sock`; every prompt is sent to `prompts`.
     pub fn start(dir: &Path, prompts: async_channel::Sender<Prompt>) -> io::Result<Self> {
-        fs::create_dir_all(dir)?;
+        // The socket answers ssh's password prompts: its folder must be ours alone.
+        crate::ssh::prepare_private_dir(dir)?;
         let socket = dir.join(format!("askpass-{}.sock", std::process::id()));
         let _ = fs::remove_file(&socket);
         let listener = UnixListener::bind(&socket)?;

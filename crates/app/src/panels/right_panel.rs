@@ -329,6 +329,7 @@ impl RightPanel {
                         .quiet(cx)
                         .small()
                         .icon(IconName::RefreshCw)
+                        .accessibility_label("Refresh")
                         .tooltip("Refresh")
                         .on_click(cx.listener(|this, _, _, cx| this.reload(cx))),
                 ),

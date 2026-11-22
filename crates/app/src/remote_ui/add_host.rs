@@ -142,6 +142,18 @@ impl AddHost {
             cx.notify();
             return;
         }
+        // ssh would read a leading `-` as one of its own options.
+        let starts_with_dash = [&form.host, &form.user, &form.jump]
+            .into_iter()
+            .any(|input| value(input).starts_with('-'));
+        if starts_with_dash || host.chars().any(char::is_whitespace) {
+            form.error = Some(
+                "Host, user and jump host cannot start with “-” (and the host has no spaces)."
+                    .into(),
+            );
+            cx.notify();
+            return;
+        }
         let port = match optional(value(&form.port)).map(|port| port.parse::<u16>()) {
             None => None,
             Some(Ok(port)) => Some(port),
@@ -241,6 +253,7 @@ impl AddHost {
                             .quiet(cx)
                             .xsmall()
                             .icon(IconName::Delete)
+                            .accessibility_label("Remove this connection")
                             .tooltip("Remove this connection")
                             .on_click(
                                 cx.listener(move |this, _, _, cx| this.remove_alias(&alias, cx)),

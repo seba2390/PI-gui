@@ -5,6 +5,7 @@ pub mod composer;
 mod context_panel;
 pub mod dialogs;
 mod file_picker;
+pub(crate) mod mention;
 pub mod models_dialog;
 mod rows;
 pub mod session;
@@ -62,14 +63,16 @@ pub enum ChatEvent {
     SessionChanged,
     /// Folder / device choices from the composer, handled by the window.
     Composer(ComposerEvent),
-    /// The session runs on an SSH host and ended (e.g. the connection dropped): connect again
-    /// and resume it.
+    /// pi ended (crashed, or the SSH connection dropped): start it again (connecting first
+    /// for a remote session) and resume the session.
     Reconnect,
     /// The session started or stopped having work in flight ([`PiSession::is_busy`]).
     BusyChanged,
     /// An extension asked something while this chat was in the background; the question
     /// waits until the chat is shown ([`ChatView::needs_attention`]).
     NeedsAttention,
+    /// pi stopped (crashed or disconnected) while this chat was in the background.
+    Stopped,
 }
 
 #[allow(clippy::struct_excessive_bools)] // independent view flags
@@ -102,7 +105,11 @@ pub struct ChatView {
     exploration: Vec<(ItemId, u64, Option<Vec<usize>>)>,
     /// Extension questions asked while in the background, opened when the chat is shown so
     /// they are never answered for the wrong chat.
-    held_dialogs: Vec<pi_rpc::protocol::ExtensionUiRequest>,
+    /// Questions asked while hidden, with when they arrived.
+    held_dialogs: Vec<(pi_rpc::protocol::ExtensionUiRequest, std::time::Instant)>,
+    /// pi stopped while the chat was hidden; shown so the user sees why (and any prompts
+    /// returned to the composer) before the chat is let go.
+    stopped_unseen: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -172,6 +179,7 @@ impl ChatView {
             roles: Vec::new(),
             exploration: Vec::new(),
             held_dialogs: Vec::new(),
+            stopped_unseen: false,
             _subscriptions: subscriptions,
         };
         this.sync(cx);
@@ -184,15 +192,26 @@ impl ChatView {
 
     /// Whether an extension question is waiting for this chat to be shown.
     pub fn needs_attention(&self) -> bool {
-        !self.held_dialogs.is_empty()
+        !self.held_dialogs.is_empty() || self.stopped_unseen
     }
 
     /// Marks the chat shown or in the background; showing it opens the questions it held.
     pub fn set_visible(&mut self, visible: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.visible = visible;
         if visible {
-            for request in std::mem::take(&mut self.held_dialogs) {
-                dialogs::open(request, self.session.clone(), window, cx);
+            self.stopped_unseen = false;
+            // pi gives up on a question after its timeout, and a stopped pi takes no answers.
+            let stopped = matches!(
+                self.session.read(cx).lifecycle(),
+                session::Lifecycle::Exited { .. }
+            );
+            for (request, asked) in std::mem::take(&mut self.held_dialogs) {
+                let expired = request
+                    .timeout_ms()
+                    .is_some_and(|ms| asked.elapsed().as_millis() >= u128::from(ms));
+                if !stopped && !expired {
+                    dialogs::open(request, self.session.clone(), window, cx);
+                }
             }
         }
     }
@@ -230,6 +249,14 @@ impl ChatView {
         match event {
             SessionEvent::TranscriptChanged => self.sync(cx),
             SessionEvent::MetaChanged => {
+                let stopped = matches!(
+                    self.session.read(cx).lifecycle(),
+                    session::Lifecycle::Exited { .. }
+                );
+                if stopped && !self.visible && !self.stopped_unseen {
+                    self.stopped_unseen = true;
+                    cx.emit(ChatEvent::Stopped);
+                }
                 let session = self.session.read(cx);
                 if let (Some(host), session::Lifecycle::Exited { .. }) =
                     (session.host().cloned(), session.lifecycle())
@@ -249,7 +276,8 @@ impl ChatView {
                 if self.visible {
                     dialogs::open(request.clone(), self.session.clone(), window, cx);
                 } else {
-                    self.held_dialogs.push(request.clone());
+                    self.held_dialogs
+                        .push((request.clone(), std::time::Instant::now()));
                     cx.emit(ChatEvent::NeedsAttention);
                 }
             }
@@ -259,6 +287,16 @@ impl ChatView {
                 let text = text.clone();
                 self.composer
                     .update(cx, |composer, cx| composer.set_text(&text, window, cx));
+            }
+            SessionEvent::RestoreToEditor {
+                text,
+                images,
+                replace,
+            } => {
+                let (text, images, replace) = (text.clone(), images.clone(), *replace);
+                self.composer.update(cx, |composer, cx| {
+                    composer.restore(&text, images, replace, window, cx);
+                });
             }
             SessionEvent::Notify { kind, message } => {
                 use gpui_kit::component::notification::Notification;
@@ -582,10 +620,12 @@ impl ChatView {
     /// For a session on an SSH host that ended: what happened and a Reconnect button.
     fn render_reconnect(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let session = self.session.read(cx);
-        let host = session.host()?;
         if !matches!(session.lifecycle(), session::Lifecycle::Exited { .. }) {
             return None;
         }
+        let Some(host) = session.host() else {
+            return Some(self.render_restart(session.session_file().is_some(), cx));
+        };
         let hosts = crate::hosts::hosts(cx);
         let hosts = hosts.read(cx);
         let label = hosts.label(host);
@@ -633,6 +673,42 @@ impl ChatView {
                 )
                 .into_any_element(),
         )
+    }
+}
+
+impl ChatView {
+    /// A local pi that stopped (crashed or failed to start): offer to start it again.
+    fn render_restart(&self, resumable: bool, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let (muted, border) = (theme.muted_foreground, theme.border);
+        h_flex()
+            .w_full()
+            .gap_2()
+            .mb_2()
+            .px_3()
+            .py_2()
+            .rounded_lg()
+            .border_1()
+            .border_color(border)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_sm()
+                    .text_color(muted)
+                    .child(if resumable {
+                        "pi stopped. Restart it to continue this session."
+                    } else {
+                        "pi stopped."
+                    }),
+            )
+            .child(
+                component::button::Button::new("restart-pi")
+                    .small()
+                    .label("Restart pi")
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(ChatEvent::Reconnect))),
+            )
+            .into_any_element()
     }
 }
 

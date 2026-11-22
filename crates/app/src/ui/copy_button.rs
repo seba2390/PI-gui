@@ -57,6 +57,11 @@ impl RenderOnce for CopyButton {
             .quiet(cx)
             .xsmall()
             .icon(icon)
+            .accessibility_label(if copied {
+                "Copied".into()
+            } else {
+                self.tooltip.clone()
+            })
             .tooltip(if copied {
                 "Copied".into()
             } else {

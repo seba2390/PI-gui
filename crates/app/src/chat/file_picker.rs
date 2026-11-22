@@ -72,6 +72,11 @@ impl FilePicker {
         self.matches = rank(&self.files, &self.query, MAX_RESULTS);
     }
 
+    /// The folder's indexed files (relative paths), for inline `@` completion.
+    pub fn files(&self) -> Arc<Vec<String>> {
+        Arc::clone(&self.files)
+    }
+
     fn pick(&self, pick: Pick, window: &mut Window, cx: &mut App) {
         (self.on_pick)(pick, window, cx);
     }

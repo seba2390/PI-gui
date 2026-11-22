@@ -97,6 +97,18 @@ pub struct ExtensionUiRequest {
     pub method: ExtensionUiMethod,
 }
 
+impl ExtensionUiRequest {
+    /// How long pi waits for an answer before giving up on its own, in milliseconds.
+    pub fn timeout_ms(&self) -> Option<u64> {
+        match &self.method {
+            ExtensionUiMethod::Select { timeout, .. }
+            | ExtensionUiMethod::Confirm { timeout, .. }
+            | ExtensionUiMethod::Input { timeout, .. } => *timeout,
+            _ => None,
+        }
+    }
+}
+
 /// The client's answer to a dialog request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExtensionUiAnswer {

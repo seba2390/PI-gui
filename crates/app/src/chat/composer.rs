@@ -13,7 +13,9 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
+use gpui_kit::component::input::{
+    Escape, IndentInline, InputEvent, MoveDown, MoveUp, Textarea, TextareaState,
+};
 use gpui_kit::component::list::{List, ListState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::popover::Popover;
@@ -27,11 +29,13 @@ use pi_rpc::protocol::ImageContent;
 
 use super::commands::{self, CommandOutcome};
 use super::file_picker::{self, FilePicker, Pick};
+use super::mention::{self, History};
 use super::session::{Lifecycle, PiSession, WebMode};
 use crate::config::{AppConfig, RecentFolders};
 use crate::theme::palette;
 use crate::ui::AppIcon;
 use crate::ui::QuietButton as _;
+use gpui_kit::component::WindowExt as _;
 
 actions!(
     composer,
@@ -96,8 +100,23 @@ pub struct Composer {
     picker_open: bool,
     /// The context breakdown popover is open.
     context_open: bool,
+    /// Inline `@file` completion for the mention being typed.
+    mention: Option<Mention>,
+    /// ↑ / ↓ through earlier prompts.
+    history: History,
     _subscriptions: Vec<Subscription>,
 }
+
+/// The `@` mention at the cursor and the files that match it.
+struct Mention {
+    /// Byte offset of the `@` in the input.
+    start: usize,
+    matches: Vec<String>,
+    selected: usize,
+}
+
+/// Files offered for an `@` mention at once.
+const MENTION_RESULTS: usize = 8;
 
 impl EventEmitter<ComposerEvent> for Composer {}
 
@@ -113,16 +132,25 @@ impl Composer {
                 .submit_on_enter(true)
                 .placeholder(placeholder)
         });
-        let subscriptions = vec![
-            cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
-                if let InputEvent::PressEnter { shift: false, .. } = event {
-                    this.submit(false, window, cx);
-                }
-            }),
-            cx.observe(&session, |_, _, cx| cx.notify()),
-            // Repaint the device button's status dot.
-            cx.observe(&crate::hosts::hosts(cx), |_, _, cx| cx.notify()),
-        ];
+        let subscriptions =
+            vec![
+                cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
+                    match event {
+                        InputEvent::PressEnter { shift: false, .. } => {
+                            if this.mention.is_some() {
+                                this.accept_mention(window, cx);
+                            } else {
+                                this.submit(false, window, cx);
+                            }
+                        }
+                        InputEvent::Change => this.on_input_changed(cx),
+                        _ => {}
+                    }
+                }),
+                cx.observe(&session, |_, _, cx| cx.notify()),
+                // Repaint the device button's status dot.
+                cx.observe(&crate::hosts::hosts(cx), |_, _, cx| cx.notify()),
+            ];
         let weak = cx.weak_entity();
         let root = session.read(cx).cwd().to_path_buf();
         let location = match session.read(cx).host().cloned() {
@@ -146,6 +174,8 @@ impl Composer {
             picker,
             picker_open: false,
             context_open: false,
+            mention: None,
+            history: History::default(),
             _subscriptions: subscriptions,
         }
     }
@@ -159,6 +189,36 @@ impl Composer {
             .update(cx, |input, cx| input.set_value(text.to_owned(), window, cx));
         let focus = self.focus_handle(cx);
         focus.focus(window, cx);
+    }
+
+    /// Puts messages given back by the session into the composer: before the current draft
+    /// (or instead of it with `replace`), with their images as attachments.
+    pub fn restore(
+        &mut self,
+        text: &str,
+        images: Vec<ImageContent>,
+        replace: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let draft = self.input.read(cx).value().to_string();
+        let merged = merge_restored(text, &draft, replace);
+        self.input
+            .update(cx, |input, cx| input.set_value(merged, window, cx));
+        if replace {
+            self.attachments.clear();
+        }
+        for (index, image) in images.into_iter().enumerate() {
+            self.attachments.push(Attachment {
+                path: PathBuf::new(),
+                name: format!("Image {}", index + 1).into(),
+                image: Some(image),
+                inline: None,
+            });
+        }
+        let focus = self.focus_handle(cx);
+        focus.focus(window, cx);
+        cx.notify();
     }
 
     /// Inserts `text` at the cursor (e.g. an `@path` mention from the Files tab) and focuses
@@ -187,6 +247,16 @@ impl Composer {
             }
         }
 
+        // pi has stopped: keep the message (and attachments) here instead of queueing it
+        // where it would never be sent.
+        if let Lifecycle::Exited { .. } = self.session.read(cx).lifecycle() {
+            window.push_notification(
+                "pi is not running, so the message was kept. Reconnect or start a new session.",
+                cx,
+            );
+            return;
+        }
+
         let cwd = self.session.read(cx).cwd().to_owned();
         let mut references = Vec::new();
         let mut images = Vec::new();
@@ -207,7 +277,7 @@ impl Composer {
                         .path
                         .strip_prefix(&cwd)
                         .unwrap_or(&attachment.path);
-                    references.push(format!("@{}", path.display()));
+                    references.push(mention::file_reference(&path.display().to_string()));
                 }
             }
         }
@@ -233,6 +303,8 @@ impl Composer {
 
     fn clear(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.attachments.clear();
+        self.history.reset();
+        self.mention = None;
         self.input
             .update(cx, |input, cx| input.set_value("", window, cx));
         cx.notify();
@@ -243,7 +315,12 @@ impl Composer {
     }
 
     fn interrupt(&mut self, _: &Interrupt, _: &mut Window, cx: &mut Context<Self>) {
-        if self.session.read(cx).is_running() {
+        if self.mention.take().is_some() {
+            cx.notify();
+            return;
+        }
+        // Also while a prompt is on its way or waits to be sent, not only during a run.
+        if self.session.read(cx).is_busy() {
             self.session.update(cx, |session, cx| session.interrupt(cx));
         } else {
             cx.propagate();
@@ -437,6 +514,7 @@ impl Composer {
                         .quiet(cx)
                         .small()
                         .icon(Icon::from(AppIcon::Paperclip))
+                        .accessibility_label("Attach files or images")
                         .tooltip("Attach files or images")
                         .on_click(cx.listener(|this, _, _, cx| this.pick_attachments(cx))),
                 )
@@ -504,6 +582,7 @@ impl Composer {
     ) -> impl IntoElement + use<> {
         let button = Button::new(menu_id("web-mode", &current.as_str()))
             .small()
+            .accessibility_label("Web search")
             .icon(Icon::from(AppIcon::Globe))
             .toggled(current != WebMode::Off);
         let button = match current {
@@ -548,6 +627,7 @@ impl Composer {
                     .quiet(cx)
                     .small()
                     .icon(Icon::from(AppIcon::Paperclip))
+                    .accessibility_label("Attach files")
                     .tooltip("Attach files"),
             )
             .p_0()
@@ -590,6 +670,7 @@ impl Composer {
                     .child(crate::remote_ui::status_dot(status.as_ref(), cx))
                     .child(label),
             )
+            .accessibility_label(tooltip.clone())
             .tooltip(tooltip)
             .dropdown_menu_with_anchor(
                 Anchor::BottomLeft,
@@ -615,6 +696,7 @@ impl Composer {
                     .small()
                     .icon(IconName::Square)
                     .rounded(cx.theme().radius_full())
+                    .accessibility_label("Interrupt (esc)")
                     .tooltip("Interrupt (esc)")
                     .on_click(
                         cx.listener(|this, _, window, cx| this.interrupt(&Interrupt, window, cx)),
@@ -626,6 +708,11 @@ impl Composer {
                     .icon(IconName::ArrowUp)
                     .rounded(cx.theme().radius_full())
                     .disabled(!has_input || !ready)
+                    .accessibility_label(if running {
+                        "Steer (enter) · follow-up (alt+enter)"
+                    } else {
+                        "Send (enter)"
+                    })
                     .tooltip(if running {
                         "Steer (enter) · follow-up (alt+enter)"
                     } else {
@@ -783,6 +870,7 @@ impl Composer {
                             .size_4(),
                     )
                     // Instant: the numbers are the point of hovering.
+                    .accessibility_label(tooltip.clone())
                     .tooltip(tooltip)
                     .tooltip_show_delay(Duration::ZERO),
             )
@@ -814,6 +902,7 @@ impl Composer {
                     .child(attachment.name.clone())
                     .child(
                         Button::new(("remove-attachment", index))
+                            .accessibility_label(format!("Remove {}", attachment.name))
                             .quiet(cx)
                             .xsmall()
                             .icon(IconName::Close)
@@ -871,6 +960,10 @@ impl Composer {
     }
 
     fn complete_first(&mut self, _: &Complete, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mention.is_some() {
+            self.accept_mention(window, cx);
+            return;
+        }
         let text = self.input.read(cx).value().to_string();
         match commands::suggestions(&text, self.session.read(cx).commands()).first() {
             Some(first) => {
@@ -879,6 +972,189 @@ impl Composer {
             }
             None => cx.propagate(),
         }
+    }
+
+    /// The input changed: follow the `@` mention at the cursor, and stop browsing history
+    /// once the shown entry is edited.
+    fn on_input_changed(&mut self, cx: &mut Context<Self>) {
+        let (text, cursor) = {
+            let input = self.input.read(cx);
+            (input.value().to_string(), input.cursor())
+        };
+        if self.history.is_browsing() && !self.history_entries(cx).contains(&text) {
+            self.history.reset();
+        }
+        let query = self
+            .session
+            .read(cx)
+            .has_folder_tools()
+            .then(|| mention::mention_at(&text, cursor))
+            .flatten();
+        self.mention = query.and_then(|query| {
+            let files = self.picker.read(cx).delegate().files();
+            let matches: Vec<String> = file_picker::rank(&files, query.query, MENTION_RESULTS)
+                .into_iter()
+                .filter_map(|index| files.get(index).cloned())
+                .collect();
+            // Keep the selection on the same file while the list refines.
+            let selected = self
+                .mention
+                .as_ref()
+                .and_then(|old| old.matches.get(old.selected))
+                .and_then(|file| matches.iter().position(|m| m == file))
+                .unwrap_or(0);
+            (!matches.is_empty()).then_some(Mention {
+                start: query.start,
+                matches,
+                selected,
+            })
+        });
+        cx.notify();
+    }
+
+    /// Replaces the mention being typed with the chosen file, as pi writes it.
+    fn accept_mention(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(mention) = self.mention.take() else {
+            return;
+        };
+        let Some(file) = mention.matches.get(mention.selected) else {
+            return;
+        };
+        let reference = format!("{} ", mention::file_reference(file));
+        self.input.update(cx, |input, cx| {
+            let cursor = input.cursor();
+            input.set_selected_range(mention.start..cursor, cx);
+            input.replace(reference, window, cx);
+        });
+        self.mention = None;
+        cx.notify();
+    }
+
+    fn move_mention(&mut self, down: bool, cx: &mut Context<Self>) {
+        if let Some(mention) = &mut self.mention {
+            let last = mention.matches.len().saturating_sub(1);
+            mention.selected = if down {
+                (mention.selected + 1).min(last)
+            } else {
+                mention.selected.saturating_sub(1)
+            };
+            cx.notify();
+        }
+    }
+
+    /// This session's earlier prompts, oldest first.
+    fn history_entries(&self, cx: &App) -> Vec<String> {
+        let session = self.session.read(cx);
+        mention::history_entries(session.transcript().items().iter().filter_map(|item| {
+            match &item.kind {
+                transcript::ItemKind::User(user) => Some(user.text.as_str()),
+                _ => None,
+            }
+        }))
+    }
+
+    /// ↑ in the input: the `@` list, or an earlier prompt when the composer is empty (or
+    /// shows one) and the cursor is on the first line. Otherwise the cursor moves as usual.
+    fn on_move_up(&mut self, _: &MoveUp, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mention.is_some() {
+            self.move_mention(false, cx);
+            cx.stop_propagation();
+            return;
+        }
+        let (text, cursor) = {
+            let input = self.input.read(cx);
+            (input.value().to_string(), input.cursor())
+        };
+        let on_first_line = !text[..cursor.min(text.len())].contains('\n');
+        if !(text.trim().is_empty() || self.history.is_browsing()) || !on_first_line {
+            return;
+        }
+        let entries = self.history_entries(cx);
+        if let Some(entry) = self.history.previous(&entries, &text) {
+            let entry = entry.to_owned();
+            self.input
+                .update(cx, |input, cx| input.set_value(entry, window, cx));
+            cx.stop_propagation();
+        }
+    }
+
+    /// ↓ in the input: the `@` list, or the next prompt while browsing history (the cursor on
+    /// the last line).
+    fn on_move_down(&mut self, _: &MoveDown, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mention.is_some() {
+            self.move_mention(true, cx);
+            cx.stop_propagation();
+            return;
+        }
+        if !self.history.is_browsing() {
+            return;
+        }
+        let (text, cursor) = {
+            let input = self.input.read(cx);
+            (input.value().to_string(), input.cursor())
+        };
+        if text.get(cursor..).is_some_and(|rest| rest.contains('\n')) {
+            return;
+        }
+        let entries = self.history_entries(cx);
+        if let Some(entry) = self.history.next(&entries) {
+            self.input
+                .update(cx, |input, cx| input.set_value(entry, window, cx));
+            cx.stop_propagation();
+        }
+    }
+
+    fn render_mention(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let mention = self.mention.as_ref()?;
+        let theme = cx.theme();
+        let (muted, hover, selected_bg) = (
+            theme.muted_foreground,
+            theme.secondary_hover,
+            theme.secondary_active,
+        );
+        let rows = mention.matches.iter().enumerate().map(|(index, file)| {
+            let (dir, name) = match file.rsplit_once('/') {
+                Some((dir, name)) => (format!("{dir}/"), name.to_owned()),
+                None => (String::new(), file.clone()),
+            };
+            h_flex()
+                .id(("mention", index))
+                .gap_1()
+                .px_3()
+                .py_1()
+                .rounded_md()
+                .cursor_pointer()
+                .role(Role::ListBoxOption)
+                .aria_label(SharedString::from(file.clone()))
+                .aria_selected(index == mention.selected)
+                .when(index == mention.selected, |this| this.bg(selected_bg))
+                .hover(move |style| style.bg(hover))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if let Some(mention) = &mut this.mention {
+                        mention.selected = index;
+                    }
+                    this.accept_mention(window, cx);
+                }))
+                .child(div().flex_none().text_sm().child(name))
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(dir),
+                )
+        });
+        Some(
+            v_flex()
+                .id("mention-list")
+                .role(Role::ListBox)
+                .aria_label("Files")
+                .px_1()
+                .pt_1()
+                .gap_0p5()
+                .children(rows),
+        )
     }
 
     fn render_status(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
@@ -910,10 +1186,47 @@ impl Composer {
         let session = self.session.read(cx);
         let queue = session.transcript().queue();
         let widgets = session.widgets();
-        if queue.is_empty() && widgets.is_empty() {
+        let pending: Vec<(String, usize)> = session
+            .pending_prompts()
+            .map(|(text, images, _)| (text.to_owned(), images))
+            .collect();
+        if queue.is_empty() && widgets.is_empty() && pending.is_empty() {
             return None;
         }
         let muted = cx.theme().muted_foreground;
+        // Typed but not handed to pi yet (it is starting, or busy with the last one).
+        let pending_lines = pending
+            .into_iter()
+            .enumerate()
+            .map(|(index, (text, images))| {
+                let text = match (text.is_empty(), images) {
+                    (_, 0) => text,
+                    (true, n) => format!("[{n} image(s)]"),
+                    (false, n) => format!("{text} [+{n} image(s)]"),
+                };
+                h_flex()
+                    .gap_2()
+                    .text_xs()
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_color(muted)
+                            .child("↳ Waiting to send:"),
+                    )
+                    .child(div().flex_1().min_w_0().truncate().child(text))
+                    .child(
+                        Button::new(("cancel-pending", index))
+                            .icon(IconName::Close)
+                            .xsmall()
+                            .ghost()
+                            .tooltip("Cancel (back to the message box)")
+                            .accessibility_label("Cancel waiting message")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.session
+                                    .update(cx, |session, cx| session.cancel_pending(index, cx));
+                            })),
+                    )
+            });
         let lines = queue
             .steering
             .iter()
@@ -942,6 +1255,7 @@ impl Composer {
                 .pt_2()
                 .gap_0p5()
                 .children(widget_lines)
+                .children(pending_lines)
                 .children(lines)
                 .when(!queue.is_empty(), |this| {
                     this.child(
@@ -960,6 +1274,7 @@ impl Render for Composer {
         let colors = palette(cx);
         let queue = self.render_queue(cx);
         let suggestions = self.render_suggestions(cx);
+        let mention = self.render_mention(cx);
         let status = self.render_status(cx);
         let has_attachments = !self.attachments.is_empty();
         v_flex()
@@ -969,6 +1284,21 @@ impl Render for Composer {
             .on_action(cx.listener(Self::dequeue))
             .on_action(cx.listener(Self::cycle_thinking))
             .on_action(cx.listener(Self::complete_first))
+            .capture_action(cx.listener(Self::on_move_up))
+            .capture_action(cx.listener(Self::on_move_down))
+            // The input binds Tab and Esc itself; with the `@` list open they act on it.
+            .capture_action(cx.listener(|this, _: &IndentInline, window, cx| {
+                if this.mention.is_some() {
+                    this.accept_mention(window, cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .capture_action(cx.listener(|this, _: &Escape, _, cx| {
+                if this.mention.take().is_some() {
+                    cx.notify();
+                    cx.stop_propagation();
+                }
+            }))
             .w_full()
             .rounded_xl()
             .border_1()
@@ -976,6 +1306,7 @@ impl Render for Composer {
             .bg(colors.surface)
             .shadow_sm()
             .children(suggestions)
+            .children(mention)
             .children(queue)
             .when(has_attachments, |this| {
                 this.child(self.render_attachments(cx))
@@ -986,6 +1317,7 @@ impl Render for Composer {
             .child(div().px_3().pt_3().pb_1().child({
                 let weak = cx.weak_entity();
                 Textarea::new(&self.input)
+                    .aria_label("Message")
                     .appearance(false)
                     .on_paste(move |item, _, cx| {
                         weak.update(cx, |this, cx| this.paste(item, cx))
@@ -994,6 +1326,18 @@ impl Render for Composer {
             }))
             .child(self.render_toolbar(cx))
             .children(status)
+    }
+}
+
+/// The composer text after restoring `restored` into a composer holding `draft`.
+fn merge_restored(restored: &str, draft: &str, replace: bool) -> String {
+    let (restored, draft) = (restored.trim_end(), draft.trim());
+    if replace || draft.is_empty() {
+        restored.to_owned()
+    } else if restored.is_empty() {
+        draft.to_owned()
+    } else {
+        format!("{restored}\n\n{draft}")
     }
 }
 

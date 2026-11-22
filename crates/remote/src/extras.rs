@@ -40,23 +40,34 @@ cat > "$f.pi-gui-tmp" && mv -- "$f.pi-gui-tmp" "$f""#;
 impl Ssh {
     /// Like [`Ssh::connect`], but lets ssh ask for passwords, passphrases or one-time codes
     /// through `askpass_env` (see [`crate::askpass`]) instead of failing in batch mode.
+    /// With `trust_recorded_key`, only the host key the user confirmed is accepted (see
+    /// [`Ssh::connect`]).
     pub fn connect_interactive(
         &self,
         askpass_env: &[(OsString, OsString)],
+        trust_recorded_key: bool,
     ) -> Result<(), RemoteError> {
         if self.is_connected() {
             return Ok(());
         }
+        self.ensure_control_dir()?;
         let mut command = Command::new(Ssh::program());
         command
             .arg("-T")
             // ssh keeps the first value it sees, so these override `BatchMode=yes` below.
-            .args(["-o", "BatchMode=no", "-o", "NumberOfPasswordPrompts=3"])
+            .args(["-o", "BatchMode=no", "-o", "NumberOfPasswordPrompts=3"]);
+        if trust_recorded_key {
+            command.args(self.pinned_key_args()?);
+        }
+        command
             .args(self.base_args())
             .args(["--", "true"])
             .envs(askpass_env.iter().map(|(key, value)| (key, value)));
         let output = process::run(command, None, CONNECT_TIMEOUT)?;
         if output.status.success() {
+            if trust_recorded_key {
+                self.save_recorded_key()?;
+            }
             Ok(())
         } else {
             Err(crate::classify(&output.stderr_lossy()))

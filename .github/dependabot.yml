@@ -1,0 +1,16 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: monthly
+    # gpui-kit pins an exact pre-1.0 GPUI snapshot; update it by hand.
+    ignore:
+      - dependency-name: gpui-kit
+    groups:
+      cargo:
+        patterns: ["*"]

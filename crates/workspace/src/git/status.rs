@@ -26,7 +26,7 @@ pub fn status(cwd: &Path) -> Result<Option<RepoStatus>, WorkspaceError> {
 }
 
 /// [`status`] for a folder at `loc`. On a remote machine, line counts of untracked files are
-/// computed there in one round trip (for at most [`MAX_REMOTE_COUNTED`] files).
+/// computed there in one round trip (for at most [`MAX_COUNTED`] files).
 pub fn status_at(loc: &Location, cwd: &Path) -> Result<Option<RepoStatus>, WorkspaceError> {
     let head = match discover(loc, cwd) {
         Ok(Some(head)) => head,
@@ -80,18 +80,25 @@ pub fn status_at(loc: &Location, cwd: &Path) -> Result<Option<RepoStatus>, Works
                 .iter()
                 .filter(|entry| entry.kind == super::ChangeKind::Untracked)
                 .map(|entry| entry.path.as_path())
-                .take(MAX_REMOTE_COUNTED)
+                .take(MAX_COUNTED)
                 .collect();
             count_lines_remote(shell.as_ref(), &root, &untracked)
         }
     };
+    // Each count reads up to 1 MB; a fresh `node_modules` or venv without a `.gitignore`
+    // can hold tens of thousands of untracked files.
+    let mut local_counted = 0;
     let mut files: Vec<FileChange> = parsed
         .entries
         .into_iter()
         .map(|entry| {
             let (additions, deletions) = if entry.kind == super::ChangeKind::Untracked {
                 let counted = match loc {
-                    Location::Local => count_lines(&root.join(&entry.path)),
+                    Location::Local if local_counted < MAX_COUNTED => {
+                        local_counted += 1;
+                        count_lines(&root.join(&entry.path))
+                    }
+                    Location::Local => None,
                     Location::Remote(_) => remote_counts.get(&entry.path).copied().flatten(),
                 };
                 match counted {
@@ -128,8 +135,8 @@ pub fn status_at(loc: &Location, cwd: &Path) -> Result<Option<RepoStatus>, Works
 
 type Counts = (Option<u32>, Option<u32>);
 
-/// Untracked files on a remote machine whose lines are counted; the rest show no counts.
-const MAX_REMOTE_COUNTED: usize = 500;
+/// Untracked files whose lines are counted (per status load); the rest show no counts.
+const MAX_COUNTED: usize = 500;
 
 /// Counts lines of untracked files the way [`count_lines`] does, by one script on the remote
 /// machine (NUL-separated paths on stdin, one count or `-` per line out). Failures only mean

@@ -677,6 +677,7 @@ impl ConnectFlow {
                             .quiet(cx)
                             .small()
                             .icon(IconName::ArrowRight)
+                            .accessibility_label("Go to this folder (Enter)")
                             .tooltip("Go to this folder (Enter)")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 let path = this.path_input.read(cx).value().trim().to_owned();
@@ -694,6 +695,11 @@ impl ConnectFlow {
                             } else {
                                 IconName::EyeOff
                             })
+                            .accessibility_label(if show_hidden {
+                                "Hide hidden folders"
+                            } else {
+                                "Show hidden folders"
+                            })
                             .tooltip(if show_hidden {
                                 "Hide hidden folders"
                             } else {
@@ -706,6 +712,7 @@ impl ConnectFlow {
                             .quiet(cx)
                             .small()
                             .icon(IconName::Plus)
+                            .accessibility_label("New folder")
                             .tooltip("New folder")
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.start_new_folder(window, cx);

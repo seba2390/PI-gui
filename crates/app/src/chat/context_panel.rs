@@ -30,7 +30,7 @@ pub struct Breakdown {
     pub categories: Vec<Category>,
 }
 
-/// Category colors, drawn from Kvantify's palette (and readable on light and dark).
+/// Category colors from the app's palette (readable on light and dark).
 const SYSTEM: u32 = 0x008C_9C93;
 const USER: u32 = 0x0024_A926;
 const ASSISTANT: u32 = 0x00BF_FD50;

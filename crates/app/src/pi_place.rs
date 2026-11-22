@@ -104,7 +104,7 @@ impl PiPlace {
                 let mut tmp = path.as_os_str().to_owned();
                 tmp.push(".pi-gui-tmp");
                 let tmp = PathBuf::from(tmp);
-                std::fs::write(&tmp, text).map_err(fail)?;
+                write_private(&tmp, path, text.as_bytes()).map_err(fail)?;
                 std::fs::rename(&tmp, path).map_err(fail)
             }
             Self::Remote { ssh, .. } => ssh
@@ -186,6 +186,27 @@ impl PiPlace {
 
 fn dirs_home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
+}
+
+/// Writes `bytes` to `tmp` with the permissions of `original` (or owner-only for a new file):
+/// pi's config can hold API keys, and replacing it must never make it readable by others.
+fn write_private(tmp: &Path, original: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let _ = std::fs::remove_file(tmp);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+        let mode =
+            std::fs::metadata(original).map_or(0o600, |meta| meta.permissions().mode() & 0o777);
+        options.mode(mode);
+    }
+    #[cfg(not(unix))]
+    let _ = original;
+    let mut file = options.open(tmp)?;
+    file.write_all(bytes)?;
+    file.sync_all()
 }
 
 #[cfg(test)]

@@ -443,12 +443,12 @@ mod tests {
     const EXISTING: &str = r#"{
   "providers": {
     "spark": {
-      "baseUrl": "http://192.168.1.89:8888/v1",
+      "baseUrl": "http://192.168.1.50:8888/v1",
       "api": "openai-completions",
       "apiKey": "secret",
       "compat": { "thinkingFormat": "openai" },
       "models": [
-        { "id": "qwen3.8-27b", "name": "Qwen", "baseUrl": "http://192.168.1.89:8890/v1" }
+        { "id": "qwen3.8-27b", "name": "Qwen", "baseUrl": "http://192.168.1.50:8890/v1" }
       ]
     }
   }
@@ -469,7 +469,7 @@ mod tests {
             vec![ProviderInfo {
                 id: "spark".into(),
                 name: None,
-                base_url: Some("http://192.168.1.89:8888/v1".into()),
+                base_url: Some("http://192.168.1.50:8888/v1".into()),
                 api: Some("openai-completions".into()),
                 has_key: true,
                 api_key: Some("secret".into()),

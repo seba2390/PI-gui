@@ -106,7 +106,14 @@ impl HostStore {
     pub fn load(path: &Path) -> Self {
         match fs::read(path) {
             Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|error| {
-                log::warn!("ignoring corrupt host list {}: {error}", path.display());
+                // Keep a copy: the next save would otherwise replace it with an empty list.
+                let backup = path.with_extension("json.corrupt");
+                let _ = fs::copy(path, &backup);
+                log::warn!(
+                    "ignoring corrupt host list {} (kept as {}): {error}",
+                    path.display(),
+                    backup.display()
+                );
                 Self::default()
             }),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Self::default(),

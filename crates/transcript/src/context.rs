@@ -147,6 +147,7 @@ mod tests {
                         output: "o".repeat(400),
                         details: None,
                         duration_ms: None,
+                        nested: Vec::new(),
                     }),
                 },
             ],

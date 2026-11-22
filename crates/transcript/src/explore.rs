@@ -119,6 +119,7 @@ mod tests {
             output: String::new(),
             details: None,
             duration_ms: None,
+            nested: Vec::new(),
         })
     }
 
@@ -201,6 +202,7 @@ mod tests {
             output: String::new(),
             details: None,
             duration_ms: None,
+            nested: Vec::new(),
         };
         assert!(!is_exploration(&streaming));
         streaming.args = json!({"command": "ls"});

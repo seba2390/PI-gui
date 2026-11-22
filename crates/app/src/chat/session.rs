@@ -13,8 +13,9 @@ use std::time::Instant;
 
 use gpui_kit::{Context, EventEmitter, Task};
 use pi_rpc::protocol::{
-    Disposition, ExtensionUiAnswer, ExtensionUiMethod, ExtensionUiRequest, ImageContent, Model,
-    NotifyKind, SessionState, SessionStats, SlashCommand, StreamingBehavior, ThinkingLevel,
+    AgentMessage, ContentBlock, Disposition, ExtensionUiAnswer, ExtensionUiMethod,
+    ExtensionUiRequest, ImageContent, MessageContent, Model, NotifyKind, SessionState,
+    SessionStats, SlashCommand, StreamingBehavior, ThinkingLevel,
 };
 use pi_rpc::{ClientEvent, PiClient, PiProcess, RpcError, SpawnOptions};
 use transcript::{NoticeKind, Transcript};
@@ -46,8 +47,16 @@ pub enum SessionEvent {
     Settled,
     /// An extension asks the user something; answer with [`PiSession::answer_dialog`].
     Dialog(ExtensionUiRequest),
-    /// Put this text into the composer (dequeued messages, `set_editor_text`).
+    /// Replace the composer's text (an extension's `set_editor_text`).
     SetEditorText(String),
+    /// Give messages back to the composer: queued ones restored by Esc / Alt+Up, prompts
+    /// that could not be sent, or a message to edit. `replace` swaps out the draft;
+    /// otherwise the restored text goes before it, so nothing typed is lost.
+    RestoreToEditor {
+        text: String,
+        images: Vec<ImageContent>,
+        replace: bool,
+    },
     Notify {
         kind: NotifyKind,
         message: String,
@@ -68,6 +77,32 @@ pub enum AfterFork {
     Resend,
     /// Leave it out: the branch ends before it.
     Keep,
+}
+
+/// The images of the user message `from_end` messages before the last one (0 is the
+/// newest), if its text is `text`; empty when it cannot be matched.
+fn user_images(messages: &[AgentMessage], from_end: usize, text: &str) -> Vec<ImageContent> {
+    let user = messages
+        .iter()
+        .rev()
+        .filter_map(|message| match message {
+            AgentMessage::User(user) => Some(user),
+            _ => None,
+        })
+        .nth(from_end);
+    match user {
+        Some(user) if user.content.text().trim() == text.trim() => match &user.content {
+            MessageContent::Blocks(blocks) => blocks
+                .iter()
+                .filter_map(|block| match block {
+                    ContentBlock::Image(image) => Some(image.clone()),
+                    _ => None,
+                })
+                .collect(),
+            MessageContent::Text(_) => Vec::new(),
+        },
+        _ => Vec::new(),
+    }
 }
 
 /// pi's fork entry for the user message `from_end` places before the last one, if its text
@@ -570,16 +605,81 @@ impl PiSession {
         }
     }
 
-    /// Esc: restore queued messages to the editor, then abort the run.
+    /// Removes the prompts waiting to be sent, returning their texts and images.
+    fn take_outbox(&mut self, cx: &mut Context<Self>) -> (Vec<String>, Vec<ImageContent>) {
+        if self.outbox.is_empty() {
+            return (Vec::new(), Vec::new());
+        }
+        let mut texts = Vec::new();
+        let mut images = Vec::new();
+        for prompt in self.outbox.drain(..) {
+            if !prompt.text.is_empty() {
+                texts.push(prompt.text);
+            }
+            images.extend(prompt.images);
+        }
+        self.report_busy(cx);
+        cx.notify();
+        (texts, images)
+    }
+
+    /// Gives prompts that can no longer be sent (pi exited) back to the composer.
+    fn return_outbox(&mut self, cx: &mut Context<Self>) {
+        let (texts, images) = self.take_outbox(cx);
+        if !texts.is_empty() || !images.is_empty() {
+            cx.emit(SessionEvent::RestoreToEditor {
+                text: texts.join("\n\n"),
+                images,
+                replace: false,
+            });
+        }
+    }
+
+    /// Prompts typed but not sent to pi yet (pi is starting, or busy with the previous one).
+    pub fn pending_prompts(&self) -> impl Iterator<Item = (&str, usize, bool)> {
+        self.outbox
+            .iter()
+            .map(|prompt| (prompt.text.as_str(), prompt.images.len(), prompt.follow_up))
+    }
+
+    /// Cancels the `index`th prompt waiting to be sent and returns it to the composer.
+    pub fn cancel_pending(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(prompt) = self.outbox.remove(index) {
+            cx.emit(SessionEvent::RestoreToEditor {
+                text: prompt.text,
+                images: prompt.images,
+                replace: false,
+            });
+            self.report_busy(cx);
+            cx.notify();
+        }
+    }
+
+    /// Esc: restore queued messages (pi's queue and prompts not sent yet) to the editor,
+    /// then abort the run.
     pub fn interrupt(&mut self, cx: &mut Context<Self>) {
+        // Prompts still waiting here would otherwise be sent right after the abort.
+        let (local_text, local_images) = self.take_outbox(cx);
         let Some(client) = self.client.clone() else {
+            if !local_text.is_empty() || !local_images.is_empty() {
+                cx.emit(SessionEvent::RestoreToEditor {
+                    text: local_text.join("\n\n"),
+                    images: local_images,
+                    replace: false,
+                });
+            }
             return;
         };
         cx.spawn(async move |this, cx| {
-            let restored = client.clear_queue().await.unwrap_or_default();
-            if !restored.is_empty() {
+            let mut restored = client.clear_queue().await.unwrap_or_default();
+            restored.extend(local_text);
+            if !restored.is_empty() || !local_images.is_empty() {
                 let _ = this.update(cx, |_, cx| {
-                    cx.emit(SessionEvent::SetEditorText(restored.join("\n\n")));
+                    cx.emit(SessionEvent::RestoreToEditor {
+                        text: restored.join("\n\n"),
+                        images: local_images,
+                        replace: false,
+                    });
                 });
             }
             if let Err(error) = client.abort().await {
@@ -599,7 +699,11 @@ impl PiSession {
                 && !restored.is_empty()
             {
                 let _ = this.update(cx, |_, cx| {
-                    cx.emit(SessionEvent::SetEditorText(restored.join("\n\n")));
+                    cx.emit(SessionEvent::RestoreToEditor {
+                        text: restored.join("\n\n"),
+                        images: Vec::new(),
+                        replace: false,
+                    });
                 });
             }
         })
@@ -790,11 +894,21 @@ impl PiSession {
                 let Some(entry_id) = fork_entry(&messages, from_end, &text) else {
                     return Ok(None);
                 };
-                client.fork(entry_id).await
+                // The transcript keeps only an image count; Edit and Retry need the images.
+                let images = if after == AfterFork::Keep {
+                    Vec::new()
+                } else {
+                    client
+                        .get_messages()
+                        .await
+                        .map(|messages| user_images(&messages, from_end, &text))
+                        .unwrap_or_default()
+                };
+                Ok(client.fork(entry_id).await?.map(|text| (text, images)))
             }
             .await;
             let _ = this.update(cx, |this, cx| match result {
-                Ok(Some(text)) => this.reload(Some((text, after)), cx),
+                Ok(Some((text, images))) => this.reload(Some((text, images, after)), cx),
                 Ok(None) => this.push_notice(
                     NoticeKind::Warning,
                     "pi could not branch from this message (it may be before a compaction).",
@@ -828,7 +942,7 @@ impl PiSession {
         cx.spawn(async move |this, cx| {
             let result = client.fork(entry_id).await;
             let _ = this.update(cx, |this, cx| match result {
-                Ok(Some(text)) => this.reload(Some((text, after)), cx),
+                Ok(Some(text)) => this.reload(Some((text, Vec::new(), after)), cx),
                 Ok(None) => {}
                 Err(error) => this.report(&error, cx),
             });
@@ -841,6 +955,15 @@ impl PiSession {
         let Some(client) = self.client.clone() else {
             return;
         };
+        // Replacing the transcript mid-run would lose track of the run still streaming.
+        if self.is_busy() {
+            self.push_notice(
+                NoticeKind::Info,
+                "Wait for the current response to finish before cloning.",
+                cx,
+            );
+            return;
+        }
         cx.spawn(async move |this, cx| {
             let result = client.clone_session().await;
             let _ = this.update(cx, |this, cx| match result {
@@ -921,7 +1044,11 @@ impl PiSession {
 
     /// Reads the state and history again after pi switched session files in this process,
     /// then handles the message a fork started from.
-    fn reload(&mut self, forked: Option<(String, AfterFork)>, cx: &mut Context<Self>) {
+    fn reload(
+        &mut self,
+        forked: Option<(String, Vec<ImageContent>, AfterFork)>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(client) = self.client.clone() else {
             return;
         };
@@ -946,9 +1073,15 @@ impl PiSession {
                 cx.emit(SessionEvent::SessionFileChanged);
                 cx.emit(SessionEvent::MetaChanged);
                 match forked {
-                    Some((text, AfterFork::Edit)) => cx.emit(SessionEvent::SetEditorText(text)),
-                    Some((text, AfterFork::Resend)) => this.submit(text, Vec::new(), false, cx),
-                    Some((_, AfterFork::Keep)) | None => {}
+                    Some((text, images, AfterFork::Edit)) => {
+                        cx.emit(SessionEvent::RestoreToEditor {
+                            text,
+                            images,
+                            replace: true,
+                        });
+                    }
+                    Some((text, images, AfterFork::Resend)) => this.submit(text, images, false, cx),
+                    Some((_, _, AfterFork::Keep)) | None => {}
                 }
                 cx.notify();
             });
@@ -1024,25 +1157,46 @@ impl PiSession {
                         this.lifecycle = Lifecycle::Exited {
                             message: this.exit_message(&error),
                         };
+                        this.return_outbox(cx);
                     }
                 }
                 this.models = models;
                 this.thinking_levels = levels;
                 this.stats = stats;
                 this.commands = commands;
+                let replaced = messages.is_some();
                 if let Some(messages) = messages {
                     let name = this.transcript.session_name().map(str::to_owned);
+                    // Notices pi sent while starting (e.g. an extension that failed to load)
+                    // stay visible after the history.
+                    let notices: Vec<_> = this
+                        .transcript
+                        .items()
+                        .iter()
+                        .filter_map(|item| match &item.kind {
+                            transcript::ItemKind::Notice(notice) => Some(notice.clone()),
+                            _ => None,
+                        })
+                        .collect();
                     this.transcript = Transcript::from_messages(&messages);
                     this.transcript.set_session_name(
                         name.or_else(|| this.state.as_ref().and_then(|s| s.session_name.clone())),
                     );
+                    for notice in notices {
+                        this.transcript.push_notice(notice.kind, notice.text);
+                    }
                 }
                 this.flush_outbox(cx);
                 this.report_busy(cx);
                 if this.lifecycle == Lifecycle::Ready {
                     this.apply_pending_model(cx);
                 }
-                cx.emit(SessionEvent::TranscriptChanged);
+                // A replaced transcript restarts item ids: rebuild every row.
+                cx.emit(if replaced {
+                    SessionEvent::Reloaded
+                } else {
+                    SessionEvent::TranscriptChanged
+                });
                 cx.emit(SessionEvent::MetaChanged);
                 cx.notify();
             });
@@ -1134,6 +1288,7 @@ impl PiSession {
                 self.client = None;
                 self.sending = false;
                 self.awaiting_start = false;
+                self.return_outbox(cx);
                 cx.emit(SessionEvent::MetaChanged);
             }
         }
