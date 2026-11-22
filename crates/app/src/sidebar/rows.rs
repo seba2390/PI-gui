@@ -70,9 +70,9 @@ pub fn session_row(
         .when(active, |this| this.bg(active_bg))
         .hover(|style| style.bg(hover_bg))
         .on_click(cx.listener(move |_, _, _, cx| cx.emit(open.clone())))
-        // A working agent: the spinning π, before the name.
+        // A working agent: the pulsing π, before the name.
         .when(activity == Some(Activity::Working), |this| {
-            this.child(crate::ui::spinner::spinning_pi(
+            this.child(crate::ui::spinner::pulsing_pi(
                 sidebar.spinner_frame,
                 px(12.),
                 colors.accent,

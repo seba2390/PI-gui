@@ -1209,7 +1209,7 @@ fn render_working(status: &RunStatus, cx: &RowContext<'_>) -> AnyElement {
     };
     let elapsed = since.map(|since| since.elapsed());
     let frame = cx.chat.spinner_frame();
-    // The label gently pulses (about one breath per 2 s) while the π spins.
+    // The label gently pulses (about one breath per 2 s) while the π pulses.
     #[allow(clippy::cast_precision_loss)]
     let phase = (frame % 25) as f32 / 25.0 * std::f32::consts::TAU;
     let label_color = cx.palette.accent.opacity(0.7 + 0.3 * phase.cos());
@@ -1219,7 +1219,7 @@ fn render_working(status: &RunStatus, cx: &RowContext<'_>) -> AnyElement {
         .items_center()
         .gap_2()
         .text_sm()
-        .child(crate::ui::spinner::spinning_pi(
+        .child(crate::ui::spinner::pulsing_pi(
             frame,
             px(14.),
             cx.palette.accent,
