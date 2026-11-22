@@ -32,6 +32,8 @@ when idle.
   integrated terminal.
 - **SSH remotes.** Run pi on another machine, and Pistachio installs pi there if it's missing.
 - **Web search** for chats: quick lookups or multi-step deep research.
+- **Speech to text.** Dictate with the microphone button. A model you download once (Parakeet,
+  Whisper or Moonshine) transcribes on your computer, so nothing you say leaves it.
 - **Background sessions.** Chats keep working while you switch, plus branching, model and
   skill management.
 - **Settings and updates.** A Settings page (⌘,) for look, models, web search and SSH, and an

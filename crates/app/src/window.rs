@@ -18,7 +18,7 @@ use pi_sessions::SessionSummary;
 use pi_sessions::Mode;
 
 use crate::actions::{
-    CheckForUpdates, FocusComposer, NewChat, OpenSettings, ResumeSession, ShowChatMode,
+    CheckForUpdates, FindInChat, FocusComposer, NewChat, OpenSettings, ResumeSession, ShowChatMode,
     ShowCodeMode, ShowDiff, ShowFiles, ToggleRightPanel, ToggleSidebar, ToggleTerminal,
     WINDOW_CONTEXT,
 };
@@ -210,6 +210,13 @@ impl MainWindow {
                 crate::theme::sync_with_window(window, cx);
             }),
             cx.subscribe_in(
+                &crate::stt::models::models(cx),
+                window,
+                |_, _, event: &crate::stt::models::SpeechModelsEvent, window, cx| {
+                    crate::stt::ui::notify_download(event, window, cx);
+                },
+            ),
+            cx.subscribe_in(
                 &crate::hosts::hosts(cx),
                 window,
                 |this, hosts, event: &HostsEvent, window, cx| match event {
@@ -337,7 +344,7 @@ impl MainWindow {
             if self.welcome
                 && matches!(
                     panel.as_str(),
-                    "terminal" | "diff" | "files" | "attach" | "context"
+                    "terminal" | "diff" | "diff-expand-all" | "files" | "attach" | "context"
                 )
                 && let Ok(folder) = std::env::current_dir()
             {
@@ -346,6 +353,15 @@ impl MainWindow {
             match panel.as_str() {
                 "terminal" => self.toggle_terminal(&ToggleTerminal, window, cx),
                 "diff" => self.show_diff(&ShowDiff, window, cx),
+                "diff-expand-all" => {
+                    self.right_panel
+                        .update(cx, |panel, cx| panel.expand_all_diffs(cx));
+                    self.show_diff(&ShowDiff, window, cx);
+                }
+                "expand-tools" => {
+                    let chat = self.chat.clone();
+                    chat.update(cx, |chat, cx| chat.set_expand_tools(true, cx));
+                }
                 "files" => self.show_files(&ShowFiles, window, cx),
                 "no-sidebar" => self.toggle_sidebar(&ToggleSidebar, window, cx),
                 "chat" => self.switch_to_mode(Mode::Chat, window, cx),
@@ -353,6 +369,34 @@ impl MainWindow {
                 "manage-hosts" => self.open_manage_hosts(window, cx),
                 "skills" => self.toggle_skills(window, cx),
                 "settings" => self.open_settings(&OpenSettings, window, cx),
+                "settings-speech" => {
+                    self.open_settings(&OpenSettings, window, cx);
+                    if let Some(settings) = self.settings.as_ref().map(|s| s.0.clone()) {
+                        settings.update(cx, |settings, _| settings.start_on_speech());
+                    }
+                }
+                "speech-download" => crate::stt::ui::open_download_dialog(window, cx),
+                "dictate" => {
+                    let composer = self.chat.read(cx).composer().clone();
+                    composer.update(cx, |composer, cx| composer.toggle_dictation(window, cx));
+                }
+                other if other.starts_with("speech-get:") => {
+                    if let Some(model) = crate::stt::catalog::model(&other["speech-get:".len()..]) {
+                        crate::stt::ui::start_download(model, cx);
+                    }
+                }
+                // `view-file:<path>`: the Files tab's viewer on that file (relative to the folder).
+                other if other.starts_with("view-file:") => {
+                    let path = PathBuf::from(&other["view-file:".len()..]);
+                    self.show_files(&ShowFiles, window, cx);
+                    self.right_panel
+                        .update(cx, |panel, cx| panel.open_file(path, window, cx));
+                }
+                other if other.starts_with("find:") => {
+                    let chat = self.chat.clone();
+                    let text = other["find:".len()..].to_owned();
+                    chat.update(cx, |chat, cx| chat.find_text(&text, window, cx));
+                }
                 other if other.starts_with("open-skill:") => {
                     let path = other.trim_start_matches("open-skill:").to_owned();
                     self.toggle_skills(window, cx);
@@ -404,6 +448,7 @@ impl MainWindow {
                     return;
                 }
                 "code" => self.switch_to_mode(Mode::Code, window, cx),
+                "new-chat" => self.new_chat(&NewChat, window, cx),
                 "latest" => {
                     let dir = cx.global::<AppConfig>().sessions_dir.clone();
                     if let Some(latest) =
@@ -1745,6 +1790,13 @@ impl MainWindow {
             return;
         }
         if self.mode(cx) == mode && self.chat.read(cx).session().read(cx).is_empty() {
+            // The Skills or Settings page covers the chat: going back to it is the new
+            // conversation (otherwise the click seems to do nothing).
+            if self.page_open() {
+                self.close_skills(cx);
+                self.close_settings(cx);
+                cx.notify();
+            }
             focus_chat(&self.chat, window, cx);
             return;
         }
@@ -1985,6 +2037,15 @@ impl MainWindow {
         UiState::update(cx, |state| state.terminal_height = Some(height));
     }
 
+    /// ⌘F: the find bar of the conversation on screen.
+    fn find_in_chat(&mut self, _: &FindInChat, window: &mut Window, cx: &mut Context<Self>) {
+        if self.welcome {
+            return;
+        }
+        let chat = self.chat.clone();
+        chat.update(cx, |chat, cx| chat.open_find(window, cx));
+    }
+
     fn focus_composer(&mut self, _: &FocusComposer, window: &mut Window, cx: &mut Context<Self>) {
         focus_chat(&self.chat, window, cx);
     }
@@ -2079,8 +2140,10 @@ impl MainWindow {
                             div()
                                 .text_sm()
                                 .font_weight(FontWeight::MEDIUM)
-                                // The title keeps its width (up to a cap); the folder truncates first.
-                                .flex_shrink_0()
+                                // The title keeps its width (up to a cap) while there is room;
+                                // in a narrow column it truncates too, never running under the
+                                // buttons on the right.
+                                .min_w_0()
                                 .max_w(px(360.))
                                 .truncate()
                                 .text_color(theme.foreground)
@@ -2090,6 +2153,9 @@ impl MainWindow {
                             this.child(
                                 div()
                                     .text_xs()
+                                    // No width of its own (flex basis 0): only the room the
+                                    // title leaves, so the folder truncates (and goes) first.
+                                    .flex_1()
                                     .min_w_0()
                                     .truncate()
                                     .text_color(theme.muted_foreground)
@@ -2191,6 +2257,9 @@ impl MainWindow {
 const DEFAULT_TERMINAL_HEIGHT: f32 = 240.;
 const MIN_TERMINAL_HEIGHT: Pixels = px(100.);
 const MIN_CHAT_HEIGHT: Pixels = px(160.);
+/// The chat column is never squeezed narrower than this by the side panels: room for the
+/// header's buttons and the message box's model picker, thinking level and send button.
+const MIN_CHAT_WIDTH: Pixels = px(400.);
 
 /// What is dragged while resizing the terminal (no visible drag image).
 #[derive(Clone)]
@@ -2484,6 +2553,9 @@ impl Render for MainWindow {
         let chat_column = v_flex()
             .size_full()
             .min_w_0()
+            // Whatever does not fit a narrow column is clipped here, never drawn over the
+            // right panel.
+            .overflow_hidden()
             .child(self.render_chat_header(cx))
             .when_some(settings, |this, settings| {
                 this.child(div().flex_1().min_h_0().child(settings.cached(full())))
@@ -2536,6 +2608,7 @@ impl Render for MainWindow {
             .on_action(cx.listener(Self::show_diff))
             .on_action(cx.listener(Self::show_files))
             .on_action(cx.listener(Self::focus_composer))
+            .on_action(cx.listener(Self::find_in_chat))
             .on_action(cx.listener(Self::show_chat_mode))
             .on_action(cx.listener(Self::show_code_mode))
             .on_action(cx.listener(Self::resume_session))
@@ -2565,7 +2638,13 @@ impl Render for MainWindow {
                             .size_range(px(200.)..px(440.))
                             .child(self.sidebar.clone().cached(full())),
                     )
-                    .child(resizable_panel().child(chat_column))
+                    .child(
+                        resizable_panel()
+                            // Dragging the right panel wide stops here, so the chat keeps room
+                            // for its header buttons and the message box's controls.
+                            .size_range(MIN_CHAT_WIDTH..Pixels::MAX)
+                            .child(chat_column),
+                    )
                     .child(
                         resizable_panel()
                             .visible(self.right_open)

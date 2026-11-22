@@ -118,18 +118,54 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   reads (on the SSH host for remote sessions); the previous version is kept as
   `models.json.bak-pistachio`. pi reads the file only when it starts, so after saving it restarts
   on the same session (after the current turn, if one is running) and selects the new model.
-- Right panel: git changes and a file tree of the working folder.
+- **Find in chat** (⌘F): a search bar over the conversation. Every match is highlighted;
+  Enter / Shift+Enter (or ⌘G / ⌘⇧G) go to the next / previous one with a "3 of 12" count, and
+  Esc closes the bar. It searches prompts and replies as shown, thinking, tool output and the
+  agent's edits, including collapsed rows: the row with the current match opens and the
+  transcript scrolls to it. Case is ignored.
+- Right panel: git changes and a file tree of the working folder. Clicking a file opens it
+  read-only in the panel, with syntax colors and line numbers (← goes back to the tree);
+  **Mention** in its header, the **+** on a row, or ⌥-click in the tree puts an `@path`
+  mention in the message box instead. Binary files show a short notice, and files over
+  512 KB open with their first 512 KB. Files on an SSH host are read over the connection.
+- Syntax colors for code by file extension: chat code blocks, the agent's edits (its diffs
+  in the chat), the files it reads, and the Changes panel's diffs. Diffs keep their red and
+  green backgrounds with the code colors on top; the old and new text are rebuilt from each
+  diff and colored as a whole, so multi-line strings and comments come out right.
 - Bottom panel: an integrated terminal in the working folder; drag its top edge to resize it
   (the height is remembered).
 - macOS and Linux, plus an experimental Windows build. GPU-rendered with [GPUI](https://gpui.rs) via
   [gpui-kit](https://gpui-kit.com).
+
+## Speech to text
+
+The microphone button at the right of the message box dictates instead of typing, and so does
+⌘⇧Space (Ctrl+Shift+Space on Linux/Windows) in the message box: hold it to talk and let go to
+keep the text, or tap it to start and tap again to stop. Speech is
+transcribed on this computer by a model downloaded once (none ship with the app); the first
+press offers the choice:
+
+| Model | Download | Languages | Speed |
+|---|---|---|---|
+| Parakeet v3 (NVIDIA, recommended) | 671 MB | 25 European languages, incl. English and Danish | very fast |
+| Whisper large-v3 turbo (OpenAI) | 1.0 GB | about 99 languages | slower |
+| Whisper small (OpenAI) | 375 MB | about 99 languages | fast |
+| Moonshine v2 (Moonshine AI) | 141 MB | English only | fastest |
+
+The download runs in the background with a progress bar at the top of the chat, from a pinned
+Hugging Face revision, and every file is checked against its SHA-256 before the model is used.
+While you speak, the text appears greyed out and keeps improving; when you stop talking (after
+the silence set in Settings, 2.5 s by default), press Enter or press stop, it becomes normal
+text in the message box, ready to edit or send. Esc discards it. Models live in
+`~/.pi/agent/pistachio/speech/`.
 
 ## Settings and updates
 
 Settings opens from the Pistachio menu (⌘,) or the button at the bottom of the sidebar. Every
 change is saved right away.
 
-- **General:** theme (follow the system, light or dark), text size (scales the interface),
+- **General:** theme (follow the system, light or dark), code colors (the syntax palette for
+  code in chat, diffs, skills and `models.json`, with a live preview), text size (scales the interface),
   whether to open in Chat, Code or the mode used last, reopening the last session, and
   notifications for chats working in the background.
 - **pi & models:** which `pi` to run (`PISTACHIO_PI_BIN` still wins), the model and thinking
@@ -140,6 +176,8 @@ change is saved right away.
   network access.
 - **SSH connections:** whether saved connections connect when the app opens (off by
   default), and the saved hosts with their status, connecting, adding and managing them.
+- **Speech to text:** the dictation models (download, use, remove), how long a silence ends
+  dictation, and the language for Whisper models.
 
 The app's own settings live in `~/.pi/agent/pistachio/settings.json`.
 
@@ -161,9 +199,12 @@ Composer behaviour mirrors pi's terminal.
 | Shift+Tab | Cycle thinking level |
 | Tab | Complete a `/` command or `@file` |
 | ↑ / ↓ | Earlier / later prompts (in an empty message box) |
+| ⌘⇧Space | Dictate: hold to talk, tap to start / stop |
 | Ctrl+T / Ctrl+O | Expand all thinking / tool output |
 | ⌘N / ⌘B / ⌘⌥B | New chat or session / toggle sidebar / toggle right panel |
 | ⌘1 / ⌘2 | Chat mode / Code mode |
+| ⌘F | Find in the conversation |
+| Enter / Shift+Enter, ⌘G / ⌘⇧G | Next / previous match (in the find bar) |
 | ⌘⇧D / ⌘⇧E | Changes / files panel |
 | Ctrl+` | Toggle terminal |
 | ⌘W / ⌘M | Close (the app keeps running) / minimize the window |

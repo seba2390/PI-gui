@@ -31,6 +31,17 @@ async-channel.workspace = true
 base64 = "0.23"
 trash = "5"
 toml = { version = "1", default-features = false, features = ["std", "parse", "serde"] }
+# Local speech to text (src/stt): sherpa-onnx links its prebuilt static libraries.
+sherpa-onnx = "2.0.3"
+sha2 = "0.10.9"
+ureq = { version = "=3.5.2", default-features = false, features = ["rustls"] }
+# Complete highlight queries for grammars gpui-kit ships incomplete (see src/syntax.rs).
+# Keep these at the versions gpui-kit itself locks, so each grammar is compiled once.
+tree-sitter-c = "0.24.2"
+tree-sitter-cpp = "0.23.4"
+tree-sitter-c-sharp = "0.23.5"
+tree-sitter-javascript = "0.23.1"
+tree-sitter-typescript = "0.23.2"
 
 [dev-dependencies]
 pretty_assertions.workspace = true

@@ -127,8 +127,66 @@
           "constant": {
             "color": "#8A4FA3"
           },
+          "boolean": {
+            "color": "#B5583A"
+          },
+          "tag": {
+            "color": "#B5583A"
+          },
+          "attribute": {
+            "color": "#8A5A12"
+          },
+          "constructor": {
+            "color": "#2F6496"
+          },
+          "namespace": {
+            "color": "#2F6496"
+          },
+          "label": {
+            "color": "#8A4FA3"
+          },
+          "escape": {
+            "color": "#B5583A"
+          },
+          "string.escape": {
+            "color": "#B5583A"
+          },
+          "delimiter": {
+            "color": "#75726A"
+          },
+          "title": {
+            "color": "#B5583A",
+            "font_weight": 700
+          },
+          "emphasis": {
+            "font_style": "italic"
+          },
+          "emphasis.strong": {
+            "font_weight": 700
+          },
+          "text.literal": {
+            "color": "#8A5A12"
+          },
+          "text.code.span": {
+            "color": "#8A5A12"
+          },
+          "link_text": {
+            "color": "#2F6496"
+          },
+          "text.reference": {
+            "color": "#2F6496"
+          },
+          "link_uri": {
+            "color": "#8C887F"
+          },
+          "text.uri": {
+            "color": "#8C887F"
+          },
+          "punctuation.list_marker": {
+            "color": "#B5583A"
+          },
           "property": {
-            "color": "#1F1E1D"
+            "color": "#2F6496"
           },
           "variable": {
             "color": "#1F1E1D"
@@ -267,8 +325,66 @@
           "constant": {
             "color": "#C9A0DC"
           },
+          "boolean": {
+            "color": "#D98A6C"
+          },
+          "tag": {
+            "color": "#D98A6C"
+          },
+          "attribute": {
+            "color": "#E3C28C"
+          },
+          "constructor": {
+            "color": "#8CB6D9"
+          },
+          "namespace": {
+            "color": "#8CB6D9"
+          },
+          "label": {
+            "color": "#C9A0DC"
+          },
+          "escape": {
+            "color": "#D98A6C"
+          },
+          "string.escape": {
+            "color": "#D98A6C"
+          },
+          "delimiter": {
+            "color": "#A19D94"
+          },
+          "title": {
+            "color": "#D98A6C",
+            "font_weight": 700
+          },
+          "emphasis": {
+            "font_style": "italic"
+          },
+          "emphasis.strong": {
+            "font_weight": 700
+          },
+          "text.literal": {
+            "color": "#E3C28C"
+          },
+          "text.code.span": {
+            "color": "#E3C28C"
+          },
+          "link_text": {
+            "color": "#8CB6D9"
+          },
+          "text.reference": {
+            "color": "#8CB6D9"
+          },
+          "link_uri": {
+            "color": "#8A867D"
+          },
+          "text.uri": {
+            "color": "#8A867D"
+          },
+          "punctuation.list_marker": {
+            "color": "#D98A6C"
+          },
           "property": {
-            "color": "#ECE9E1"
+            "color": "#8CB6D9"
           },
           "variable": {
             "color": "#ECE9E1"

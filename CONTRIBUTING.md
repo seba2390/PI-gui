@@ -21,7 +21,7 @@ You need stable Rust (see `rust-toolchain.toml`) and [pi](https://pi.dev) on you
 - **Linux (Debian/Ubuntu):**
 
   ```bash
-  sudo apt-get install libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev libx11-xcb-dev libxcb1-dev libfontconfig-dev libfreetype-dev libzstd-dev
+  sudo apt-get install libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev libx11-xcb-dev libxcb1-dev libfontconfig-dev libfreetype-dev libzstd-dev libasound2-dev
   ```
 
 Then:
@@ -61,8 +61,12 @@ script/set-version.sh 0.5.0              # bump the version (Cargo.toml, Cargo.l
 **Opening views at startup.** `PISTACHIO_OPEN` takes a comma-separated list, which makes layout
 checks scriptable:
 
-- Mode and panels: `chat`, `code`, `terminal`, `diff`, `files`, `no-sidebar`.
-- Sessions and popovers: `latest`, `attach`, `context`.
+- Mode and panels: `chat`, `code`, `terminal`, `diff`, `files`, `no-sidebar`;
+  `diff-expand-all` opens the Changes tab with every file expanded, and `expand-tools` expands
+  every tool call in the chat (like Ctrl+O); `view-file:<path>` opens a file (relative to the
+  folder) in the Files tab's viewer.
+- Sessions and popovers: `latest`, `new-chat` (like ⌘N), `attach`, `context`; `find:<text>` opens the find bar
+  searching for `<text>`.
 - Dialogs: `add-host`, `manage-hosts`, `add-model`, `add-provider`, `edit-models`.
 - Skills page: `skills`, `new-skill`, `open-skill:<path>`; the Settings page: `settings`.
 - SSH: `ssh:<alias>`, `remote:<alias>:<folder>` and `remote-latest:<alias>` open a remote

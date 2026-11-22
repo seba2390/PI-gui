@@ -5,6 +5,7 @@ pub mod composer;
 mod context_panel;
 pub mod dialogs;
 mod file_picker;
+mod find;
 pub(crate) mod mention;
 pub mod models_dialog;
 mod rows;
@@ -42,6 +43,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("ctrl-o", ToggleToolOutput, Some(CHAT_CONTEXT)),
     ]);
     composer::init(cx);
+    find::init(cx);
 }
 
 /// Identifies one block of one transcript item, for expansion and markdown state.
@@ -113,6 +115,11 @@ pub struct ChatView {
     /// The π field behind a new, empty conversation; it fades out when the first message is
     /// sent and is then dropped.
     pi_field: Option<Entity<crate::ui::PiField>>,
+    /// Syntax colors of edit diffs and read files in tool rows, so re-rendering (scrolling,
+    /// streaming) never parses the same code twice. Filled while rendering, hence the cell.
+    highlights: std::cell::RefCell<crate::code_highlight::HighlightCache>,
+    /// The find bar (⌘F), while open.
+    find: Option<find::Find>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -158,6 +165,8 @@ impl ChatView {
         let scroller = cx.new(|cx| MessageScrollerState::new(0, cx));
 
         let subscriptions = vec![
+            // The speech model download banner.
+            cx.observe(&crate::stt::models::models(cx), |_, _, cx| cx.notify()),
             // The reconnect banner shows the host's live status.
             cx.observe(&crate::hosts::hosts(cx), |this, _, cx| {
                 if this.session.read(cx).host().is_some() {
@@ -194,6 +203,8 @@ impl ChatView {
             held_dialogs: Vec::new(),
             stopped_unseen: false,
             pi_field: None,
+            highlights: std::cell::RefCell::default(),
+            find: None,
             _subscriptions: subscriptions,
         };
         this.sync(cx);
@@ -532,6 +543,8 @@ impl ChatView {
                 }
             }));
         }
+        // Matches move with the transcript (new text, a reload).
+        self.refresh_find(cx);
         cx.notify();
     }
 
@@ -566,7 +579,12 @@ impl ChatView {
     }
 
     fn toggle_all_tools(&mut self, _: &ToggleToolOutput, _: &mut Window, cx: &mut Context<Self>) {
-        self.expand_tools = !self.expand_tools;
+        self.set_expand_tools(!self.expand_tools, cx);
+    }
+
+    /// Expands (or collapses) every tool call's output, like Ctrl+O.
+    pub fn set_expand_tools(&mut self, expand: bool, cx: &mut Context<Self>) {
+        self.expand_tools = expand;
         self.toggled.clear();
         self.scroller
             .update(cx, |scroller, cx| scroller.remeasure(cx));
@@ -757,8 +775,9 @@ impl Render for ChatView {
         }
         let pi_field = self.pi_field.clone();
 
-        v_flex()
-            .relative()
+        let find_bar = self.render_find(cx);
+        let root = self.find_actions(v_flex(), cx);
+        root.relative()
             .key_context(CHAT_CONTEXT)
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::toggle_all_thinking))
@@ -766,6 +785,7 @@ impl Render for ChatView {
             .size_full()
             .min_h_0()
             .bg(background)
+            .children(crate::stt::ui::download_banner(cx))
             // Behind everything else (painted first), across the whole chat.
             .when_some(pi_field, |this, field| {
                 this.child(
@@ -781,6 +801,7 @@ impl Render for ChatView {
                 self.render_empty(cx).into_any_element()
             } else {
                 div()
+                    .relative()
                     .flex_1()
                     .min_h_0()
                     .child(
@@ -794,6 +815,7 @@ impl Render for ChatView {
                         .with_bottom_fade(background)
                         .size_full(),
                     )
+                    .children(find_bar)
                     .into_any_element()
             })
             .child(

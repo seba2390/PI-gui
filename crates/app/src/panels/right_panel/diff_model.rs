@@ -245,6 +245,21 @@ impl DiffModel {
         self.expanded.contains_key(path)
     }
 
+    /// Every changed file, in list order.
+    pub fn file_paths(&self) -> Vec<PathBuf> {
+        self.files
+            .iter()
+            .map(|file| file.path().to_path_buf())
+            .collect()
+    }
+
+    /// The expanded files, sorted.
+    pub fn expanded_paths(&self) -> Vec<PathBuf> {
+        let mut paths: Vec<PathBuf> = self.expanded.keys().cloned().collect();
+        paths.sort();
+        paths
+    }
+
     /// Installs a status. Expanded files that are no longer changed collapse; the others keep
     /// showing their old patch and are returned so the caller reloads them.
     pub fn set_status(&mut self, result: StatusResult) -> Vec<PathBuf> {

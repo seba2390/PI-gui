@@ -6,10 +6,10 @@ use std::path::{Path, PathBuf};
 use deepsearch::config::{BackendKind, Config as WebConfig, Mode as WebMode};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::menu::DropdownMenu as _;
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::setting::{
-    NumberFieldOptions, RenderOptions, SettingField, SettingGroup, SettingItem, SettingPage,
-    Settings,
+    NumberFieldOptions, RenderOptions, SelectIndex, SettingField, SettingGroup, SettingItem,
+    SettingPage, Settings,
 };
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme as _, IconName, Sizable as _, h_flex, v_flex};
@@ -19,6 +19,7 @@ use pi_config::settings::{StartupDefaults, THINKING_LEVELS};
 use remote::HostId;
 
 use super::{AppSettings, StartMode, TextSize, ThemeChoice};
+use crate::code_colors::CodeColors;
 use crate::config::AppConfig;
 use crate::ui::AppIcon;
 
@@ -58,6 +59,10 @@ pub struct SettingsView {
     models: Vec<(SharedString, SharedString)>,
     /// `pi --version` of the configured `pi`, once known.
     pi_version: Option<String>,
+    /// The page shown first (scripted runs open Speech to text directly).
+    start_page: usize,
+    /// The Code colors palette under the pointer in the open picker; the preview shows it.
+    code_colors_hover: Option<CodeColors>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -91,6 +96,8 @@ impl SettingsView {
         let brave_key = key_input(brave, "From BRAVE_API_KEY if empty", window, cx);
         let tavily_key = key_input(tavily, "From TAVILY_API_KEY if empty", window, cx);
         let subscriptions = vec![
+            // Speech to text: download progress and installed models.
+            cx.observe(&crate::stt::models::models(cx), |_, _, cx| cx.notify()),
             cx.subscribe(&brave_key, |_, input, event: &InputEvent, cx| {
                 if let InputEvent::Change = event {
                     let key = input.read(cx).value().trim().to_owned();
@@ -126,6 +133,8 @@ impl SettingsView {
             tavily_key,
             models,
             pi_version: None,
+            start_page: 0,
+            code_colors_hover: None,
             _subscriptions: subscriptions,
         };
         this.probe_pi_version(cx);
@@ -203,6 +212,23 @@ impl SettingsView {
                             )
                         },
                     ))
+                    .item(
+                        SettingItem::new("Code colors", code_colors_field(weak.clone()))
+                            .description(
+                                "Syntax colors for code in chat, skills and models.json. \
+                             Each has a light and a dark variant.",
+                            ),
+                    )
+                    .item(SettingItem::render({
+                        let weak = weak.clone();
+                        move |_, _, cx| {
+                            let hovered = weak
+                                .upgrade()
+                                .and_then(|view| view.read(cx).code_colors_hover);
+                            let chosen = cx.global::<AppSettings>().code_colors;
+                            code_colors_preview(hovered.unwrap_or(chosen), cx)
+                        }
+                    }))
                     .item(
                         SettingItem::new(
                             "Text size",
@@ -778,18 +804,91 @@ impl SettingsView {
     }
 }
 
+impl SettingsView {
+    /// Opens on the Speech to text page (before the first render).
+    pub fn start_on_speech(&mut self) {
+        self.start_page = 4;
+    }
+
+    fn speech_page(&self) -> SettingPage {
+        use crate::stt::{AutoStop, catalog};
+        SettingPage::new("Speech to text")
+            .icon(IconName::Mic)
+            .description(
+                "Dictate messages with the microphone button. Speech is transcribed by a model \
+                 that runs on this computer; nothing is sent anywhere.",
+            )
+            .group(
+                SettingGroup::new()
+                    .title("Models")
+                    .item(SettingItem::render(|_, _, cx| {
+                        crate::stt::ui::settings_model_rows(cx)
+                    })),
+            )
+            .group(
+                SettingGroup::new()
+                    .title("Dictation")
+                    .item(
+                        SettingItem::new(
+                            "Stop listening",
+                            SettingField::dropdown(
+                                AutoStop::ALL
+                                    .into_iter()
+                                    .map(|stop| (stop.id().into(), stop.label().into()))
+                                    .collect(),
+                                |cx| cx.global::<AppSettings>().speech_auto_stop.id().into(),
+                                |value, cx| {
+                                    let stop = AutoStop::from_id(value.as_ref());
+                                    AppSettings::update(cx, |s| s.speech_auto_stop = stop);
+                                },
+                            ),
+                        )
+                        .description(
+                            "Dictation ends by itself after this much silence. Enter or the stop \
+                             button end it at any time; Esc discards it.",
+                        ),
+                    )
+                    .item(
+                        SettingItem::new(
+                            "Language (Whisper)",
+                            SettingField::dropdown(
+                                catalog::LANGUAGES
+                                    .iter()
+                                    .map(|(code, label)| ((*code).into(), (*label).into()))
+                                    .collect(),
+                                |cx| cx.global::<AppSettings>().speech_language.clone().into(),
+                                |value, cx| {
+                                    let language = value.to_string();
+                                    AppSettings::update(cx, |s| s.speech_language = language);
+                                },
+                            ),
+                        )
+                        .description(
+                            "Whisper is more accurate when told the language. Parakeet detects \
+                             it by itself; Moonshine understands English only.",
+                        ),
+                    ),
+            )
+    }
+}
+
 impl Render for SettingsView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let weak = cx.weak_entity();
-        div()
-            .size_full()
-            .bg(cx.theme().background)
-            .child(Settings::new("app-settings").pages([
-                self.general_page(&weak),
-                self.pi_page(&weak, cx),
-                self.web_search_page(),
-                self.ssh_page(&weak),
-            ]))
+        div().size_full().bg(cx.theme().background).child(
+            Settings::new("app-settings")
+                .default_selected_index(SelectIndex {
+                    page_ix: self.start_page,
+                    group_ix: None,
+                })
+                .pages([
+                    self.general_page(&weak),
+                    self.pi_page(&weak, cx),
+                    self.web_search_page(),
+                    self.ssh_page(&weak),
+                    self.speech_page(),
+                ]),
+        )
     }
 }
 
@@ -849,6 +948,129 @@ fn demo_theme_field() -> SettingField<SharedString> {
                 menu
             });
         crate::demo::mark("theme-picker", button)
+    })
+}
+
+/// The Code colors picker: a dropdown whose rows preview their palette while the pointer is on
+/// them; picking one saves it.
+fn code_colors_field(weak: WeakEntity<SettingsView>) -> SettingField<SharedString> {
+    SettingField::render(
+        move |options: &RenderOptions, _: &mut Window, cx: &mut App| {
+            let current = cx.global::<AppSettings>().code_colors;
+            let weak = weak.clone();
+            Button::new("code-colors-picker")
+                .label(current.label())
+                .dropdown_caret(true)
+                .outline()
+                .with_size(options.size())
+                .dropdown_menu_with_anchor(Anchor::TopRight, move |mut menu, _, cx| {
+                    // Back to the chosen palette when the menu closes, however it closes.
+                    let on_dismiss = weak.clone();
+                    cx.subscribe_self(move |_, _: &DismissEvent, cx| {
+                        set_code_colors_hover(&on_dismiss, None, cx);
+                    })
+                    .detach();
+                    for colors in CodeColors::ALL {
+                        let (on_hover, on_click) = (weak.clone(), weak.clone());
+                        menu = menu.item(
+                            PopupMenuItem::element(move |_, _| {
+                                let on_hover = on_hover.clone();
+                                div()
+                                    .id(SharedString::from(format!("code-colors-{}", colors.id())))
+                                    .w_full()
+                                    .on_hover(move |hovered, _, cx| {
+                                        if *hovered {
+                                            set_code_colors_hover(&on_hover, Some(colors), cx);
+                                        }
+                                    })
+                                    .child(colors.label())
+                            })
+                            .checked(colors == current)
+                            .on_click(move |_, _, cx| {
+                                set_code_colors_hover(&on_click, None, cx);
+                                AppSettings::update(cx, |s| s.code_colors = colors);
+                            }),
+                        );
+                    }
+                    menu
+                })
+        },
+    )
+}
+
+fn set_code_colors_hover(
+    weak: &WeakEntity<SettingsView>,
+    colors: Option<CodeColors>,
+    cx: &mut App,
+) {
+    let _ = weak.update(cx, |view, cx| {
+        if view.code_colors_hover != colors {
+            view.code_colors_hover = colors;
+            cx.notify();
+        }
+    });
+}
+
+/// The Code colors preview: a Python snippet in `palette`, drawn like a chat code block but
+/// without its language label.
+fn code_colors_preview(palette: CodeColors, cx: &App) -> AnyElement {
+    const SNIPPET: &str = r#"from dataclasses import dataclass
+
+@dataclass
+class Model:
+    """A model entry from models.json."""
+    id: str
+    context_window: int = 131_072
+    reasoning: bool = True
+
+    def label(self, short: bool = False) -> str | None:
+        name = self.id.split("/")[-1]  # drop the provider
+        return f"{name} ({self.context_window // 1024}k)" if not short else None"#;
+    let theme = cx.theme();
+    let syntax = crate::theme::code_colors_syntax(palette, theme.mode.is_dark(), cx);
+    div()
+        .w_full()
+        .px_4()
+        .py_3()
+        .rounded_md()
+        .border_1()
+        .border_color(theme.border)
+        .bg(theme.muted)
+        .font_family(theme.mono_font_family.clone())
+        .text_size(theme.mono_font_size)
+        .child(StyledText::new(SNIPPET).with_highlights(highlight_python(SNIPPET, &syntax)))
+        .into_any_element()
+}
+
+/// Syntax highlights for `code` (Python) in `syntax`'s colors.
+fn highlight_python(
+    code: &'static str,
+    syntax: &component::highlighter::SyntaxColors,
+) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
+    use component::highlighter::SyntaxHighlighter;
+    use component::input::Rope;
+
+    struct Colors<'a>(&'a component::highlighter::SyntaxColors);
+
+    impl base::input::HighlightStyleResolver for Colors<'_> {
+        fn style(&self, name: &str) -> Option<HighlightStyle> {
+            self.0.style(name)
+        }
+    }
+
+    thread_local! {
+        // Parsed once: the snippet never changes, only the colors.
+        static PYTHON: std::cell::RefCell<Option<SyntaxHighlighter>> =
+            const { std::cell::RefCell::new(None) };
+    }
+    PYTHON.with(|cell| {
+        let mut cell = cell.borrow_mut();
+        let highlighter = cell.get_or_insert_with(|| {
+            let mut highlighter = SyntaxHighlighter::new("python");
+            highlighter.update(None, &Rope::from(code), None);
+            highlighter
+        });
+        highlighter.styles(&(0..code.len()), &Colors(syntax))
     })
 }
 

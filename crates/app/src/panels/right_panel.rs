@@ -12,6 +12,7 @@ mod diff_lines;
 mod diff_model;
 mod diff_view;
 mod file_tree;
+mod file_viewer;
 mod files_view;
 
 use std::path::{Component, Path, PathBuf};
@@ -24,6 +25,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use self::diff_view::DiffView;
+use self::file_viewer::{FileViewer, FileViewerEvent};
 use self::files_view::{FilesEvent, FilesView, relative_to};
 use crate::theme::palette;
 use crate::ui::QuietButton as _;
@@ -56,6 +58,8 @@ pub struct RightPanel {
     visible: bool,
     diff: Entity<DiffView>,
     files: Entity<FilesView>,
+    /// The file open in the Files tab, shown instead of the tree until closed.
+    viewer: Option<(Entity<FileViewer>, Subscription)>,
     /// The tab may be out of date and reloads when it is next shown.
     diff_stale: bool,
     files_stale: bool,
@@ -68,19 +72,23 @@ pub struct RightPanel {
 impl EventEmitter<RightPanelEvent> for RightPanel {}
 
 impl RightPanel {
-    pub fn new(cwd: PathBuf, _window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(cwd: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let location = workspace::Location::Local;
         let diff = cx.new(|_| DiffView::new(cwd.clone(), location.clone()));
         let files = cx.new(|_| FilesView::new(cwd.clone(), location.clone()));
-        let subscriptions = vec![
-            // The header shows the diff summary.
-            cx.observe(&diff, |_, _, cx| cx.notify()),
-            cx.subscribe(&files, |this, _, event: &FilesEvent, cx| match event {
-                FilesEvent::Insert(path) => {
-                    cx.emit(RightPanelEvent::InsertPath(relative_to(&this.cwd, path)));
-                }
-            }),
-        ];
+        let subscriptions =
+            vec![
+                // The header shows the diff summary.
+                cx.observe(&diff, |_, _, cx| cx.notify()),
+                cx.subscribe_in(&files, window, |this, _, event: &FilesEvent, window, cx| {
+                    match event {
+                        FilesEvent::Insert(path) => {
+                            cx.emit(RightPanelEvent::InsertPath(relative_to(&this.cwd, path)));
+                        }
+                        FilesEvent::Open(path) => this.open_file(path.clone(), window, cx),
+                    }
+                }),
+            ];
         Self {
             cwd,
             location,
@@ -88,12 +96,48 @@ impl RightPanel {
             visible: false,
             diff,
             files,
+            viewer: None,
             diff_stale: true,
             files_stale: true,
             drag: WindowDrag::default(),
             _watch: Task::ready(()),
             _subscriptions: subscriptions,
         }
+    }
+
+    /// Expands every file in the Changes tab once loaded (`PISTACHIO_OPEN=diff-expand-all`).
+    pub fn expand_all_diffs(&mut self, cx: &mut Context<Self>) {
+        self.diff
+            .update(cx, |diff, _| diff.expand_all_when_loaded());
+    }
+
+    /// Shows `path` (absolute, or relative to the folder) in the Files tab's viewer.
+    pub fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let path = if path.is_relative() {
+            self.cwd.join(path)
+        } else {
+            path
+        };
+        let viewer =
+            cx.new(|cx| FileViewer::new(self.cwd.clone(), path, self.location.clone(), window, cx));
+        let subscription = cx.subscribe(
+            &viewer,
+            |this, _, event: &FileViewerEvent, cx| match event {
+                FileViewerEvent::Close => this.close_file(cx),
+                FileViewerEvent::Insert(path) => {
+                    cx.emit(RightPanelEvent::InsertPath(relative_to(&this.cwd, path)));
+                }
+            },
+        );
+        self.viewer = Some((viewer, subscription));
+        self.set_tab(RightTab::Files, cx);
+        cx.notify();
+    }
+
+    /// Back from the viewer to the tree.
+    fn close_file(&mut self, cx: &mut Context<Self>) {
+        self.viewer = None;
+        cx.notify();
     }
 
     pub fn tab(&self) -> RightTab {
@@ -114,6 +158,8 @@ impl RightPanel {
         }
         self.cwd.clone_from(&cwd);
         self.location = location.clone();
+        // The open file belongs to the old folder.
+        self.viewer = None;
         let diff_location = location.clone();
         self.diff
             .update(cx, |diff, cx| diff.set_cwd(cwd.clone(), diff_location, cx));
@@ -253,6 +299,11 @@ impl RightPanel {
         if paths.is_empty() {
             return;
         }
+        if let Some((viewer, _)) = &self.viewer
+            && paths.iter().any(|path| path == viewer.read(cx).path())
+        {
+            viewer.update(cx, |viewer, cx| viewer.mark_stale(cx));
+        }
         match self.tab {
             RightTab::Files => self
                 .files
@@ -351,7 +402,10 @@ impl Render for RightPanel {
         }
         let content = match self.tab {
             RightTab::Diff => self.diff.clone().into_any_element(),
-            RightTab::Files => self.files.clone().into_any_element(),
+            RightTab::Files => match &self.viewer {
+                Some((viewer, _)) => viewer.clone().into_any_element(),
+                None => self.files.clone().into_any_element(),
+            },
         };
         v_flex()
             .size_full()

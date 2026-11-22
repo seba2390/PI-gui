@@ -1,0 +1,7 @@
+# sherpa-onnx (speech to text) ships its Windows libraries built against the static C
+# runtime (/MT); link Rust's side the same way so the two do not clash at link time.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

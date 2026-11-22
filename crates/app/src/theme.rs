@@ -4,10 +4,13 @@
 //! A few app-specific colours (diff lines, the green accent, sidebar surface) live
 //! in [`Palette`], chosen by the active light/dark mode.
 
-use gpui_kit::component::{ActiveTheme as _, Theme, ThemeMode, ThemeRegistry};
-use gpui_kit::{App, Hsla, Window, rgb, rgba};
+use std::rc::Rc;
+
+use gpui_kit::component::{ActiveTheme as _, Theme, ThemeConfig, ThemeMode, ThemeRegistry};
+use gpui_kit::{App, Global, Hsla, Window, rgb, rgba};
 
 use crate::assets::AppAssets;
+use crate::settings::AppSettings;
 
 const LIGHT: &str = "Pi Light";
 const DARK: &str = "Pi Dark";
@@ -21,18 +24,75 @@ pub fn init(cx: &mut App) {
     }
     let themes = ThemeRegistry::global(cx).themes();
     let (light, dark) = (themes.get(LIGHT).cloned(), themes.get(DARK).cloned());
-    if let Some(light) = light {
-        Theme::global_mut(cx).light_theme = light;
-    }
-    if let Some(dark) = dark {
-        Theme::global_mut(cx).dark_theme = dark;
+    if let (Some(light), Some(dark)) = (light, dark) {
+        cx.set_global(BaseThemes { light, dark });
+        set_code_colors(cx);
     }
     Theme::sync_system_appearance(None, cx);
 }
 
+/// The light and dark themes as `pi.json` defines them, before Code colors are applied.
+struct BaseThemes {
+    light: Rc<ThemeConfig>,
+    dark: Rc<ThemeConfig>,
+}
+
+impl Global for BaseThemes {}
+
+/// Puts the chosen Code colors palette into the light and dark themes. Only their syntax
+/// colors change; the app's colors, the editor background and the rest stay `pi.json`'s.
+fn set_code_colors(cx: &mut App) {
+    let colors = cx.default_global::<AppSettings>().code_colors;
+    let Some(base) = cx.try_global::<BaseThemes>() else {
+        return;
+    };
+    let with_colors = |config: &Rc<ThemeConfig>, dark: bool| match colors.syntax(dark) {
+        Some(syntax) => {
+            let mut config = (**config).clone();
+            config.highlight.get_or_insert_default().syntax = syntax;
+            Rc::new(config)
+        }
+        None => config.clone(),
+    };
+    let (light, dark) = (
+        with_colors(&base.light, false),
+        with_colors(&base.dark, true),
+    );
+    let theme = Theme::global_mut(cx);
+    theme.light_theme = light;
+    theme.dark_theme = dark;
+}
+
+/// The syntax colors `palette` uses in light or dark mode, without applying them: the
+/// Settings preview shows a palette while the pointer is on it.
+pub fn code_colors_syntax(
+    palette: crate::code_colors::CodeColors,
+    dark: bool,
+    cx: &App,
+) -> gpui_kit::component::highlighter::SyntaxColors {
+    palette.syntax(dark).unwrap_or_else(|| {
+        cx.try_global::<BaseThemes>()
+            .and_then(|base| {
+                let config = if dark { &base.dark } else { &base.light };
+                config.highlight.as_ref().map(|style| style.syntax.clone())
+            })
+            .unwrap_or_default()
+    })
+}
+
+/// Applies a changed Code colors setting to the open windows.
+pub fn apply_code_colors(cx: &mut App) {
+    set_code_colors(cx);
+    // Re-apply the current mode so code blocks, editors and the text view defaults pick up
+    // the new colors; that resets the text size, so restore it.
+    let mode = cx.theme().mode;
+    Theme::change(mode, None, cx);
+    crate::settings::apply_text_size(cx);
+}
+
 /// Light or dark as chosen in Settings, following the OS for `window` by default.
 pub fn sync_with_window(window: &mut Window, cx: &mut App) {
-    use crate::settings::{AppSettings, ThemeChoice};
+    use crate::settings::ThemeChoice;
     let mode = match cx.default_global::<AppSettings>().theme {
         ThemeChoice::Light => ThemeMode::Light,
         ThemeChoice::Dark => ThemeMode::Dark,

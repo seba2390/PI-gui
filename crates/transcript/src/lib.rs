@@ -11,6 +11,7 @@ mod format;
 mod history;
 mod model;
 mod reducer;
+pub mod search;
 pub mod shell;
 pub mod tool;
 

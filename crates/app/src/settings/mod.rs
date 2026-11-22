@@ -59,6 +59,8 @@ pub enum StartMode {
 #[allow(clippy::struct_excessive_bools)] // independent on/off settings
 pub struct AppSettings {
     pub theme: ThemeChoice,
+    /// The palette for code (syntax colors only; the rest of the theme is unchanged).
+    pub code_colors: crate::code_colors::CodeColors,
     pub text_size: TextSize,
     pub start_mode: StartMode,
     /// Open the last session of the start mode (on this computer or an SSH host) at start,
@@ -77,12 +79,19 @@ pub struct AppSettings {
     pub pi_program: Option<String>,
     /// Connect every saved SSH connection quietly when the app opens.
     pub connect_hosts_at_start: bool,
+    /// The speech-to-text model to dictate with (a `stt::catalog` id).
+    pub speech_model: String,
+    /// The language Whisper models transcribe; empty to detect it.
+    pub speech_language: String,
+    /// How long a silence ends dictation.
+    pub speech_auto_stop: crate::stt::AutoStop,
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
             theme: ThemeChoice::default(),
+            code_colors: crate::code_colors::CodeColors::default(),
             text_size: TextSize::default(),
             start_mode: StartMode::default(),
             reopen_last_session: false,
@@ -92,6 +101,9 @@ impl Default for AppSettings {
             skipped_version: None,
             pi_program: None,
             connect_hosts_at_start: false,
+            speech_model: crate::stt::catalog::DEFAULT_MODEL.to_owned(),
+            speech_language: String::new(),
+            speech_auto_stop: crate::stt::AutoStop::default(),
         }
     }
 }
@@ -149,6 +161,9 @@ impl AppSettings {
                     });
                 }
             });
+        }
+        if before.code_colors != after.code_colors {
+            crate::theme::apply_code_colors(cx);
         }
         if before.text_size != after.text_size {
             apply_text_size(cx);
@@ -222,6 +237,7 @@ mod tests {
         let path = dir.path().join("nested/settings.json");
         let settings = AppSettings {
             text_size: TextSize::Large,
+            code_colors: crate::code_colors::CodeColors::Gruvbox,
             start_mode: StartMode::Code,
             skipped_version: Some("0.3.0".into()),
             ..AppSettings::default()

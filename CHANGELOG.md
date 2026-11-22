@@ -6,6 +6,56 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Speech to text: dictate with the microphone button in the message box. The text appears
+  greyed out while you speak and becomes normal text when you stop. A model runs on your
+  computer (Parakeet v3, Whisper large-v3 turbo, Whisper small or Moonshine v2); none ship
+  with the app. The first press offers to download one, with its size, speed and languages;
+  it downloads in the background with a progress bar at the top of the chat, and is checked
+  against its SHA-256. Settings → Speech to text manages the models, when a silence ends
+  dictation and the language for Whisper.
+- Dictation shortcut: ⌘⇧Space (Ctrl+Shift+Space on Linux/Windows) in the message box. Hold
+  it to talk and let go to keep the text, or tap it to start and tap again to stop. Without a
+  model it offers the download, like the microphone button.
+- Find in chat (⌘F, also Edit → Find in Chat): highlights every match in the conversation,
+  with Enter / Shift+Enter (or ⌘G / ⌘⇧G) for the next / previous one and a "3 of 12" count;
+  Esc closes it. Thinking, tool output and edits are searched too, and a collapsed row opens
+  when it holds the current match.
+- File viewer: clicking a file in the Files tab opens it read-only in the panel, with syntax
+  colors and line numbers, also for folders on an SSH host. "Mention" in the viewer, the +
+  button on a row, or ⌥-click in the tree still put an `@path` mention in the message box.
+  Binary files show a notice; files over 512 KB open with their first 512 KB.
+- Settings → Appearance → Code colors: pick the syntax colors for code (Pistachio, One,
+  GitHub, Solarized, Gruvbox or Catppuccin), each with a light and a dark variant. A Python
+  snippet below the picker shows the chosen palette right away. Only code colors change; the
+  rest of the app keeps its theme.
+
+### Changed
+
+- Clicking a file in the Files tab opens it instead of mentioning it (⌥-click mentions it).
+
+- The models.json editor colors JSON: keys, strings, numbers, `true`/`false` and `null` each
+  get their own color.
+- The skill editor colors Markdown: headings, bold and italic, code, links and list markers.
+- Code blocks in chat are colored for Python, Rust, JavaScript, TypeScript (and TSX), C, C++,
+  C#, Go, Java, HTML, CSS, Bash, YAML, TOML, JSON, Markdown and diffs. Other languages
+  still get the labeled box with a copy button, in one color.
+- The agent's file edits in the chat, the files it reads, and the diffs in the Changes panel
+  are colored the same way (by the file's extension), on top of the red and green
+  added/removed backgrounds. Each side of a diff is colored as a whole, so a string or comment
+  spanning several lines stays colored. They follow the Code colors setting.
+
+### Fixed
+
+- New session / New chat (and ⌘N) did nothing while the Skills or Settings page was open over a
+  conversation that was still empty; it now closes the page and shows that conversation.
+- Esc in the message box now interrupts the agent: the text box kept the key to itself.
+- Dragging the right panel wide no longer squeezes the chat until its header buttons and the
+  message box controls overlap: the chat keeps at least 400 px, the title truncates, and in a
+  narrow column the left side of the message box toolbar is clipped while the model picker,
+  thinking level and send / stop button stay visible.
+
 ## [0.4.1] - 2026-11-22
 
 ### Added
