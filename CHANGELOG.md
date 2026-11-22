@@ -6,6 +6,8 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-22
+
 ### Added
 
 - Speech to text: dictate with the microphone button in the message box. The text appears
@@ -34,7 +36,6 @@ All notable changes to PI-gui are listed here. The format follows
 ### Changed
 
 - Clicking a file in the Files tab opens it instead of mentioning it (⌥-click mentions it).
-
 - The models.json editor colors JSON: keys, strings, numbers, `true`/`false` and `null` each
   get their own color.
 - The skill editor colors Markdown: headings, bold and italic, code, links and list markers.
@@ -184,7 +185,8 @@ chats, skills and model management. Changes since the last private build:
 - A corrupt `hosts.json` is kept as a backup.
 - A remembered terminal height can no longer squeeze out the chat.
 
-[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/seba2390/pistachio/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/seba2390/pistachio/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/seba2390/pistachio/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/seba2390/pistachio/compare/v0.2.0...v0.3.0
