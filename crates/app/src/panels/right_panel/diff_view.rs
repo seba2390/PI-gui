@@ -10,8 +10,10 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
+use gpui_kit::component::highlighter::HighlightTheme;
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, Sizable as _, VirtualListScrollHandle, h_flex, v_flex,
@@ -96,6 +98,11 @@ pub struct DiffView {
     /// A refresh was requested while `status_task` was running.
     status_queued: bool,
     patch_tasks: HashMap<PathBuf, Task<()>>,
+    /// The syntax colors the loaded patches were highlighted with. When the theme or the
+    /// Code colors setting changes, the expanded patches are highlighted again.
+    highlight_theme: Option<Arc<HighlightTheme>>,
+    /// Expand every changed file once the status loads (`PISTACHIO_OPEN=diff-expand-all`).
+    expand_all_on_load: bool,
 }
 
 impl DiffView {
@@ -110,7 +117,15 @@ impl DiffView {
             status_task: None,
             status_queued: false,
             patch_tasks: HashMap::new(),
+            highlight_theme: None,
+            expand_all_on_load: false,
         }
+    }
+
+    /// Expands every changed file as soon as the status is loaded (a scripted startup
+    /// action for layout checks).
+    pub fn expand_all_when_loaded(&mut self) {
+        self.expand_all_on_load = true;
     }
 
     pub fn summary(&self) -> Option<&Summary> {
@@ -147,6 +162,13 @@ impl DiffView {
                     .retain(|path, _| this.model.is_expanded(path));
                 for path in reload {
                     this.load_patch(path, cx);
+                }
+                if std::mem::take(&mut this.expand_all_on_load) {
+                    for path in this.model.file_paths() {
+                        if this.model.toggle(&path) {
+                            this.load_patch(path, cx);
+                        }
+                    }
                 }
                 this.sync(cx);
                 if std::mem::take(&mut this.status_queued) {
@@ -188,12 +210,22 @@ impl DiffView {
         };
         let key = path.clone();
         let location = self.location.clone();
+        let theme = cx.theme().highlight_theme.clone();
+        self.highlight_theme = Some(theme.clone());
+        let language = crate::code_highlight::language_for_path(&path);
         let task = cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move {
                     workspace::git::change_diff_at(&location, &request.repo, &request.change)
-                        .map(|patch| ParsedDiff::parse(&patch, diff_lines::MAX_LINES))
+                        .map(|patch| {
+                            // Parsed and colored here, off the UI thread, once per load.
+                            let mut diff = ParsedDiff::parse(&patch, diff_lines::MAX_LINES);
+                            if let Some(language) = language {
+                                diff.highlight(language, &*theme);
+                            }
+                            diff
+                        })
                         .map_err(|error| error.to_string())
                 })
                 .await;
@@ -205,6 +237,22 @@ impl DiffView {
             });
         });
         self.patch_tasks.insert(key, task);
+    }
+
+    /// Highlights the expanded patches again when the syntax colors changed since they
+    /// were loaded. Called from `render`, so a hidden panel does no work.
+    fn sync_highlight_theme(&mut self, cx: &mut Context<Self>) {
+        let current = &cx.theme().highlight_theme;
+        let stale = self
+            .highlight_theme
+            .as_ref()
+            .is_some_and(|loaded| !Arc::ptr_eq(loaded, current) && **loaded != **current);
+        if stale {
+            self.highlight_theme = Some(current.clone());
+            for path in self.model.expanded_paths() {
+                self.load_patch(path, cx);
+            }
+        }
     }
 
     /// Recomputes row heights after the rows changed.
@@ -383,7 +431,15 @@ fn render_line(diff: &ParsedDiff, ix: usize, colors: &Colors) -> AnyElement {
                 .truncate()
                 .text_color(text)
                 .when(line.kind == LineKind::Note, |this| this.italic())
-                .child(line.text.clone()),
+                .child(
+                    match diff.styles.get(ix).filter(|styles| !styles.is_empty()) {
+                        // Code colors over the added/removed background.
+                        Some(styles) => StyledText::new(line.text.clone())
+                            .with_highlights(styles.iter().cloned())
+                            .into_any_element(),
+                        None => line.text.clone().into_any_element(),
+                    },
+                ),
         )
         .into_any_element()
 }
@@ -433,6 +489,7 @@ pub fn placeholder(title: SharedString, detail: Option<SharedString>, cx: &App) 
 
 impl Render for DiffView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_highlight_theme(cx);
         match self.model.phase() {
             Phase::Loading => placeholder("Loading changes…".into(), None, cx),
             Phase::NotRepo => placeholder(

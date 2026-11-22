@@ -10,6 +10,7 @@ mod actions;
 mod assets;
 mod chat;
 mod code_colors;
+mod code_highlight;
 mod config;
 mod demo;
 mod hosts;

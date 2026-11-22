@@ -119,6 +119,10 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   `models.json.bak-pistachio`. pi reads the file only when it starts, so after saving it restarts
   on the same session (after the current turn, if one is running) and selects the new model.
 - Right panel: git changes and a file tree of the working folder.
+- Syntax colors for code by file extension: chat code blocks, the agent's edits (its diffs
+  in the chat), the files it reads, and the Changes panel's diffs. Diffs keep their red and
+  green backgrounds with the code colors on top; the old and new text are rebuilt from each
+  diff and colored as a whole, so multi-line strings and comments come out right.
 - Bottom panel: an integrated terminal in the working folder; drag its top edge to resize it
   (the height is remembered).
 - macOS and Linux, plus an experimental Windows build. GPU-rendered with [GPUI](https://gpui.rs) via
@@ -152,7 +156,7 @@ Settings opens from the Pistachio menu (⌘,) or the button at the bottom of the
 change is saved right away.
 
 - **General:** theme (follow the system, light or dark), code colors (the syntax palette for
-  code in chat, skills and `models.json`, with a live preview), text size (scales the interface),
+  code in chat, diffs, skills and `models.json`, with a live preview), text size (scales the interface),
   whether to open in Chat, Code or the mode used last, reopening the last session, and
   notifications for chats working in the background.
 - **pi & models:** which `pi` to run (`PISTACHIO_PI_BIN` still wins), the model and thinking

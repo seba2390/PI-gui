@@ -96,6 +96,12 @@ impl RightPanel {
         }
     }
 
+    /// Expands every file in the Changes tab once loaded (`PISTACHIO_OPEN=diff-expand-all`).
+    pub fn expand_all_diffs(&mut self, cx: &mut Context<Self>) {
+        self.diff
+            .update(cx, |diff, _| diff.expand_all_when_loaded());
+    }
+
     pub fn tab(&self) -> RightTab {
         self.tab
     }

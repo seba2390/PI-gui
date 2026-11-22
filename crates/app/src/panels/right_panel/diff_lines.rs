@@ -46,7 +46,7 @@ pub struct DiffLine {
 }
 
 /// A parsed, capped patch for one file.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ParsedDiff {
     pub lines: Vec<DiffLine>,
     /// Patch lines dropped because of [`MAX_LINES`].
@@ -55,6 +55,9 @@ pub struct ParsedDiff {
     pub binary: bool,
     /// Digits of the largest line number, to size the gutter.
     pub number_digits: u32,
+    /// Syntax colors per line (parallel to `lines`), when the file's language is known.
+    /// Empty when uncolored; filled by [`Self::highlight`].
+    pub styles: Vec<crate::code_highlight::LineStyles>,
 }
 
 impl ParsedDiff {
@@ -132,6 +135,31 @@ impl ParsedDiff {
         }
         out.number_digits = digits(max_number);
         out
+    }
+}
+
+impl ParsedDiff {
+    /// Colors the lines as `language`: the old and new sides are rebuilt from the hunks and
+    /// highlighted once each (a diff line on its own is not valid code).
+    pub fn highlight(
+        &mut self,
+        language: &str,
+        resolver: &dyn gpui_kit::base::input::HighlightStyleResolver,
+    ) {
+        use crate::code_highlight::{Side, highlight_diff};
+        let side = |kind: LineKind| match kind {
+            LineKind::Added => Side::New,
+            LineKind::Removed => Side::Old,
+            LineKind::Context => Side::Both,
+            LineKind::Hunk | LineKind::Note => Side::Neither,
+        };
+        self.styles = highlight_diff(
+            language,
+            self.lines
+                .iter()
+                .map(|line| (side(line.kind), line.text.as_ref())),
+            resolver,
+        );
     }
 }
 
@@ -248,6 +276,40 @@ index 83db48f..bf269f4 100644
         let diff = ParsedDiff::parse(&format!("@@ -1 +1 @@\n+{long}\n"), 10);
         assert_eq!(diff.lines[1].text.chars().count(), MAX_LINE_CHARS + 1);
         assert!(diff.lines[1].text.ends_with('…'));
+    }
+
+    #[test]
+    fn highlights_lines_from_their_side() {
+        use gpui_kit::HighlightStyle;
+        use gpui_kit::base::input::HighlightStyleResolver;
+
+        /// Colors only comments.
+        struct Comments;
+        impl HighlightStyleResolver for Comments {
+            fn style(&self, name: &str) -> Option<HighlightStyle> {
+                (name == "comment").then(|| HighlightStyle {
+                    color: Some(gpui_kit::hsla(0., 1., 0.5, 1.)),
+                    ..Default::default()
+                })
+            }
+        }
+
+        crate::syntax::init();
+        // A block comment opened on a context line and closed on the removed/added lines.
+        let patch = "@@ -1,3 +1,3 @@\n /* start\n-old */ fn a() {}\n+new */ fn b() {}\n";
+        let mut diff = ParsedDiff::parse(patch, 100);
+        diff.highlight("rust", &Comments);
+        assert_eq!(diff.styles.len(), diff.lines.len());
+        assert!(diff.styles[0].is_empty(), "hunk headers are not code");
+        let colored = |ix: usize| {
+            diff.styles[ix]
+                .iter()
+                .map(|(range, _)| &diff.lines[ix].text[range.clone()])
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(colored(1), ["/* start"]);
+        assert_eq!(colored(2), ["old */"]);
+        assert_eq!(colored(3), ["new */"]);
     }
 
     #[test]

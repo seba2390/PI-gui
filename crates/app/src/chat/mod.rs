@@ -113,6 +113,9 @@ pub struct ChatView {
     /// The π field behind a new, empty conversation; it fades out when the first message is
     /// sent and is then dropped.
     pi_field: Option<Entity<crate::ui::PiField>>,
+    /// Syntax colors of edit diffs and read files in tool rows, so re-rendering (scrolling,
+    /// streaming) never parses the same code twice. Filled while rendering, hence the cell.
+    highlights: std::cell::RefCell<crate::code_highlight::HighlightCache>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -196,6 +199,7 @@ impl ChatView {
             held_dialogs: Vec::new(),
             stopped_unseen: false,
             pi_field: None,
+            highlights: std::cell::RefCell::default(),
             _subscriptions: subscriptions,
         };
         this.sync(cx);
@@ -568,7 +572,12 @@ impl ChatView {
     }
 
     fn toggle_all_tools(&mut self, _: &ToggleToolOutput, _: &mut Window, cx: &mut Context<Self>) {
-        self.expand_tools = !self.expand_tools;
+        self.set_expand_tools(!self.expand_tools, cx);
+    }
+
+    /// Expands (or collapses) every tool call's output, like Ctrl+O.
+    pub fn set_expand_tools(&mut self, expand: bool, cx: &mut Context<Self>) {
+        self.expand_tools = expand;
         self.toggled.clear();
         self.scroller
             .update(cx, |scroller, cx| scroller.remeasure(cx));

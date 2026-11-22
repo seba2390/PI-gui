@@ -31,6 +31,10 @@ All notable changes to PI-gui are listed here. The format follows
 - Code blocks in chat are colored for Python, Rust, JavaScript, TypeScript (and TSX), C, C++,
   C#, Go, Java, HTML, CSS, Bash, YAML, TOML, JSON, Markdown and diffs. Other languages
   still get the labeled box with a copy button, in one color.
+- The agent's file edits in the chat, the files it reads, and the diffs in the Changes panel
+  are colored the same way (by the file's extension), on top of the red and green
+  added/removed backgrounds. Each side of a diff is colored as a whole, so a string or comment
+  spanning several lines stays colored. They follow the Code colors setting.
 
 ## [0.4.1] - 2026-11-22
 

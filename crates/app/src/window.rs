@@ -344,7 +344,7 @@ impl MainWindow {
             if self.welcome
                 && matches!(
                     panel.as_str(),
-                    "terminal" | "diff" | "files" | "attach" | "context"
+                    "terminal" | "diff" | "diff-expand-all" | "files" | "attach" | "context"
                 )
                 && let Ok(folder) = std::env::current_dir()
             {
@@ -353,6 +353,15 @@ impl MainWindow {
             match panel.as_str() {
                 "terminal" => self.toggle_terminal(&ToggleTerminal, window, cx),
                 "diff" => self.show_diff(&ShowDiff, window, cx),
+                "diff-expand-all" => {
+                    self.right_panel
+                        .update(cx, |panel, cx| panel.expand_all_diffs(cx));
+                    self.show_diff(&ShowDiff, window, cx);
+                }
+                "expand-tools" => {
+                    let chat = self.chat.clone();
+                    chat.update(cx, |chat, cx| chat.set_expand_tools(true, cx));
+                }
                 "files" => self.show_files(&ShowFiles, window, cx),
                 "no-sidebar" => self.toggle_sidebar(&ToggleSidebar, window, cx),
                 "chat" => self.switch_to_mode(Mode::Chat, window, cx),

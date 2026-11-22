@@ -61,7 +61,9 @@ script/set-version.sh 0.5.0              # bump the version (Cargo.toml, Cargo.l
 **Opening views at startup.** `PISTACHIO_OPEN` takes a comma-separated list, which makes layout
 checks scriptable:
 
-- Mode and panels: `chat`, `code`, `terminal`, `diff`, `files`, `no-sidebar`.
+- Mode and panels: `chat`, `code`, `terminal`, `diff`, `files`, `no-sidebar`;
+  `diff-expand-all` opens the Changes tab with every file expanded, and `expand-tools` expands
+  every tool call in the chat (like Ctrl+O).
 - Sessions and popovers: `latest`, `attach`, `context`.
 - Dialogs: `add-host`, `manage-hosts`, `add-model`, `add-provider`, `edit-models`.
 - Skills page: `skills`, `new-skill`, `open-skill:<path>`; the Settings page: `settings`.

@@ -2,8 +2,11 @@
 //! tool calls), notices, and per-turn "Worked for" summaries.
 
 use std::fmt::Write as _;
+use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Instant;
 
+use gpui_kit::component::highlighter::HighlightTheme;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -16,6 +19,7 @@ use transcript::{
 
 use super::session::{AfterFork, PiSession};
 use super::{BlockKey, CONTENT_MAX_WIDTH, ChatView, markdown_view};
+use crate::code_highlight::{self, LineStyles, Side};
 use crate::config::AppConfig;
 use crate::theme::{Palette, palette};
 use crate::ui::{AppIcon, CopyButton, QuietButton as _};
@@ -42,6 +46,8 @@ struct RowContext<'a> {
     muted: Hsla,
     border: Hsla,
     mono: SharedString,
+    /// Syntax colors (the user's Code colors) for edits and files shown in tool rows.
+    highlight: Arc<HighlightTheme>,
 }
 
 pub fn render_row(
@@ -74,6 +80,7 @@ pub fn render_row(
         muted: theme.muted_foreground,
         border: theme.border,
         mono: theme.mono_font_family.clone(),
+        highlight: theme.highlight_theme.clone(),
     };
 
     let content = match (items.get(row), chat.role(row)) {
@@ -177,7 +184,7 @@ fn render_item(item: &TranscriptItem, cx: &RowContext<'_>, bubble: Hsla, app: &A
                     }),
             )
             .when(!output.trim().is_empty(), |this| {
-                this.child(output_box(("bash-out", item.id.0), output, cx))
+                this.child(output_box(("bash-out", item.id.0), output, None, cx))
             })
             .into_any_element(),
         ItemKind::Notice(notice) => {
@@ -627,6 +634,8 @@ fn render_tool(key: BlockKey, tool: &ToolBlock, cx: &RowContext<'_>) -> AnyEleme
         }
         NestedEntry::Text(_) => None,
     });
+    // The collapsed preview of a file the tool read is colored like the expanded output.
+    let preview_language = tool_language(tool).filter(|_| tool.name == "read");
     let summary: Option<SharedString> = match tool.status {
         ToolStatus::Streaming | ToolStatus::Pending => Some("Preparing…".into()),
         ToolStatus::Running if !expanded && live_step.is_some() => Some(
@@ -734,7 +743,20 @@ fn render_tool(key: BlockKey, tool: &ToolBlock, cx: &RowContext<'_>) -> AnyEleme
                             .min_w_0()
                             .font_family(cx.mono.clone())
                             .text_xs()
-                            .child(summary),
+                            .child(match preview_language {
+                                Some(language) if summary.as_ref() == preview(&tool.output) => {
+                                    let styles = file_styles(language, &tool.output, cx);
+                                    let highlights = code_highlight::join_lines(
+                                        &styles,
+                                        &tool.output,
+                                        PREVIEW_LINES,
+                                    );
+                                    StyledText::new(summary)
+                                        .with_highlights(highlights)
+                                        .into_any_element()
+                                }
+                                _ => summary.into_any_element(),
+                            }),
                     ),
             )
         })
@@ -753,15 +775,20 @@ fn render_tool(key: BlockKey, tool: &ToolBlock, cx: &RowContext<'_>) -> AnyEleme
                         .child(format!("$ {}", command.trim())),
                 )
             });
+            let language = tool_language(tool);
             let body = match &diff {
                 Some(lines) => diff_box(
                     ("tool-diff", key.item.0 * 1_000 + key.block as u64),
                     lines,
+                    language.map(|language| diff_styles(language, lines, cx)),
                     cx,
                 ),
                 None if !tool.output.trim().is_empty() => output_box(
                     ("tool-out", key.item.0 * 1_000 + key.block as u64),
                     &tool.output,
+                    language
+                        .filter(|_| tool.name == "read")
+                        .map(|language| file_styles(language, &tool.output, cx)),
                     cx,
                 ),
                 None => div()
@@ -848,11 +875,67 @@ fn preview(output: &str) -> String {
     }
 }
 
+/// The highlighter language of the file a tool call works on, from its path argument.
+fn tool_language(tool: &ToolBlock) -> Option<&'static str> {
+    let path = ["path", "file_path"]
+        .iter()
+        .find_map(|key| tool.args.get(*key).and_then(serde_json::Value::as_str))?;
+    code_highlight::language_for_path(std::path::Path::new(path))
+}
+
+/// Syntax colors for each line of an edit's diff, from its rebuilt old and new text.
+fn diff_styles(
+    language: &'static str,
+    lines: &[tool::DiffLine],
+    cx: &RowContext<'_>,
+) -> Rc<Vec<LineStyles>> {
+    let side = |kind: DiffKind| match kind {
+        DiffKind::Added => Side::New,
+        DiffKind::Removed => Side::Old,
+        DiffKind::Context => Side::Both,
+        DiffKind::Gap => Side::Neither,
+    };
+    let key = (
+        "diff",
+        language,
+        lines
+            .iter()
+            .map(|line| (line.kind as u8, line.text.as_str()))
+            .collect::<Vec<_>>(),
+    );
+    cx.chat
+        .highlights
+        .borrow_mut()
+        .get_or_insert(&cx.highlight, key, |theme| {
+            code_highlight::highlight_diff(
+                language,
+                lines
+                    .iter()
+                    .map(|line| (side(line.kind), line.text.as_str())),
+                theme,
+            )
+        })
+}
+
+/// Syntax colors for each line of a file the agent read.
+fn file_styles(language: &'static str, text: &str, cx: &RowContext<'_>) -> Rc<Vec<LineStyles>> {
+    cx.chat.highlights.borrow_mut().get_or_insert(
+        &cx.highlight,
+        ("file", language, text),
+        |theme| code_highlight::highlight_lines(language, text, theme),
+    )
+}
+
 fn plural(count: usize, noun: &str) -> String {
     format!("{count} {noun}{}", if count == 1 { "" } else { "s" })
 }
 
-fn output_box(id: impl Into<ElementId>, output: &str, cx: &RowContext<'_>) -> AnyElement {
+fn output_box(
+    id: impl Into<ElementId>,
+    output: &str,
+    styles: Option<Rc<Vec<LineStyles>>>,
+    cx: &RowContext<'_>,
+) -> AnyElement {
     let lines: Vec<&str> = output.trim_end().lines().collect();
     let mut text = lines
         .iter()
@@ -860,6 +943,8 @@ fn output_box(id: impl Into<ElementId>, output: &str, cx: &RowContext<'_>) -> An
         .copied()
         .collect::<Vec<_>>()
         .join("\n");
+    let highlights =
+        styles.map(|styles| code_highlight::join_lines(&styles, output, MAX_OUTPUT_LINES));
     if lines.len() > MAX_OUTPUT_LINES {
         let _ = write!(text, "\n… {} more lines", lines.len() - MAX_OUTPUT_LINES);
     }
@@ -876,11 +961,21 @@ fn output_box(id: impl Into<ElementId>, output: &str, cx: &RowContext<'_>) -> An
         .font_family(cx.mono.clone())
         .text_xs()
         .text_color(cx.foreground)
-        .child(text)
+        .child(match highlights {
+            Some(highlights) => StyledText::new(text)
+                .with_highlights(highlights)
+                .into_any_element(),
+            None => text.into_any_element(),
+        })
         .into_any_element()
 }
 
-fn diff_box(id: impl Into<ElementId>, lines: &[tool::DiffLine], cx: &RowContext<'_>) -> AnyElement {
+fn diff_box(
+    id: impl Into<ElementId>,
+    lines: &[tool::DiffLine],
+    styles: Option<Rc<Vec<LineStyles>>>,
+    cx: &RowContext<'_>,
+) -> AnyElement {
     let gutter = lines
         .iter()
         .filter_map(|line| line.line_number)
@@ -888,8 +983,12 @@ fn diff_box(id: impl Into<ElementId>, lines: &[tool::DiffLine], cx: &RowContext<
         .unwrap_or(0)
         .to_string()
         .len();
-    let rows =
-        lines.iter().take(MAX_OUTPUT_LINES).map(|line| {
+    let rows = lines
+        .iter()
+        .enumerate()
+        .take(MAX_OUTPUT_LINES)
+        .map(|(ix, line)| {
+            let line_styles = styles.as_ref().and_then(|styles| styles.get(ix));
             let (sign, fg, bg) = match line.kind {
                 DiffKind::Added => ("+", cx.palette.added, Some(cx.palette.added_bg)),
                 DiffKind::Removed => ("-", cx.palette.removed, Some(cx.palette.removed_bg)),
@@ -911,13 +1010,23 @@ fn diff_box(id: impl Into<ElementId>, lines: &[tool::DiffLine], cx: &RowContext<
                         .child(format!("{number:>gutter$}")),
                 )
                 .child(div().w(px(14.)).flex_none().text_color(fg).child(sign))
-                .child(div().flex_1().min_w_0().text_color(fg).child(
-                    if line.kind == DiffKind::Gap {
-                        "⋯".to_owned()
-                    } else {
-                        line.text.clone()
-                    },
-                ))
+                .child(match line_styles {
+                    // Code colors on top of the added/removed background; the sign keeps
+                    // the red/green.
+                    Some(line_styles) if line.kind != DiffKind::Gap => {
+                        div().flex_1().min_w_0().text_color(cx.foreground).child(
+                            StyledText::new(line.text.clone())
+                                .with_highlights(line_styles.iter().cloned()),
+                        )
+                    }
+                    _ => div().flex_1().min_w_0().text_color(fg).child(
+                        if line.kind == DiffKind::Gap {
+                            "⋯".to_owned()
+                        } else {
+                            line.text.clone()
+                        },
+                    ),
+                })
         });
     div()
         .id(id)
