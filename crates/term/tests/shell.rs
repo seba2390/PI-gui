@@ -41,16 +41,19 @@ fn echo_in_real_shell_then_exit() {
     config.shell = Some(PathBuf::from("/bin/sh"));
     let (terminal, events) = Terminal::spawn(config).expect("spawn /bin/sh");
 
-    terminal.write(&b"echo hi\r"[..]);
+    // The shell computes the output, so it can't be confused with the echoed input. It may
+    // share a line with a prompt that was printed after the input was echoed (`$ 42`).
+    terminal.write(&b"echo $((6*7))\r"[..]);
     let saw_output = wait_until(&terminal, &events, |t, _| {
-        t.snapshot()
-            .lines
-            .iter()
-            .any(|line| line.text().trim_end() == "hi")
+        t.snapshot().lines.iter().any(|line| {
+            let text = line.text();
+            let text = text.trim_end();
+            !text.contains("echo") && (text == "42" || text.ends_with(" 42"))
+        })
     });
     assert!(
         saw_output,
-        "never saw `hi`; screen:\n{}",
+        "never saw `42`; screen:\n{}",
         terminal.snapshot().text()
     );
 
@@ -72,7 +75,7 @@ fn echo_in_real_shell_then_exit() {
     assert!(terminal.has_exited());
     // Input after exit is ignored, snapshots still work.
     terminal.write(&b"echo nope\r"[..]);
-    assert!(terminal.snapshot().text().contains("hi"));
+    assert!(terminal.snapshot().text().contains("42"));
 }
 
 #[test]
