@@ -294,6 +294,7 @@ mod tests {
             output: String::new(),
             details: None,
             duration_ms: None,
+            nested: Vec::new(),
         }
     }
 

@@ -8,7 +8,9 @@ use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 
 use pi_rpc::protocol::{AgentMessage, Event, Incoming};
-use transcript::{BlockKind, ItemKind, RunStatus, ToolStatus, Transcript, format_duration};
+use transcript::{
+    BlockKind, ItemKind, NestedEntry, RunStatus, ToolStatus, Transcript, format_duration,
+};
 
 const STEP: Duration = Duration::from_millis(250);
 
@@ -191,4 +193,56 @@ fn item_versions_change_only_for_touched_items() {
     let after: Vec<_> = transcript.items().iter().map(|item| item.version).collect();
     assert_eq!(&after[..before.len()], &before[..]);
     assert_eq!(after.len(), before.len() + 1);
+}
+
+/// A tool that runs other tools (a subagent, code mode) shows that work inside its own row.
+#[test]
+fn nested_tool_activity_attaches_to_its_parent_call() {
+    let events = [
+        r#"{"type":"agent_start"}"#,
+        r#"{"type":"tool_execution_start","toolCallId":"outer","toolName":"subagent","args":{"task":"look around"}}"#,
+        r#"{"type":"tool_execution_start","toolCallId":"inner1","toolName":"read","args":{"path":"a.rs"},"parentToolCallId":"outer"}"#,
+        r#"{"type":"tool_execution_end","toolCallId":"inner1","toolName":"read","result":{"content":[{"type":"text","text":"fn a() {}"}]},"parentToolCallId":"outer"}"#,
+        r#"{"type":"tool_execution_start","toolCallId":"inner2","toolName":"bash","args":{"command":"ls"},"parentToolCallId":"inner1"}"#,
+        r#"{"type":"tool_execution_end","toolCallId":"inner2","toolName":"bash","result":{"content":[{"type":"text","text":"x"}]},"isError":true,"parentToolCallId":"inner1"}"#,
+        r#"{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Found it."}],"model":"m","stopReason":"stop"},"parentToolCallId":"outer"}"#,
+        r#"{"type":"tool_execution_start","toolCallId":"orphan","toolName":"read","args":{},"parentToolCallId":"unknown"}"#,
+    ];
+    let mut live = Transcript::new();
+    let now = Instant::now();
+    for line in events {
+        match Incoming::from_slice(line.as_bytes()).unwrap_or_else(|e| panic!("{e}: {line}")) {
+            Incoming::Event(event) => live.apply(&event, now),
+            _ => panic!("not an event: {line}"),
+        }
+    }
+    let tools: Vec<_> = live
+        .items()
+        .iter()
+        .filter_map(|item| match &item.kind {
+            ItemKind::Assistant(assistant) => Some(assistant),
+            _ => None,
+        })
+        .flat_map(|assistant| &assistant.blocks)
+        .filter_map(|block| match &block.kind {
+            BlockKind::Tool(tool) => Some(tool),
+            _ => None,
+        })
+        .collect();
+    // Nested calls never become top-level rows, and one with an unknown parent is dropped.
+    assert_eq!(tools.len(), 1);
+    let outer = tools[0];
+    assert_eq!(outer.call_id, "outer");
+    let steps: Vec<String> = outer
+        .nested
+        .iter()
+        .map(|entry| match entry {
+            NestedEntry::Tool(tool) => format!("{} {:?} {}", tool.name, tool.status, tool.output),
+            NestedEntry::Text(text) => format!("text {text}"),
+        })
+        .collect();
+    assert_eq!(
+        steps,
+        ["read Done fn a() {}", "bash Failed x", "text Found it."]
+    );
 }

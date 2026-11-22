@@ -63,6 +63,8 @@ pub struct Block {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
+// Tool calls are the most common block; boxing them would add an allocation to each.
+#[allow(clippy::large_enum_variant)]
 pub enum BlockKind {
     Thinking(ThinkingBlock),
     Text(TextBlock),
@@ -119,6 +121,18 @@ pub struct ToolBlock {
     /// Tool-specific details, e.g. `{"diff": ..., "patch": ...}` for `edit`.
     pub details: Option<Value>,
     pub duration_ms: Option<u64>,
+    /// Work done inside this call (a subagent's or code mode's own tool calls and
+    /// replies), in order. Live only: pi does not store it in the session.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub nested: Vec<NestedEntry>,
+}
+
+/// One step inside a tool call (see [`ToolBlock::nested`]).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub enum NestedEntry {
+    Tool(Box<ToolBlock>),
+    /// What a nested assistant (e.g. a subagent) replied.
+    Text(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

@@ -9,6 +9,7 @@ mod chat;
 mod config;
 mod hosts;
 mod panels;
+mod persist;
 mod pi_place;
 mod remote_ui;
 mod shell_env;
@@ -37,7 +38,9 @@ fn main() {
     // Probing the login shell takes ~100–200 ms; overlap it with GPU/platform startup.
     let shell_env = std::thread::spawn(shell_env::login_shell_env);
 
-    application().with_assets(assets::AppAssets).run(move |cx| {
+    let app = application().with_assets(assets::AppAssets);
+    app.on_reopen(window::reopen);
+    app.run(move |cx| {
         let child_env = shell_env.join().unwrap_or_default();
         let config = config::AppConfig::detect(child_env);
         init(cx);
@@ -47,6 +50,7 @@ fn main() {
         cx.set_global(ui_state::UiState::load(
             ui_state::UiState::path().as_deref(),
         ));
+        window::init(cx);
         window::open_main_window(cx);
         cx.activate(true);
     });

@@ -31,11 +31,27 @@ pub fn map_keystroke(keystroke: &Keystroke, macos: bool) -> KeyAction {
     let key = keystroke.key.as_str();
 
     if macos && m.platform && !m.control && !m.alt {
+        // Line editing like iTerm: cmd-← / cmd-→ go to the start / end of the line and
+        // cmd-backspace deletes to its start (ctrl-a, ctrl-e, ctrl-u in readline).
+        let ctrl = |ch| KeyAction::Send(KeyInput::new(Key::Char(ch), term::Modifiers::CTRL));
         return match key {
             "c" if !m.shift => KeyAction::Copy,
             "v" if !m.shift => KeyAction::Paste,
+            "left" if !m.shift => ctrl('a'),
+            "right" if !m.shift => ctrl('e'),
+            "backspace" if !m.shift => ctrl('u'),
             _ => KeyAction::Ignore,
         };
+    }
+    // option-← / option-→ move by word like Terminal.app (ESC b / ESC f), which bash and zsh
+    // understand out of the box; the xterm form (ESC [1;3D) is unbound in both.
+    if macos && m.alt && !m.control && !m.platform && !m.shift {
+        let word = |ch| KeyAction::Send(KeyInput::new(Key::Char(ch), term::Modifiers::ALT));
+        match key {
+            "left" => return word('b'),
+            "right" => return word('f'),
+            _ => {}
+        }
     }
     if !macos && m.control && m.shift && !m.alt && !m.platform {
         if key.eq_ignore_ascii_case("c") {
@@ -391,9 +407,27 @@ mod tests {
             KeyAction::Ignore
         );
         let alt = mods(false, true, false, false);
+        // Word movement as Terminal.app sends it on macOS; xterm's form on Linux.
         assert_eq!(
             map_keystroke(&ks("left", None, alt), true),
+            send(Key::Char('b'), term::Modifiers::ALT)
+        );
+        assert_eq!(
+            map_keystroke(&ks("right", None, alt), true),
+            send(Key::Char('f'), term::Modifiers::ALT)
+        );
+        assert_eq!(
+            map_keystroke(&ks("left", None, alt), false),
             send(Key::Left, term::Modifiers::ALT)
+        );
+        let cmd = mods(false, false, false, true);
+        assert_eq!(
+            map_keystroke(&ks("left", None, cmd), true),
+            send(Key::Char('a'), term::Modifiers::CTRL)
+        );
+        assert_eq!(
+            map_keystroke(&ks("backspace", None, cmd), true),
+            send(Key::Char('u'), term::Modifiers::CTRL)
         );
     }
 

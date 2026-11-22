@@ -469,6 +469,7 @@ impl TerminalPanel {
                     .quiet(cx)
                     .xsmall()
                     .icon(IconName::Close)
+                    .accessibility_label("Close terminal")
                     .tooltip("Close terminal")
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(TerminalPanelEvent::Closed))),
             )
@@ -525,6 +526,7 @@ impl TerminalPanel {
         let entity = cx.entity();
         let resize_terminal = terminal.clone();
         let cell = metrics.cell;
+        let marked = self.marked.clone();
 
         canvas(
             move |bounds, _, _| {
@@ -550,6 +552,9 @@ impl TerminalPanel {
                         window,
                         cx,
                     );
+                    if let Some(marked) = &marked {
+                        grid::paint_marked_text(marked, &snapshot, &geometry, &metrics, window, cx);
+                    }
                 });
             },
         )

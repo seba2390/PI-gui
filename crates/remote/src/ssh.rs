@@ -13,7 +13,7 @@
 use std::ffi::OsString;
 use std::fs;
 use std::io;
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -75,10 +75,13 @@ case $p in /*)
   v=$(PATH=${p%/*}:$PATH "$p" --version </dev/null 2>/dev/null | tail -n 1)
   printf 'PIGUI_VERSION=%s\n' "$v" ;;
 esac
-ev() { "$s" -lc "printenv $1" </dev/null 2>/dev/null | tail -n 1; }
-a=$(ev PI_CODING_AGENT_DIR); [ -n "$a" ] || a=$HOME/.pi/agent
+ev() { "$s" -lc "printenv $1 | sed 's/^/PIGUI_EV=/'" </dev/null 2>/dev/null | sed -n 's/^PIGUI_EV=//p' | tail -n 1; }
+a=$(ev PI_CODING_AGENT_DIR)
+case $a in /*|"~/"*) ;; *) a= ;; esac
+[ -n "$a" ] || a=$HOME/.pi/agent
 case $a in "~/"*) a=$HOME/${a#??} ;; esac
 d=$(ev PI_CODING_AGENT_SESSION_DIR)
+case $d in /*) ;; "~/"*) d=$HOME/${d#??} ;; *) d= ;; esac
 if [ -z "$d" ] && [ -f "$a/settings.json" ]; then
   d=$(sed -n 's/.*"sessionDir"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$a/settings.json" | head -n 1)
   case $d in /*) ;; *) d= ;; esac
@@ -252,29 +255,112 @@ impl Ssh {
     }
 
     /// Makes sure the shared master connection is up, starting it if needed (blocking, up to
-    /// ~45 s). With `accept_new_host_key` an unknown host key is added to `known_hosts`; pass
-    /// it only after the user confirmed the fingerprint. A changed key is never accepted.
+    /// ~45 s). With `trust_recorded_key` the connection accepts exactly the host key that
+    /// [`Self::host_key_fingerprint`] recorded and showed to the user (nothing else, so a key
+    /// swapped in between is refused), and that key is then added to `known_hosts`. A changed
+    /// key is never accepted.
     ///
     /// Implemented as `ssh -o ControlMaster=auto … true` (with `ControlPersist` the first
     /// client backgrounds a master) rather than `ssh -fN -o ControlMaster=yes`: `auto` replaces
     /// a stale socket and never leaves a second, unshared connection behind when a master
     /// already runs.
-    pub fn connect(&self, accept_new_host_key: bool) -> Result<(), RemoteError> {
+    pub fn connect(&self, trust_recorded_key: bool) -> Result<(), RemoteError> {
         if self.is_connected() {
             return Ok(());
         }
+        self.ensure_control_dir()?;
         let mut command = self.ssh_command();
         command.arg("-T");
-        if accept_new_host_key {
-            command.args(["-o", "StrictHostKeyChecking=accept-new"]);
+        if trust_recorded_key {
+            command.args(self.pinned_key_args()?);
         }
         command.args(self.base_args()).args(["--", "true"]);
         let output = process::run(command, None, CONNECT_TIMEOUT)?;
         if output.status.success() {
+            if trust_recorded_key {
+                self.save_recorded_key()?;
+            }
             Ok(())
         } else {
             Err(ssh_failure(&output))
         }
+    }
+
+    /// Where [`Self::host_key_fingerprint`] records the host's key until the user decides
+    /// (in the private control directory).
+    fn recorded_key_file(&self) -> PathBuf {
+        use std::hash::{DefaultHasher, Hash as _, Hasher as _};
+        let mut hasher = DefaultHasher::new();
+        self.target.display().hash(&mut hasher);
+        self.control_dir
+            .join(format!("hostkey-{:016x}.known_hosts", hasher.finish()))
+    }
+
+    /// Options that make ssh accept only the recorded key (ssh keeps the first value of an
+    /// option, so these win over the user's config).
+    pub(crate) fn pinned_key_args(&self) -> Result<Vec<OsString>, RemoteError> {
+        let file = self.recorded_key_file();
+        if fs::metadata(&file).map_or(true, |meta| meta.len() == 0) {
+            return Err(RemoteError::Failed(
+                "The host key was not fetched; connect again to see it.".to_owned(),
+            ));
+        }
+        let mut known = OsString::from("UserKnownHostsFile=");
+        known.push(&file);
+        Ok(vec![
+            "-o".into(),
+            known,
+            "-o".into(),
+            "GlobalKnownHostsFile=/dev/null".into(),
+            "-o".into(),
+            "StrictHostKeyChecking=yes".into(),
+        ])
+    }
+
+    /// After a connection trusted the recorded key: appends it to the user's `known_hosts`
+    /// (the first `UserKnownHostsFile`, `~/.ssh/known_hosts` by default) and forgets it.
+    pub(crate) fn save_recorded_key(&self) -> Result<(), RemoteError> {
+        use std::io::Write as _;
+        let file = self.recorded_key_file();
+        let Ok(keys) = fs::read(&file) else {
+            return Ok(());
+        };
+        let full = resolve_full(&self.target)?;
+        let known = match full.known_hosts.as_deref() {
+            Some(path) => match (path.strip_prefix("~/"), dirs::home_dir()) {
+                (Some(rest), Some(home)) => home.join(rest),
+                _ => PathBuf::from(path),
+            },
+            None => dirs::home_dir()
+                .map(|home| home.join(".ssh/known_hosts"))
+                .ok_or_else(|| RemoteError::Failed("no home directory".to_owned()))?,
+        };
+        let fail = |error: io::Error| {
+            RemoteError::Failed(format!("could not update {}: {error}", known.display()))
+        };
+        if let Some(dir) = known.parent()
+            && !dir.exists()
+        {
+            fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(dir)
+                .map_err(fail)?;
+        }
+        let needs_newline = fs::read(&known)
+            .is_ok_and(|existing| !existing.is_empty() && !existing.ends_with(b"\n"));
+        let mut out = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .open(&known)
+            .map_err(fail)?;
+        if needs_newline {
+            out.write_all(b"\n").map_err(fail)?;
+        }
+        out.write_all(&keys).map_err(fail)?;
+        let _ = fs::remove_file(&file);
+        Ok(())
     }
 
     /// Whether a master connection is running (`ssh -O check`, local only).
@@ -356,8 +442,11 @@ impl Ssh {
     /// prepended to `PATH`. Stopping: close the process's stdin (pi exits on EOF) or kill the
     /// local ssh, which closes the channel.
     pub fn command(&self, cwd: Option<&str>, argv: &[String]) -> (PathBuf, Vec<OsString>) {
-        self.ensure_control_dir();
         let mut args = vec![OsString::from("-T")];
+        if let Err(error) = self.ensure_control_dir() {
+            log::warn!("{error}");
+            args.extend(["-o", "ControlMaster=no", "-o", "ControlPath=none"].map(OsString::from));
+        }
         args.extend(self.base_args());
         args.push("--".into());
         args.push(remote_launch_command(cwd, argv).into());
@@ -400,58 +489,37 @@ impl Ssh {
         }
     }
 
-    /// The SHA256 fingerprints of the host's keys, one per line (e.g.
+    /// The SHA256 fingerprints of the host's key, one per line (e.g.
     /// `256 SHA256:… host (ED25519)`), for asking the user whether to trust it.
     ///
-    /// Direct hosts are scanned with `ssh-keyscan -p <port> <hostname>` (from `ssh -G`) piped
-    /// into `ssh-keygen -lf -`. Hosts behind `ProxyJump`/`ProxyCommand` cannot be scanned
-    /// directly, so ssh itself connects without known hosts or authentication and the key it
-    /// was offered is reported instead.
+    /// ssh itself connects (through any `ProxyJump`/`ProxyCommand`, without authenticating)
+    /// with a private, empty `known_hosts` that it records the key in. That exact key is what
+    /// [`Self::connect`] then trusts, so the fingerprint shown is the key accepted.
     pub fn host_key_fingerprint(&self) -> Result<String, RemoteError> {
-        let resolved = resolve_full(&self.target)?;
-        if resolved.proxied {
-            return self.fingerprint_via_ssh();
-        }
-        let host = &resolved.resolved;
-        let mut scan = Command::new("ssh-keyscan");
-        scan.args([
-            "-T",
-            "10",
-            "-p",
-            &host.port.to_string(),
-            "--",
-            &host.hostname,
-        ]);
-        let keys = process::run(scan, None, KEYSCAN_TIMEOUT)?;
-        if keys.stdout.iter().all(u8::is_ascii_whitespace) {
-            let reason = meaningful_lines(&keys.stderr_lossy())
-                .into_iter()
-                .find(|line| !line.starts_with('#'))
-                .unwrap_or("no keys returned")
-                .to_owned();
-            return Err(RemoteError::Unreachable(format!(
-                "could not fetch the host key of {}:{} ({reason})",
-                host.hostname, host.port
-            )));
-        }
-        let mut keygen = Command::new("ssh-keygen");
-        keygen.args(["-l", "-f", "-"]);
-        let prints = process::run(keygen, Some(keys.stdout), KEYSCAN_TIMEOUT)?;
-        if !prints.status.success() {
-            return Err(RemoteError::Failed(prints.stderr_lossy().trim().to_owned()));
-        }
-        Ok(prints.stdout_lossy().trim().to_owned())
-    }
-
-    fn fingerprint_via_ssh(&self) -> Result<String, RemoteError> {
+        self.ensure_control_dir()?;
+        let file = self.recorded_key_file();
+        let _ = fs::remove_file(&file);
+        let mut known = OsString::from("UserKnownHostsFile=");
+        known.push(&file);
         let mut command = Command::new(Self::program());
         command
-            .args(["-v", "-T"])
+            .arg("-T")
             .args(["-o", "ControlMaster=no", "-o", "ControlPath=none"])
             .args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"])
-            .args(["-o", "StrictHostKeyChecking=no"])
-            .args(["-o", "UserKnownHostsFile=/dev/null"])
-            .args(["-o", "GlobalKnownHostsFile=/dev/null"])
+            .args([
+                "-o",
+                "StrictHostKeyChecking=accept-new",
+                "-o",
+                "HashKnownHosts=no",
+            ])
+            .arg("-o")
+            .arg(known)
+            .args([
+                "-o",
+                "GlobalKnownHostsFile=/dev/null",
+                "-o",
+                "UpdateHostKeys=no",
+            ])
             .args(["-o", "PreferredAuthentications=none"])
             .args([
                 "-o",
@@ -468,31 +536,53 @@ impl Ssh {
             ])
             .args(Self::target_args(&self.target))
             .args(["--", "true"]);
+        // Authentication is meant to fail; the key is recorded before it starts.
         let output = process::run(command, None, KEYSCAN_TIMEOUT)?;
-        let stderr = output.stderr_lossy();
-        parse_server_host_key(&stderr).ok_or_else(|| classify(&stderr))
-    }
-
-    fn ssh_command(&self) -> Command {
-        self.ensure_control_dir();
-        Command::new(Self::program())
-    }
-
-    /// Creates the control directory (mode 0700) if needed. Failures are only logged: ssh
-    /// then reports a clear error of its own.
-    fn ensure_control_dir(&self) {
-        if let Err(error) = prepare_private_dir(&self.control_dir) {
-            log::warn!(
-                "control socket directory {} is unusable: {error}",
-                self.control_dir.display()
-            );
+        if fs::metadata(&file).map_or(true, |meta| meta.len() == 0) {
+            let stderr = output.stderr_lossy();
+            return Err(match classify(&stderr) {
+                RemoteError::Failed(_) | RemoteError::AuthFailed(_) => RemoteError::Unreachable(
+                    format!("could not fetch the host key of {}", self.target.display()),
+                ),
+                other => other,
+            });
         }
+        let mut keygen = Command::new("ssh-keygen");
+        keygen.arg("-l").arg("-f").arg(&file);
+        let prints = process::run(keygen, None, KEYSCAN_TIMEOUT)?;
+        if !prints.status.success() {
+            return Err(RemoteError::Failed(prints.stderr_lossy().trim().to_owned()));
+        }
+        Ok(prints.stdout_lossy().trim().to_owned())
+    }
+
+    /// `ssh` for this host. If the control directory is not private, sharing is switched off
+    /// (ssh keeps the first value of an option) so no socket in it is ever used.
+    fn ssh_command(&self) -> Command {
+        let mut command = Command::new(Self::program());
+        if let Err(error) = self.ensure_control_dir() {
+            log::warn!("{error}");
+            command.args(["-o", "ControlMaster=no", "-o", "ControlPath=none"]);
+        }
+        command
+    }
+
+    /// Creates the control directory (mode 0700) if needed, and refuses one that is not
+    /// private (e.g. created in the shared `/tmp` by another user): its sockets would let that
+    /// user see or take over the connection.
+    pub(crate) fn ensure_control_dir(&self) -> Result<(), RemoteError> {
+        prepare_private_dir(&self.control_dir).map_err(|error| {
+            RemoteError::Failed(format!(
+                "the connection folder {} is not safe to use: {error}",
+                self.control_dir.display()
+            ))
+        })
     }
 }
 
 /// Creates `dir` with mode 0700, or checks that the existing one is a real directory owned by
 /// the current user (it may live in the shared `/tmp`) and tightens its mode.
-fn prepare_private_dir(dir: &Path) -> io::Result<()> {
+pub(crate) fn prepare_private_dir(dir: &Path) -> io::Result<()> {
     if let Some(parent) = dir.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -695,15 +785,6 @@ fn parent_of(path: &str) -> Option<String> {
         Some(index) => Some(trimmed[..index].to_owned()),
         None => None,
     }
-}
-
-/// Finds `debug1: Server host key: ssh-ed25519 SHA256:…` in `ssh -v` output.
-fn parse_server_host_key(stderr: &str) -> Option<String> {
-    stderr.lines().find_map(|line| {
-        let rest = line.split_once("Server host key: ")?.1.trim();
-        let (kind, fingerprint) = rest.split_once(' ')?;
-        Some(format!("{fingerprint} ({kind})"))
-    })
 }
 
 #[cfg(test)]
@@ -1104,33 +1185,6 @@ mod tests {
         assert_eq!(parse_listing(b"/home\0").unwrap().parent, Some("/".into()));
         assert!(parse_listing(b"").is_err());
         assert!(parse_listing(b"relative\0").is_err());
-    }
-
-    #[test]
-    fn parses_server_host_key() {
-        let stderr = "debug1: Connecting to h [1.2.3.4] port 22.\n\
-                      debug1: Server host key: ssh-ed25519 SHA256:voqbH8vJ0HAh163ILLUcx2s0xPOE\n\
-                      debug1: checking without port identifier\n";
-        assert_eq!(
-            parse_server_host_key(stderr).as_deref(),
-            Some("SHA256:voqbH8vJ0HAh163ILLUcx2s0xPOE (ssh-ed25519)")
-        );
-        assert_eq!(parse_server_host_key("nothing"), None);
-    }
-
-    /// The fallback used for hosts behind a jump host, checked against a direct one.
-    #[test]
-    #[ignore = "needs PI_GUI_SSH_TEST_HOST and network access"]
-    fn live_fingerprint_via_ssh() {
-        let Ok(alias) = std::env::var("PI_GUI_SSH_TEST_HOST") else {
-            return;
-        };
-        let ssh = Ssh::new(Target::Alias { alias });
-        let via_ssh = ssh.fingerprint_via_ssh().unwrap();
-        let scanned = ssh.host_key_fingerprint().unwrap();
-        eprintln!("via ssh: {via_ssh}\nscanned:\n{scanned}");
-        let hash = via_ssh.split(' ').next().unwrap();
-        assert!(scanned.contains(hash));
     }
 
     #[test]

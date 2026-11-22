@@ -314,6 +314,56 @@ fn paint_segment(
     }
 }
 
+/// Draws IME composition (`marked`, not yet sent to the shell) over the cursor cell,
+/// underlined like in other macOS text fields, on the terminal's background.
+pub fn paint_marked_text(
+    marked: &str,
+    snapshot: &Snapshot,
+    geometry: &GridGeometry,
+    metrics: &CellMetrics,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let Some(cursor) = snapshot.cursor else {
+        return;
+    };
+    // The cursor color reads well on the background in both themes.
+    let fg = hsla(cursor.color);
+    let run = TextRun {
+        len: marked.len(),
+        font: metrics.font.clone(),
+        color: fg,
+        background_color: None,
+        underline: Some(UnderlineStyle {
+            thickness: px(1.),
+            color: Some(fg),
+            wavy: false,
+        }),
+        strikethrough: None,
+    };
+    let shaped = window.text_system().shape_line(
+        SharedString::from(marked.to_owned()),
+        metrics.font_size,
+        &[run],
+        None,
+    );
+    let origin = geometry.cells_bounds(cursor.row, cursor.col, 1).origin;
+    window.paint_quad(fill(
+        bounds(origin, size(shaped.width, geometry.cell.height)),
+        hsla(snapshot.background),
+    ));
+    if let Err(error) = shaped.paint(
+        origin,
+        geometry.cell.height,
+        TextAlign::Left,
+        None,
+        window,
+        cx,
+    ) {
+        log::debug!("terminal marked text paint failed: {error:#}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use gpui_kit::{bounds, point, px, size};

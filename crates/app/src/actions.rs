@@ -20,6 +20,9 @@ actions!(
         ShowAll,
         Quit,
         ResumeSession,
+        CloseWindow,
+        Minimize,
+        Zoom,
     ]
 );
 
@@ -61,6 +64,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new(primary!("1"), ShowChatMode, Some(WINDOW_CONTEXT)),
         KeyBinding::new(primary!("2"), ShowCodeMode, Some(WINDOW_CONTEXT)),
         KeyBinding::new(primary!("q"), Quit, None),
+        KeyBinding::new(primary!("w"), CloseWindow, Some(WINDOW_CONTEXT)),
     ]);
     cx.on_action(|_: &Quit, cx| cx.quit());
     cx.on_action(|_: &Hide, cx| cx.hide());
@@ -70,6 +74,7 @@ pub fn init(cx: &mut App) {
         cx.bind_keys([
             KeyBinding::new("cmd-h", Hide, None),
             KeyBinding::new("cmd-alt-h", HideOthers, None),
+            KeyBinding::new("cmd-m", Minimize, Some(WINDOW_CONTEXT)),
         ]);
     }
     cx.set_menus(menus());
@@ -88,7 +93,11 @@ fn menus() -> Vec<Menu> {
             MenuItem::separator(),
             MenuItem::action("Quit PI", Quit),
         ]),
-        Menu::new("File").items([MenuItem::action("New Chat / Session", NewChat)]),
+        Menu::new("File").items([
+            MenuItem::action("New Chat / Session", NewChat),
+            MenuItem::separator(),
+            MenuItem::action("Close Window", CloseWindow),
+        ]),
         Menu::new("Edit").items([
             MenuItem::os_action("Undo", Undo, OsAction::Undo),
             MenuItem::os_action("Redo", Redo, OsAction::Redo),
@@ -108,7 +117,12 @@ fn menus() -> Vec<Menu> {
             MenuItem::action("Files", ShowFiles),
             MenuItem::action("Terminal", ToggleTerminal),
         ]),
-        Menu::new("Window").items([MenuItem::action("Focus Message Box", FocusComposer)]),
+        Menu::new("Window").items([
+            MenuItem::action("Minimize", Minimize),
+            MenuItem::action("Zoom", Zoom),
+            MenuItem::separator(),
+            MenuItem::action("Focus Message Box", FocusComposer),
+        ]),
     ]
 }
 
@@ -126,7 +140,9 @@ mod tests {
             primary!("b"),
             primary!("alt-b"),
             primary!("shift-d"),
+            primary!("shift-e"),
             primary!("l"),
+            primary!("w"),
         ];
         for keys in primary {
             assert!(Keystroke::parse(keys).is_ok(), "{keys}");

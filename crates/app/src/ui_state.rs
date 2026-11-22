@@ -70,13 +70,7 @@ impl UiState {
             return;
         }
         let Some(path) = Self::path() else { return };
-        cx.background_executor()
-            .spawn(async move {
-                if let Err(error) = after.write(&path) {
-                    log::warn!("could not save UI state to {}: {error}", path.display());
-                }
-            })
-            .detach();
+        crate::persist::save_in_background(cx, path, move |path| after.write(path));
     }
 
     /// Writes atomically (temp file + rename) so a crash never leaves half a file.

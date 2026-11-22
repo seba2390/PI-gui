@@ -43,8 +43,18 @@ pub fn session_row(
             .map_or_else(String::new, |host| format!("ssh://{}", host.0)),
         session.path.to_string_lossy()
     ));
+    let status = match activity {
+        Some(Activity::Working) => ", working",
+        Some(Activity::NeedsYou) => ", needs your input",
+        Some(Activity::Done) => ", finished",
+        None => "",
+    };
+    let accessible_name = SharedString::from(format!("{}{status}", session.title()));
     h_flex()
         .id(ElementId::Name(id.clone()))
+        .role(Role::Button)
+        .aria_label(accessible_name)
+        .aria_selected(active)
         .group("session-row")
         .relative()
         .w_full()
@@ -122,6 +132,7 @@ pub fn session_row(
                         .quiet(cx)
                         .xsmall()
                         .icon(Icon::from(AppIcon::SquarePen))
+                        .accessibility_label("Rename")
                         .tooltip("Rename")
                         .on_click(cx.listener(move |_, _, window, cx| {
                             window.prevent_default();
@@ -134,6 +145,7 @@ pub fn session_row(
                         .quiet(cx)
                         .xsmall()
                         .icon(IconName::Delete)
+                        .accessibility_label("Move to trash")
                         .tooltip("Move to trash")
                         .on_click(cx.listener(move |_, _, window, cx| {
                             window.prevent_default();
@@ -158,6 +170,9 @@ pub fn action_row(
     let (hover_bg, active_bg) = (theme.secondary_hover, theme.accent);
     h_flex()
         .id(id)
+        .role(Role::Button)
+        .aria_label(label)
+        .aria_selected(selected)
         .w_full()
         .h(px(30.))
         .gap_2()
@@ -204,8 +219,16 @@ pub fn folder_row(
     let delete = SidebarEvent::DeleteFolder(host.cloned(), folder.to_path_buf());
     let indented = host.is_some();
     let id = SharedString::from(format!("folder:{}", toggle.display()));
+    let accessible_name = SharedString::from(format!(
+        "Folder {}, {count} session{}",
+        label.name,
+        if count == 1 { "" } else { "s" }
+    ));
     h_flex()
         .id(ElementId::Name(id.clone()))
+        .role(Role::Button)
+        .aria_label(accessible_name)
+        .aria_expanded(open)
         .group("folder-row")
         .relative()
         .w_full()
@@ -281,6 +304,7 @@ pub fn folder_row(
                         .quiet(cx)
                         .xsmall()
                         .icon(IconName::Plus)
+                        .accessibility_label("New session in this folder")
                         .tooltip("New session in this folder")
                         .on_click(cx.listener(move |_, _, window, cx| {
                             window.prevent_default();
@@ -293,6 +317,7 @@ pub fn folder_row(
                         .quiet(cx)
                         .xsmall()
                         .icon(IconName::Delete)
+                        .accessibility_label("Move this folder's sessions to the trash")
                         .tooltip("Move this folder's sessions to the trash")
                         .on_click(cx.listener(move |_, _, window, cx| {
                             window.prevent_default();
@@ -326,6 +351,9 @@ pub fn host_row(
     let connected = status.is_connected();
     h_flex()
         .id(ElementId::Name(format!("host:{key}").into()))
+        .role(Role::Button)
+        .aria_label(tooltip.clone())
+        .aria_expanded(open)
         .group("host-row")
         .relative()
         .w_full()
@@ -385,6 +413,7 @@ pub fn host_row(
                             .quiet(cx)
                             .xsmall()
                             .icon(IconName::RefreshCw)
+                            .accessibility_label("Refresh sessions")
                             .tooltip("Refresh sessions")
                             .on_click(cx.listener(move |_, _, window, cx| {
                                 window.prevent_default();
@@ -403,6 +432,11 @@ pub fn host_row(
                             IconName::Plus
                         } else {
                             IconName::Globe
+                        })
+                        .accessibility_label(if connected {
+                            "New session on this host"
+                        } else {
+                            "Connect"
                         })
                         .tooltip(if connected {
                             "New session on this host"

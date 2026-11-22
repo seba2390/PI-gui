@@ -11,8 +11,9 @@ use serde_json::Value;
 
 use crate::format::format_tokens;
 use crate::model::{
-    AssistantItem, Block, BlockKind, ItemId, ItemKind, Notice, NoticeKind, Queue, RunStatus,
-    TextBlock, ThinkingBlock, ToolBlock, ToolStatus, TranscriptItem, TurnSummary, UserItem,
+    AssistantItem, Block, BlockKind, ItemId, ItemKind, NestedEntry, Notice, NoticeKind, Queue,
+    RunStatus, TextBlock, ThinkingBlock, ToolBlock, ToolStatus, TranscriptItem, TurnSummary,
+    UserItem,
 };
 
 /// The live transcript of one pi session.
@@ -28,6 +29,9 @@ pub struct Transcript {
     current_assistant: Option<usize>,
     /// Tool call id → (item index, block index). Items are append-only, so stable.
     tools: HashMap<String, (usize, usize)>,
+    /// Nested tool call id → the top-level call it runs inside (deeper nesting is
+    /// flattened onto that call).
+    nested_owner: HashMap<String, String>,
     queue: Queue,
     session_name: Option<String>,
     thinking_level: Option<ThinkingLevel>,
@@ -51,6 +55,7 @@ impl Transcript {
             run_started: None,
             current_assistant: None,
             tools: HashMap::new(),
+            nested_owner: HashMap::new(),
             queue: Queue::default(),
             session_name: None,
             thinking_level: None,
@@ -286,7 +291,61 @@ impl Transcript {
                     format!("Extension error in {extension_path} ({event}): {error}"),
                 );
             }
-            // Nested tool activity and bookkeeping events are not rendered (yet).
+            Event::ToolExecutionStart {
+                tool_call_id,
+                tool_name,
+                args,
+                parent_tool_call_id: Some(parent),
+            } => self.edit_nested_tool(parent, tool_call_id, tool_name, |tool| {
+                tool.status = ToolStatus::Running;
+                if tool.args.is_null() {
+                    tool.args = args.clone();
+                }
+            }),
+            Event::ToolExecutionUpdate {
+                tool_call_id,
+                tool_name,
+                partial_result,
+                parent_tool_call_id: Some(parent),
+            } => self.edit_nested_tool(parent, tool_call_id, tool_name, |tool| {
+                tool.output = result_text(partial_result);
+            }),
+            Event::ToolExecutionEnd {
+                tool_call_id,
+                tool_name,
+                result,
+                is_error,
+                duration_ms,
+                parent_tool_call_id: Some(parent),
+            } => self.edit_nested_tool(parent, tool_call_id, tool_name, |tool| {
+                tool.status = if *is_error {
+                    ToolStatus::Failed
+                } else {
+                    ToolStatus::Done
+                };
+                tool.output = result_text(result);
+                if let Some(details) = result.get("details").filter(|d| !d.is_null()) {
+                    tool.details = Some(details.clone());
+                }
+                tool.duration_ms = *duration_ms;
+            }),
+            Event::MessageEnd {
+                message: AgentMessage::Assistant(assistant),
+                parent_tool_call_id: Some(parent),
+            } => {
+                let text = assistant
+                    .content
+                    .iter()
+                    .filter_map(ContentBlock::as_text)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let text = text.trim();
+                if !text.is_empty() {
+                    let text = text.to_owned();
+                    self.edit_owner(parent, |owner| owner.nested.push(NestedEntry::Text(text)));
+                }
+            }
+            // Streaming of nested messages and bookkeeping events are not rendered.
             _ => {}
         }
     }
@@ -713,6 +772,52 @@ impl Transcript {
         (index, block)
     }
 
+    /// Edits the top-level tool call that `parent` (a top-level or nested call id) runs in.
+    fn edit_owner(&mut self, parent: &str, edit: impl FnOnce(&mut ToolBlock)) {
+        let owner = self
+            .nested_owner
+            .get(parent)
+            .cloned()
+            .unwrap_or_else(|| parent.to_owned());
+        if let Some(&(item, block)) = self.tools.get(&owner) {
+            self.edit_tool(item, block, edit);
+        }
+    }
+
+    /// Edits (creating it if needed) the nested call `id` inside `parent`'s top-level call.
+    fn edit_nested_tool(
+        &mut self,
+        parent: &str,
+        id: &str,
+        name: &str,
+        edit: impl FnOnce(&mut ToolBlock),
+    ) {
+        let owner = self
+            .nested_owner
+            .get(parent)
+            .cloned()
+            .unwrap_or_else(|| parent.to_owned());
+        if !self.tools.contains_key(&owner) {
+            return;
+        }
+        self.nested_owner.insert(id.to_owned(), owner.clone());
+        self.edit_owner(&owner, |owner| {
+            let position = owner
+                .nested
+                .iter()
+                .position(|entry| matches!(entry, NestedEntry::Tool(tool) if tool.call_id == id));
+            let position = position.unwrap_or_else(|| {
+                owner
+                    .nested
+                    .push(NestedEntry::Tool(Box::new(new_tool_block(id, name))));
+                owner.nested.len() - 1
+            });
+            if let Some(NestedEntry::Tool(tool)) = owner.nested.get_mut(position) {
+                edit(tool);
+            }
+        });
+    }
+
     fn edit_tool(&mut self, index: usize, block: usize, edit: impl FnOnce(&mut ToolBlock)) {
         if let ItemKind::Assistant(item) = &mut self.items[index].kind
             && let Some(Block {
@@ -744,7 +849,11 @@ fn new_text() -> BlockKind {
 }
 
 fn new_tool(id: &str, name: &str) -> BlockKind {
-    BlockKind::Tool(ToolBlock {
+    BlockKind::Tool(new_tool_block(id, name))
+}
+
+fn new_tool_block(id: &str, name: &str) -> ToolBlock {
+    ToolBlock {
         call_id: id.to_owned(),
         name: name.to_owned(),
         args: Value::Null,
@@ -753,7 +862,8 @@ fn new_tool(id: &str, name: &str) -> BlockKind {
         output: String::new(),
         details: None,
         duration_ms: None,
-    })
+        nested: Vec::new(),
+    }
 }
 
 fn finish_thinking(thinking: &mut ThinkingBlock, content: Option<&String>, now: Instant) {

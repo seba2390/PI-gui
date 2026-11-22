@@ -203,6 +203,7 @@ impl FilesView {
                                             .quiet(cx)
                                             .xsmall()
                                             .icon(IconName::Plus)
+                                            .accessibility_label("Mention in chat")
                                             .tooltip("Mention in chat")
                                             .on_click(cx.listener(move |_, _, window, cx| {
                                                 window.prevent_default();

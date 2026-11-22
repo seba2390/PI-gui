@@ -97,6 +97,10 @@ impl ParsedDiff {
                 continue;
             }
             let (kind, body, numbers) = match line.as_bytes().first() {
+                // The diff was too big and was cut off (see `MAX_FILE_DIFF_BYTES`).
+                _ if line.starts_with(workspace::git::TRUNCATION_MARKER) => {
+                    (LineKind::Note, line, (None, None))
+                }
                 Some(b'+') => (LineKind::Added, &line[1..], (None, Some(new))),
                 Some(b'-') => (LineKind::Removed, &line[1..], (Some(old), None)),
                 Some(b'\\') => (LineKind::Note, line, (None, None)),

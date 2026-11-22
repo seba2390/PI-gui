@@ -10,8 +10,8 @@ use gpui_kit::*;
 use transcript::explore::{Group, RowRole};
 use transcript::tool::{self, DiffKind, PathContext};
 use transcript::{
-    AssistantItem, BlockKind, ItemKind, NoticeKind, RunStatus, ThinkingBlock, ToolBlock,
-    ToolStatus, TranscriptItem, format_duration,
+    AssistantItem, BlockKind, ItemKind, NestedEntry, NoticeKind, RunStatus, ThinkingBlock,
+    ToolBlock, ToolStatus, TranscriptItem, format_duration,
 };
 
 use super::session::{AfterFork, PiSession};
@@ -317,6 +317,7 @@ fn action_button(
         .quiet(app)
         .xsmall()
         .icon(Icon::from(icon))
+        .accessibility_label(tooltip)
         .tooltip(tooltip)
         .on_click(move |_, _, cx| session.update(cx, |session, cx| action(session, cx)))
 }
@@ -436,6 +437,9 @@ fn render_thinking(key: BlockKey, thinking: &ThinkingBlock, cx: &RowContext<'_>)
         .child(
             h_flex()
                 .id(element_id("thinking", key))
+                .role(Role::Button)
+                .aria_label(SharedString::from(label.clone()))
+                .aria_expanded(expanded)
                 .gap_1p5()
                 .text_sm()
                 .text_color(color)
@@ -500,6 +504,9 @@ fn render_group(group: &Group, cx: &RowContext<'_>) -> AnyElement {
 
     let header = h_flex()
         .id(element_id("explored", key))
+        .role(Role::Button)
+        .aria_label(SharedString::from(format!("Explored, {detail}")))
+        .aria_expanded(expanded)
         .items_start()
         .gap_2()
         .cursor_pointer()
@@ -596,11 +603,39 @@ fn render_tool(key: BlockKey, tool: &ToolBlock, cx: &RowContext<'_>) -> AnyEleme
     };
     let diff = tool::diff_lines(tool);
 
+    let nested_steps = tool
+        .nested
+        .iter()
+        .filter(|entry| matches!(entry, NestedEntry::Tool(_)))
+        .count();
+    // The latest step inside a running call (a subagent's or code mode's own tools).
+    let live_step = tool.nested.iter().rev().find_map(|entry| match entry {
+        NestedEntry::Tool(inner) => {
+            let header = tool::header(inner, cx.paths);
+            Some(
+                format!("{} {}", header.title, header.detail)
+                    .trim()
+                    .to_owned(),
+            )
+        }
+        NestedEntry::Text(_) => None,
+    });
     let summary: Option<SharedString> = match tool.status {
         ToolStatus::Streaming | ToolStatus::Pending => Some("Preparing…".into()),
+        ToolStatus::Running if !expanded && live_step.is_some() => Some(
+            format!(
+                "{} · {}",
+                plural(nested_steps, "step"),
+                live_step.unwrap_or_default()
+            )
+            .into(),
+        ),
         ToolStatus::Running if tool.output.is_empty() => Some("Running…".into()),
         ToolStatus::Cancelled => Some("Interrupted".into()),
         _ if expanded => None,
+        // A labelled call reads as what it did; its output shows only when expanded.
+        _ if labelled => None,
+        _ if nested_steps > 0 => Some(plural(nested_steps, "step").into()),
         _ => tool::result_summary(tool).map(Into::into).or_else(|| {
             (!tool.output.trim().is_empty() && diff.is_none()).then(|| preview(&tool.output).into())
         }),
@@ -611,6 +646,13 @@ fn render_tool(key: BlockKey, tool: &ToolBlock, cx: &RowContext<'_>) -> AnyEleme
         .child(
             h_flex()
                 .id(element_id("tool", key))
+                .role(Role::Button)
+                .aria_label(SharedString::from(
+                    format!("{} {}", header.title, header.detail)
+                        .trim()
+                        .to_owned(),
+                ))
+                .aria_expanded(expanded)
                 .items_start()
                 .gap_2()
                 .cursor_pointer()
@@ -644,7 +686,16 @@ fn render_tool(key: BlockKey, tool: &ToolBlock, cx: &RowContext<'_>) -> AnyEleme
                                 .font_family(cx.mono.clone())
                                 .text_color(cx.muted)
                                 .child(header.detail),
-                        ),
+                        )
+                        .when(labelled, |this| {
+                            this.child(
+                                div()
+                                    .flex_none()
+                                    .mt(px(3.))
+                                    .text_color(cx.palette.subtle)
+                                    .child(chevron(expanded)),
+                            )
+                        }),
                 )
                 .when_some(tool.duration_ms.filter(|ms| *ms >= 1_000), |this, ms| {
                     this.child(
@@ -713,8 +764,61 @@ fn render_tool(key: BlockKey, tool: &ToolBlock, cx: &RowContext<'_>) -> AnyEleme
                     .child("(no output)")
                     .into_any_element(),
             };
-            this.child(div().pl(px(15.)).child(body))
+            this.when(!tool.nested.is_empty(), |this| {
+                this.child(render_nested(&tool.nested, cx))
+            })
+            .child(div().pl(px(15.)).child(body))
         })
+        .into_any_element()
+}
+
+/// The steps inside an expanded tool call: each nested call as a compact row, and what a
+/// nested assistant replied.
+fn render_nested(nested: &[NestedEntry], cx: &RowContext<'_>) -> AnyElement {
+    let rows = nested.iter().map(|entry| match entry {
+        NestedEntry::Tool(inner) => {
+            let header = tool::header(inner, cx.paths);
+            let dot = match inner.status {
+                ToolStatus::Done => cx.palette.success,
+                ToolStatus::Failed => cx.palette.error,
+                ToolStatus::Cancelled => cx.palette.subtle,
+                _ => cx.palette.accent,
+            };
+            h_flex()
+                .gap_1p5()
+                .items_center()
+                .text_xs()
+                .child(div().size(px(5.)).flex_none().rounded_full().bg(dot))
+                .child(
+                    div()
+                        .flex_none()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(cx.foreground)
+                        .child(header.title),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .font_family(cx.mono.clone())
+                        .text_color(cx.muted)
+                        .child(header.detail),
+                )
+                .into_any_element()
+        }
+        NestedEntry::Text(text) => div()
+            .text_xs()
+            .text_color(cx.muted)
+            .child(text.clone())
+            .into_any_element(),
+    });
+    v_flex()
+        .pl(px(15.))
+        .ml(px(3.))
+        .border_l_1()
+        .border_color(cx.palette.subtle.opacity(0.4))
+        .gap_1()
+        .child(v_flex().pl_2().gap_1().children(rows))
         .into_any_element()
 }
 

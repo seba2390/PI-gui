@@ -92,6 +92,10 @@ pub fn change_diff_at(
     )
 }
 
+/// Most bytes of one file's diff that are read: a huge generated file or data dump would
+/// otherwise be read (and over SSH transferred) in full on every refresh.
+pub const MAX_FILE_DIFF_BYTES: usize = 2 * 1024 * 1024;
+
 fn diff_one(
     loc: &Location,
     root: &Path,
@@ -99,8 +103,14 @@ fn diff_one(
     rel: &Path,
     kind: &ChangeKind,
 ) -> Result<String, WorkspaceError> {
-    let out = if *kind == ChangeKind::Untracked {
-        command::run_ok(loc, root, untracked_diff_args(rel), NO_INDEX_OK)?
+    let (out, truncated) = if *kind == ChangeKind::Untracked {
+        command::run_capped(
+            loc,
+            root,
+            untracked_diff_args(rel),
+            MAX_FILE_DIFF_BYTES,
+            NO_INDEX_OK,
+        )?
     } else {
         let base = diff_base(loc, root, has_commits)?;
         let mut paths = vec![rel];
@@ -108,9 +118,32 @@ fn diff_one(
             // Both sides must be in the pathspec for git to pair them up as a rename.
             paths.insert(0, from.as_path());
         }
-        command::run_ok(loc, root, tracked_diff_args(&base, &paths), &[0])?
+        command::run_capped(
+            loc,
+            root,
+            tracked_diff_args(&base, &paths),
+            MAX_FILE_DIFF_BYTES,
+            &[0],
+        )?
     };
-    Ok(String::from_utf8_lossy(&out).into_owned())
+    Ok(finish_capped(out, truncated, MAX_FILE_DIFF_BYTES))
+}
+
+/// Text of capped git output: cut at the last whole line, with a [`TRUNCATION_MARKER`] line.
+fn finish_capped(mut buf: Vec<u8>, truncated: bool, max_bytes: usize) -> String {
+    if truncated {
+        // Drop the partial last line so the diff stays parseable.
+        let keep = buf.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+        buf.truncate(keep);
+    }
+    let mut text = String::from_utf8_lossy(&buf).into_owned();
+    if truncated {
+        let _ = writeln!(
+            text,
+            "{TRUNCATION_MARKER} output exceeded {max_bytes} bytes]"
+        );
+    }
+    text
 }
 
 /// Unified diff of every change in the repository containing `cwd`: tracked changes versus HEAD
@@ -165,19 +198,7 @@ pub fn full_diff_at(
         }
     }
 
-    if truncated {
-        // Drop the partial last line so the diff stays parseable.
-        let keep = buf.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
-        buf.truncate(keep);
-    }
-    let mut text = String::from_utf8_lossy(&buf).into_owned();
-    if truncated {
-        let _ = writeln!(
-            text,
-            "{TRUNCATION_MARKER} output exceeded {max_bytes} bytes]"
-        );
-    }
-    Ok(text)
+    Ok(finish_capped(buf, truncated, max_bytes))
 }
 
 fn tracked_diff_args(base: &str, paths: &[&Path]) -> Vec<OsString> {
