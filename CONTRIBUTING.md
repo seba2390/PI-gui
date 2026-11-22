@@ -73,14 +73,16 @@ Updates…" treat the latest release as new.
 **Separate state.** Setting `PI_CODING_AGENT_DIR` to a scratch folder runs the app with its
 own state, so it won't touch your normal pi sessions or settings.
 
-**The README demo.** `script/demo/record-demo.sh` re-records `docs/media/demo.mp4` and
-`docs/media/demo-hero.gif` after UI changes. It needs [OpenScreen](https://getopenscreen.com)
-(`brew install --cask openscreen`), `ffmpeg` and `gifski`, plus the model named in
+**The README demo.** `script/demo/record-demo.sh` re-records `docs/media/demo.mp4` after UI
+changes. It needs [OpenScreen](https://getopenscreen.com) (`brew install --cask openscreen`) and
+`ffmpeg` (`gifski` too for `post.sh --gif`, a short looping GIF), plus the model named in
 `script/demo/readme-demo.toml`. It sets up an isolated agent dir and a demo project in `/tmp`,
 plays the storyboard in the app's demo mode (`PISTACHIO_DEMO=<storyboard.toml>`, see
 `crates/app/src/demo`) while OpenScreen records the window, then edits the take
 (`script/demo/post.py`). Leave the mouse and keyboard alone while it records. The steps also run
-on their own: `setup.sh`, `record.sh` and `post.sh` in `script/demo/`.
+on their own: `setup.sh`, `record.sh` and `post.sh` in `script/demo/`. GitHub only plays videos
+uploaded to it, so after re-recording, drag the new `demo.mp4` into a comment box on github.com
+(without posting) and put the link it creates at the top of the README.
 
 ## Tests against real hosts
 

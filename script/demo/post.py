@@ -9,9 +9,9 @@ Reads the take's timeline (written by the app's demo mode) and OpenScreen projec
      between the `cut_out` and `cut_in` markers,
   3. renders it with `openscreen export`,
   4. crossfades the cut and encodes docs/media/demo.mp4 (H.264, no audio, faststart, size-capped),
-  5. builds docs/media/demo-hero.gif with gifski.
+  5. with --gif, also builds a short looping docs/media/demo-hero.gif with gifski.
 
-Usage: script/demo/post.py [--work DIR] [--out DIR] [--sync-ms N] [--no-gif]
+Usage: script/demo/post.py [--work DIR] [--out DIR] [--sync-ms N] [--gif]
 """
 
 from __future__ import annotations
@@ -389,7 +389,7 @@ def main() -> None:
         "--sync-ms", type=int, default=int(os.environ.get("DEMO_SYNC_MS", 150)),
         help="added to the measured offset between the recording and the timeline",
     )
-    parser.add_argument("--no-gif", action="store_true")
+    parser.add_argument("--gif", action="store_true", help="also build the short hero GIF")
     args = parser.parse_args()
     work: Path = args.work
 
@@ -415,7 +415,7 @@ def main() -> None:
     cut_s = edit.output_s(edit.cut) if edit.cut is not None else None
     encode_final(edited, final, cut_s)
     print(f"mp4: {duration_s(final):.1f} s, {final.stat().st_size / 1e6:.1f} MB")
-    if not args.no_gif:
+    if args.gif:
         # From a full-resolution render of the same edit, so the GIF is sharp.
         sharp = work / "edited-source.mp4"
         export(project_path, sharp, quality="source")
