@@ -52,6 +52,7 @@ cargo test --workspace
 script/bundle-macos.sh [debug|release]   # wrap the binary in Pistachio.app (macOS)
 script/shot.sh <folder> out.png terminal,diff   # relaunch the debug app and screenshot it
 script/measure-memory.sh                 # memory of a running instance and its pi children
+script/perf.sh [release|debug] [runs] [baseline.json]   # time startup, navigation and quitting
 script/make-icon.sh                      # regenerate the .icns / PNG from icon.svg
 script/set-version.sh 0.5.0              # bump the version (Cargo.toml, Cargo.lock, README install links)
 ```
@@ -74,6 +75,14 @@ checks scriptable:
   sidebar's typing animation for the open session 2.5 s after start (nothing is saved).
 - SSH: `ssh:<alias>`, `remote:<alias>:<folder>` and `remote-latest:<alias>` open a remote
   session once connected. Panels listed after them apply to that session.
+
+**Response times.** `script/perf.sh` builds the app and runs a fixed navigation script
+(`PISTACHIO_BENCH=1`, see `crates/app/src/perf/bench.rs`) against generated sessions in a
+private pi folder, then prints the median time from each input to the frame that shows its
+response on screen, plus startup phases, the time to quit and render times per view. Pass the
+`summary.json` of an earlier run to compare. The window takes focus for about 20 s per run, and
+each run moves one generated session to the Trash. `PISTACHIO_PERF=<file.jsonl>` records the
+same measurements in a normal session.
 
 **Update prompt.** In debug builds, `PISTACHIO_PRETEND_VERSION=0.0.1` makes "Check for
 Updates…" treat the latest release as new.

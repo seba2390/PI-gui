@@ -10,9 +10,19 @@ All notable changes to PI-gui are listed here. The format follows
 
 - The default text size is larger (the old Large); the picker gains a Larger step and your
   current size is kept.
+- Faster: the window appears sooner (about 235 ms instead of 450 ms in the benchmark; it no
+  longer waits for the login shell's environment), and long conversations no longer lay out
+  every message in one frame when opened or when the chat column changes width, so opening a
+  conversation and toggling the sidebar or side panel take about half as long.
+- A window that is not focused redraws at up to 60 fps instead of 30, so hovering it reacts
+  sooner.
 
 ### Fixed
 
+- Deleting a session no longer freezes the window while Finder moves the file to the Trash:
+  the row goes at once.
+- Settings… and Check for Updates… in the app menu (and shortcuts like ⌘N) work right after
+  launch instead of staying greyed out until something in the window was clicked.
 - A turn's copy and branch buttons show while the pointer is anywhere in its answer, not only
   over the "Worked for" row.
 
