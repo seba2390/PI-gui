@@ -22,14 +22,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
-      # sherpa-onnx-sys downloads its prebuilt libraries into target/sherpa-onnx-prebuilt,
-      # which rust-cache does not keep, while it does keep the build script's fingerprint:
-      # without the folder the download is skipped and linking fails. Rebuild the crate then.
+      # sherpa-onnx-sys downloads its prebuilt libraries into target/sherpa-onnx-prebuilt and
+      # skips the download whenever that folder's lib/ exists. rust-cache keeps the folder and
+      # the build script's fingerprint but not the library files, so linking then fails. If
+      # the library itself is missing, drop the folder and the crate's build outputs.
       - name: Re-fetch sherpa-onnx libraries the cache dropped
         shell: bash
         run: |
-            if [ ! -d target/sherpa-onnx-prebuilt ]; then
-              rm -rf target/*/build/sherpa-onnx-sys-* target/*/.fingerprint/sherpa-onnx-sys-* \
+            if ! ls target/sherpa-onnx-prebuilt/*/lib/*sherpa-onnx-c-api* >/dev/null 2>&1; then
+              rm -rf target/sherpa-onnx-prebuilt \
+                target/*/build/sherpa-onnx-sys-* target/*/.fingerprint/sherpa-onnx-sys-* \
                 target/*/*/build/sherpa-onnx-sys-* target/*/*/.fingerprint/sherpa-onnx-sys-*
             fi
       - run: cargo build --release --locked --target aarch64-apple-darwin
@@ -73,14 +75,16 @@ jobs:
             libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev \
             libx11-xcb-dev libxcb1-dev libfontconfig-dev libfreetype-dev libzstd-dev libasound2-dev rpm
       - uses: Swatinem/rust-cache@v2
-      # sherpa-onnx-sys downloads its prebuilt libraries into target/sherpa-onnx-prebuilt,
-      # which rust-cache does not keep, while it does keep the build script's fingerprint:
-      # without the folder the download is skipped and linking fails. Rebuild the crate then.
+      # sherpa-onnx-sys downloads its prebuilt libraries into target/sherpa-onnx-prebuilt and
+      # skips the download whenever that folder's lib/ exists. rust-cache keeps the folder and
+      # the build script's fingerprint but not the library files, so linking then fails. If
+      # the library itself is missing, drop the folder and the crate's build outputs.
       - name: Re-fetch sherpa-onnx libraries the cache dropped
         shell: bash
         run: |
-            if [ ! -d target/sherpa-onnx-prebuilt ]; then
-              rm -rf target/*/build/sherpa-onnx-sys-* target/*/.fingerprint/sherpa-onnx-sys-* \
+            if ! ls target/sherpa-onnx-prebuilt/*/lib/*sherpa-onnx-c-api* >/dev/null 2>&1; then
+              rm -rf target/sherpa-onnx-prebuilt \
+                target/*/build/sherpa-onnx-sys-* target/*/.fingerprint/sherpa-onnx-sys-* \
                 target/*/*/build/sherpa-onnx-sys-* target/*/*/.fingerprint/sherpa-onnx-sys-*
             fi
       - uses: taiki-e/install-action@v2
@@ -122,14 +126,16 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # sherpa-onnx-sys downloads its prebuilt libraries into target/sherpa-onnx-prebuilt,
-      # which rust-cache does not keep, while it does keep the build script's fingerprint:
-      # without the folder the download is skipped and linking fails. Rebuild the crate then.
+      # sherpa-onnx-sys downloads its prebuilt libraries into target/sherpa-onnx-prebuilt and
+      # skips the download whenever that folder's lib/ exists. rust-cache keeps the folder and
+      # the build script's fingerprint but not the library files, so linking then fails. If
+      # the library itself is missing, drop the folder and the crate's build outputs.
       - name: Re-fetch sherpa-onnx libraries the cache dropped
         shell: bash
         run: |
-            if [ ! -d target/sherpa-onnx-prebuilt ]; then
-              rm -rf target/*/build/sherpa-onnx-sys-* target/*/.fingerprint/sherpa-onnx-sys-* \
+            if ! ls target/sherpa-onnx-prebuilt/*/lib/*sherpa-onnx-c-api* >/dev/null 2>&1; then
+              rm -rf target/sherpa-onnx-prebuilt \
+                target/*/build/sherpa-onnx-sys-* target/*/.fingerprint/sherpa-onnx-sys-* \
                 target/*/*/build/sherpa-onnx-sys-* target/*/*/.fingerprint/sherpa-onnx-sys-*
             fi
       - run: cargo build --release --locked
