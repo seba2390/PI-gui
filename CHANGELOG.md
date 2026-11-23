@@ -49,6 +49,8 @@ All notable changes to PI-gui are listed here. The format follows
 
 ### Fixed
 
+- Opening a long conversation, the scrollbar now spans all of it from the start, instead of
+  starting too big and shrinking and jumping as you scroll up.
 - Clicking the conversation already behind the Settings or Skills page (or the Chat / Code
   mode already in use) did nothing; it now closes the page and shows the conversation.
 

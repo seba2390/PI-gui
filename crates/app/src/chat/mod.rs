@@ -15,7 +15,6 @@ pub mod session;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use gpui_kit::component::message_scroller::{MessageScroller, MessageScrollerState};
 use gpui_kit::component::text::{TextView, TextViewState};
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -27,6 +26,7 @@ pub use composer::ComposerEvent;
 use session::{PiSession, SessionEvent};
 
 use crate::theme::palette;
+use crate::ui::{MessageScroller, MessageScrollerState};
 
 actions!(chat, [ToggleThinking, ToggleToolOutput]);
 
@@ -54,6 +54,8 @@ pub struct BlockKey {
 struct Markdown {
     state: Entity<TextViewState>,
     source_len: usize,
+    /// Remeasures the block's row when a parse lands (see [`ChatView::new_markdown`]).
+    _parsed: Subscription,
 }
 
 #[derive(Debug, Clone)]
@@ -473,14 +475,8 @@ impl ChatView {
                     markdown.source_len = text.len();
                 }
                 (None, _) => {
-                    let state = cx.new(|cx| TextViewState::markdown(&text, cx).selectable(true));
-                    self.markdown.insert(
-                        key,
-                        Markdown {
-                            state,
-                            source_len: text.len(),
-                        },
-                    );
+                    let markdown = Self::new_markdown(key, &text, text.len(), cx);
+                    self.markdown.insert(key, markdown);
                 }
             }
         }
@@ -495,14 +491,8 @@ impl ChatView {
                     markdown.source_len = text.len();
                 }
                 None => {
-                    let state = cx.new(|cx| TextViewState::markdown(&source, cx).selectable(true));
-                    self.markdown.insert(
-                        key,
-                        Markdown {
-                            state,
-                            source_len: text.len(),
-                        },
-                    );
+                    let markdown = Self::new_markdown(key, &source, text.len(), cx);
+                    self.markdown.insert(key, markdown);
                 }
             }
         }
@@ -559,6 +549,52 @@ impl ChatView {
         // Matches move with the transcript (new text, a reload).
         self.refresh_find(cx);
         cx.notify();
+    }
+
+    /// A selectable markdown view of `source` for block `key`; `source_len` is the length of
+    /// the transcript text it shows (kept to stream appends in).
+    fn new_markdown(
+        key: BlockKey,
+        source: &str,
+        source_len: usize,
+        cx: &mut Context<Self>,
+    ) -> Markdown {
+        let state = cx.new(|cx| TextViewState::markdown(source, cx).selectable(true));
+        // The scroller measures every row once, those above the viewport included, so its
+        // scrollbar is right from the first frame. gpui-kit parses a text over 4 KB in the
+        // background, so such a row is first measured before its parse lands and would
+        // keep that height until scrolled into view. Remeasure it when a parse lands: the
+        // source of the parsed text changes then, and only then (selection and find
+        // highlights notify too).
+        let mut parsed = state.read(cx).rendered_text().source().len();
+        let observer = cx.observe(&state, move |this, state, cx| {
+            let len = state.read(cx).rendered_text().source().len();
+            if len != parsed {
+                parsed = len;
+                this.remeasure_item(key.item, cx);
+            }
+        });
+        Markdown {
+            state,
+            source_len,
+            _parsed: observer,
+        }
+    }
+
+    /// Measures the row of transcript item `item` again (its height changed).
+    fn remeasure_item(&mut self, item: ItemId, cx: &mut Context<Self>) {
+        let row = self
+            .session
+            .read(cx)
+            .transcript()
+            .items()
+            .iter()
+            .position(|candidate| candidate.id == item);
+        if let Some(row) = row {
+            self.scroller.update(cx, |scroller, cx| {
+                scroller.remeasure_items(row..row + 1, cx);
+            });
+        }
     }
 
     pub(crate) fn is_expanded(&self, key: BlockKey, is_thinking: bool) -> bool {
