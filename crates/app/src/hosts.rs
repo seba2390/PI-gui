@@ -89,6 +89,8 @@ struct HostSessions {
 
 pub struct Hosts {
     store: HostStore,
+    /// Where `store` is saved (nowhere in tests).
+    path: Option<PathBuf>,
     status: HashMap<HostId, HostStatus>,
     probes: HashMap<HostId, Probe>,
     /// One `Ssh` per host, shared so remote [`workspace::Location`]s compare equal.
@@ -139,6 +141,7 @@ impl Hosts {
     pub fn for_tests(hosts: Vec<SavedHost>) -> Self {
         Self {
             store: HostStore { hosts },
+            path: None,
             status: HashMap::new(),
             probes: HashMap::new(),
             ssh: HashMap::new(),
@@ -163,9 +166,8 @@ impl Hosts {
     }
 
     fn new(cx: &mut Context<Self>) -> Self {
-        let store = HostStore::path()
-            .map(|path| HostStore::load(&path))
-            .unwrap_or_default();
+        let path = HostStore::path();
+        let store = path.as_deref().map(HostStore::load).unwrap_or_default();
         // Close shared connections when the app quits (they would linger for ControlPersist).
         cx.on_app_quit(|this, _| {
             let ssh: Vec<Arc<Ssh>> = this
@@ -241,6 +243,7 @@ impl Hosts {
 
         let mut this = Self {
             store,
+            path,
             status: HashMap::new(),
             probes: HashMap::new(),
             ssh: HashMap::new(),
@@ -419,6 +422,59 @@ impl Hosts {
         cx.notify();
     }
 
+    /// Changes what a saved host connects to. What is known about the old one (its status and
+    /// sessions) is dropped; a host that was on is connected again with the new settings.
+    pub fn set_target(&mut self, id: &HostId, target: Target, cx: &mut Context<Self>) {
+        let Some(host) = self.store.get(id) else {
+            return;
+        };
+        if host.target == target {
+            return;
+        }
+        let status = self.status(id);
+        let was_on = status.is_connected() || status.is_busy();
+        let was_turned_off = self.is_turned_off(id);
+        self.disconnect(id, cx);
+        let old = self.ssh.remove(id);
+        if let Some(host) = self.store.get_mut(id) {
+            host.target = target;
+        }
+        if was_turned_off && let Some(ssh) = self.ssh_mut(id) {
+            ssh.close();
+        }
+        self.probes.remove(id);
+        self.links.remove(id);
+        self.sessions.remove(id);
+        self.save(cx);
+        cx.emit(HostsEvent::Changed);
+        cx.emit(HostsEvent::SessionsChanged(id.clone()));
+        cx.notify();
+        let Some(old) = old.filter(|_| was_on) else {
+            return;
+        };
+        // The new settings may use the same control socket: end the old connection first.
+        let (id, attempt) = (id.clone(), self.attempt(id));
+        let task = cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .spawn(async move { old.disconnect_closed() })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.attempt(&id) == attempt {
+                    this.connect(&id, false, cx);
+                }
+            });
+        });
+        self._tasks.retain(|task| !task.is_ready());
+        self._tasks.push(task);
+    }
+
+    /// The saved host, other than `id`, that already connects to `target`.
+    pub fn other_with_target(&self, id: &HostId, target: &Target) -> Option<&SavedHost> {
+        self.hosts()
+            .iter()
+            .find(|host| host.id != *id && host.target == *target)
+    }
+
     /// Remembers `folder` as the host's most recent folder.
     pub fn touch_folder(&mut self, id: &HostId, folder: &str, cx: &mut Context<Self>) {
         self.store.touch_folder(id, folder);
@@ -426,7 +482,7 @@ impl Hosts {
     }
 
     fn save(&self, cx: &mut Context<Self>) {
-        let (Some(path), store) = (HostStore::path(), self.store.clone()) else {
+        let (Some(path), store) = (self.path.clone(), self.store.clone()) else {
             return;
         };
         crate::persist::save_in_background(cx, path, move |path| store.save(path));
@@ -1012,6 +1068,39 @@ mod tests {
             assert_eq!(hosts.status(&id), HostStatus::Idle);
             assert!(!hosts.set_attempt_status(&id, attempt, HostStatus::Connected, cx));
             assert_eq!(hosts.status(&id), HostStatus::Idle);
+        });
+    }
+
+    /// Changing what a host connects to drops everything known about the old one.
+    #[gpui_kit::test]
+    #[allow(clippy::unused_async)] // gpui tests take an async body
+    async fn a_changed_target_starts_over(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let alias = |alias: &str| remote::Target::Alias {
+            alias: alias.to_owned(),
+        };
+        let mut store = remote::HostStore::default();
+        let id = store.add("one".into(), alias("pistachio-one.invalid"));
+        let other = store.add("two".into(), alias("pistachio-two.invalid"));
+        let hosts = cx.new(|_| Hosts::for_tests(store.hosts));
+        hosts.update(cx, |hosts, cx| {
+            // Never connected: it stays off, and is not "turned off" for the new target.
+            let old = hosts.ssh_mut(&id).unwrap();
+            hosts.set_target(&id, alias("pistachio-three.invalid"), cx);
+            assert!(old.is_closed());
+            assert_eq!(hosts.status(&id), HostStatus::Idle);
+            assert!(!hosts.is_turned_off(&id));
+            let new = hosts.ssh_mut(&id).unwrap();
+            assert_eq!(new.target(), &alias("pistachio-three.invalid"));
+            assert_eq!(hosts.get(&id).unwrap().label, "one");
+            // Turned off, it stays so.
+            hosts.disconnect(&id, cx);
+            hosts.set_target(&id, alias("pistachio-four.invalid"), cx);
+            assert!(hosts.is_turned_off(&id));
+            let taken = hosts.other_with_target(&id, &alias("pistachio-two.invalid"));
+            assert_eq!(taken.map(|host| host.id.clone()), Some(other.clone()));
+            let own = hosts.get(&id).unwrap().target.clone();
+            assert!(hosts.other_with_target(&id, &own).is_none());
         });
     }
 

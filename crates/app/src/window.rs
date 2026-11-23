@@ -27,8 +27,8 @@ use crate::config::AppConfig;
 use crate::hosts::HostsEvent;
 use crate::panels::{RightPanel, RightPanelEvent, RightTab, TerminalPanel, TerminalPanelEvent};
 use crate::remote_ui::{
-    AddHost, AddHostEvent, ConnectFlow, ConnectFlowEvent, ManageHosts, ManageHostsEvent,
-    SavedHostAction,
+    AddHost, AddHostEvent, ConnectFlow, ConnectFlowEvent, EditHost, EditHostEvent, ManageHosts,
+    ManageHostsEvent, SavedHostAction,
 };
 use crate::settings::AppSettings;
 use crate::settings::view::{SettingsEvent, SettingsView};
@@ -961,7 +961,13 @@ impl MainWindow {
         let target = Some(summary.path.clone());
         let same = |chat: &Entity<ChatView>, cx: &App| {
             let session = chat.read(cx).session().read(cx);
-            session.session_file() == target && session.host() == host.as_ref()
+            // One whose connection ended is started again (Reconnect).
+            let ended = session.host().is_some()
+                && matches!(
+                    session.lifecycle(),
+                    crate::chat::session::Lifecycle::Exited { .. }
+                );
+            session.session_file() == target && session.host() == host.as_ref() && !ended
         };
         if same(&self.chat, cx) {
             return self.chat.clone();
@@ -1538,29 +1544,88 @@ impl MainWindow {
             SavedHostAction::Rename(host) => {
                 crate::remote_ui::open_rename_host(host, window, cx);
             }
-            SavedHostAction::Change(host) => {
-                crate::remote_ui::open_change_host(host, window, cx);
-            }
+            SavedHostAction::Change(host) => self.open_edit_host(host, window, cx),
             SavedHostAction::Remove(host) => {
                 crate::remote_ui::confirm_remove_host(host, window, cx);
             }
         }
     }
 
+    /// "Change…" of a saved connection: the form its settings are edited in.
+    fn open_edit_host(&mut self, host: &HostId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(edit) = EditHost::new(host, window, cx) else {
+            return;
+        };
+        let label = crate::hosts::hosts(cx).read(cx).label(host);
+        self.dialog_subscription = Some(cx.subscribe_in(
+            &edit,
+            window,
+            |this, _, event: &EditHostEvent, window, cx| {
+                window.close_dialog(cx);
+                let EditHostEvent::Save(edit) = event;
+                let edit = edit.clone();
+                if edit.reconnects(cx) {
+                    let host = edit.host.clone();
+                    this.with_connection_closed(
+                        &host,
+                        "Reconnect",
+                        move |cx| edit.apply(cx),
+                        window,
+                        cx,
+                    );
+                } else {
+                    edit.apply(cx);
+                }
+            },
+        ));
+        window.open_dialog(cx, move |dialog, _, _| {
+            dialog
+                .title(format!("Change {label}"))
+                .w(px(480.))
+                .child(edit.clone())
+        });
+    }
+
     /// Turns `host`'s connection off, asking first when pi is working there.
     fn disconnect_host(&mut self, host: &HostId, window: &mut Window, cx: &mut Context<Self>) {
+        let id = host.clone();
+        self.with_connection_closed(
+            host,
+            "Disconnect",
+            move |cx| {
+                crate::hosts::hosts(cx).update(cx, |hosts, cx| hosts.disconnect(&id, cx));
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// Does `then`, which closes `host`'s connection, after asking ("Disconnect" or
+    /// "Reconnect") when pi is working there.
+    fn with_connection_closed(
+        &mut self,
+        host: &HostId,
+        verb: &'static str,
+        then: impl Fn(&mut App) + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let working = std::iter::once(&self.chat)
             .chain(self.background.iter().map(|(chat, _)| chat))
             .filter(|chat| {
                 chat.read(cx).session().read(cx).host() == Some(host) && keeps_working(chat, cx)
             })
             .count();
-        let hosts = crate::hosts::hosts(cx);
         if working == 0 {
-            hosts.update(cx, |hosts, cx| hosts.disconnect(host, cx));
+            then(cx);
             return;
         }
-        let label = hosts.read(cx).label(host);
+        let label = crate::hosts::hosts(cx).read(cx).label(host);
+        let title = if verb == "Disconnect" {
+            format!("Disconnect from {label}?")
+        } else {
+            format!("Reconnect to {label}?")
+        };
         let description = if working == 1 {
             "pi is working in a session there and stops. You can resume the session later."
                 .to_owned()
@@ -1569,17 +1634,17 @@ impl MainWindow {
                 "pi is working in {working} sessions there and stops. You can resume them later."
             )
         };
-        let host = host.clone();
+        let then = std::rc::Rc::new(then);
         window.open_alert_dialog(cx, move |alert, _, _| {
-            let host = host.clone();
+            let then = then.clone();
             alert
-                .title(format!("Disconnect from {label}?"))
+                .title(title.clone())
                 .description(description.clone())
                 .confirm()
-                .ok_text("Disconnect")
+                .ok_text(verb)
                 .ok_variant(component::button::ButtonVariant::Danger)
                 .on_ok(move |_, _, cx| {
-                    crate::hosts::hosts(cx).update(cx, |hosts, cx| hosts.disconnect(&host, cx));
+                    then(cx);
                     true
                 })
         });

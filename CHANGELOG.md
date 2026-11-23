@@ -9,8 +9,10 @@ All notable changes to PI-gui are listed here. The format follows
 ### Changed
 
 - Settings → SSH connections: each saved connection has a switch that connects it and turns it
-  off again, and a "⋮" menu with Rename, Change (the command that starts pi) and Remove. "+"
-  below the list adds one. Turning a connection off ends everything running over it (it asks
+  off again, and a "⋮" menu with Rename, Change and Remove. Change edits what "Add SSH
+  connection" asks for (host, user, port, key file, jump host) and the command that starts pi.
+  A host from `~/.ssh/config` shows the config's values; what you change is saved in Pistachio
+  and the file is left as it is. "+" below the list adds one. Turning a connection off ends everything running over it (it asks
   first when pi is working there), also stops one that is still connecting, and nothing in the
   background connects again until you turn it on or reconnect.
 - macOS builds are for Apple Silicon only: the download is now `Pistachio-…-macos-arm64.zip`,
@@ -19,6 +21,11 @@ All notable changes to PI-gui are listed here. The format follows
   universal download, so it says so and keeps the version they have. On Apple Silicon,
   Homebrew installs update as before; a copy installed from the zip updates to 0.4.7 once by
   hand (Update in 0.4.6 looks for the universal zip), and with Update from then on.
+
+### Fixed
+
+- Reconnect starts pi again in an SSH session whose connection ended; it connected to the host
+  but left the stopped session as it was.
 
 ## [0.4.6] - 2026-11-23
 

@@ -30,7 +30,9 @@ pub mod sessions;
 pub mod ssh;
 
 pub use askpass::{AskpassServer, Prompt};
-pub use config::{ConfigHost, Resolved, discover_hosts, parse_config, resolve};
+pub use config::{
+    ConfigHost, ConfigValues, Resolved, config_values, discover_hosts, parse_config, resolve,
+};
 pub use error::{RemoteError, classify};
 pub use host::{HostId, HostStore, SavedHost, Target};
 pub use link::MANAGED_AGENT_DIR;

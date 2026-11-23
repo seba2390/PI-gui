@@ -4,17 +4,18 @@
 
 mod add_host;
 mod connect;
+mod edit_host;
+mod host_form;
 mod manage;
 mod prompt;
 mod saved_hosts;
 
 pub use add_host::{AddHost, AddHostEvent};
 pub use connect::{ConnectFlow, ConnectFlowEvent};
+pub use edit_host::{EditHost, EditHostEvent};
 pub use manage::{ManageHosts, ManageHostsEvent};
 pub use prompt::open_prompt;
-pub use saved_hosts::{
-    SavedHostAction, confirm_remove_host, open_change_host, open_rename_host, saved_hosts,
-};
+pub use saved_hosts::{SavedHostAction, confirm_remove_host, open_rename_host, saved_hosts};
 
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::*;

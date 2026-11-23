@@ -166,47 +166,13 @@ pub fn open_rename_host(host: &HostId, window: &mut Window, cx: &mut App) {
     let input = cx.new(|cx| InputState::new(window, cx).default_value(label));
     let host = host.clone();
     open_input_dialog(
-        "Rename connection".into(),
-        None,
+        "Rename connection",
         input,
         move |name, cx| {
             if name.trim().is_empty() {
                 return false;
             }
             hosts(cx).update(cx, |hosts, cx| hosts.rename(&host, name, cx));
-            true
-        },
-        window,
-        cx,
-    );
-}
-
-/// Asks for the command that starts pi on `host`.
-pub fn open_change_host(host: &HostId, window: &mut Window, cx: &mut App) {
-    let (label, command, address) = {
-        let hosts = hosts(cx);
-        let hosts = hosts.read(cx);
-        let Some(saved) = hosts.get(host) else {
-            return;
-        };
-        (
-            saved.label.clone(),
-            saved.pi_command.clone().unwrap_or_default(),
-            saved.target.display(),
-        )
-    };
-    let input = cx.new(|cx| {
-        InputState::new(window, cx)
-            .placeholder("pi (installed automatically when missing)")
-            .default_value(command)
-    });
-    let host = host.clone();
-    open_input_dialog(
-        format!("Change {label}").into(),
-        Some(format!("Command that starts pi on {address}").into()),
-        input,
-        move |command, cx| {
-            hosts(cx).update(cx, |hosts, cx| hosts.set_pi_command(&host, command, cx));
             true
         },
         window,
@@ -235,8 +201,7 @@ pub fn confirm_remove_host(host: &HostId, window: &mut Window, cx: &mut App) {
 
 /// A dialog with one text field; Save and Enter close it when `save` takes the text.
 fn open_input_dialog(
-    title: SharedString,
-    field_label: Option<SharedString>,
+    title: &'static str,
     input: Entity<InputState>,
     save: impl Fn(String, &mut App) -> bool + 'static,
     window: &mut Window,
@@ -263,20 +228,12 @@ fn open_input_dialog(
         .detach();
     }
     input.update(cx, |input, cx| input.focus(window, cx));
-    window.open_dialog(cx, move |dialog, _, cx| {
-        let muted = cx.theme().muted_foreground;
+    window.open_dialog(cx, move |dialog, _, _| {
         let submit = submit.clone();
         dialog
-            .title(title.clone())
+            .title(title)
             .w(px(420.))
-            .child(
-                v_flex()
-                    .gap_1()
-                    .when_some(field_label.clone(), |this, label| {
-                        this.child(div().text_xs().text_color(muted).child(label))
-                    })
-                    .child(Input::new(&input)),
-            )
+            .child(Input::new(&input))
             .footer(
                 h_flex()
                     .w_full()
