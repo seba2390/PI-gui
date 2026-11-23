@@ -37,6 +37,8 @@ use crate::ui::{AppIcon, TOP_BAR_HEIGHT, TRAFFIC_LIGHT_INSET, WindowDrag};
 use crate::ui_state::{LastSession, UiState};
 use remote::HostId;
 
+mod update_prompt;
+
 /// Registers the window's key bindings and global models, once per process.
 pub fn init(cx: &mut App) {
     crate::chat::init(cx);
@@ -187,6 +189,8 @@ pub struct MainWindow {
     demo: Option<(Entity<crate::demo::DemoCursor>, Task<()>)>,
     /// `PISTACHIO_BENCH`: the navigation benchmark being run.
     bench: Option<Task<()>>,
+    /// The update prompt or "What's new" card over the chat column.
+    update_prompt: Option<update_prompt::Prompt>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -291,6 +295,12 @@ impl MainWindow {
                     this.reopen_last_local_session(window, cx);
                 }
                 this.open_panels(&open_at_startup, window, cx);
+                if !scripted {
+                    this.show_whats_new_if_updated(window, cx);
+                    cx.background_executor()
+                        .spawn(async { crate::updater::clean_up() })
+                        .detach();
+                }
                 if check_updates && !scripted {
                     this.check_for_updates(false, window, cx);
                 }
@@ -330,6 +340,7 @@ impl MainWindow {
             terminal: None,
             parked_terminals: Vec::new(),
             dialog_subscription: None,
+            update_prompt: None,
             pending_remote: restore.map(|target| (target, true)),
             after_remote: Vec::new(),
             pending_latest: None,
@@ -1504,7 +1515,8 @@ impl MainWindow {
                     Ok(Some(release)) if crate::updates::is_newer(&release.version, &current) => {
                         let skipped = cx.global::<AppSettings>().skipped_version.as_deref()
                             == Some(release.version.as_str());
-                        if manual || !skipped {
+                        // At start, never over the card that says what the last update changed.
+                        if manual || (!skipped && this.update_prompt.is_none()) {
                             this.offer_update(release, window, cx);
                         }
                     }
@@ -1524,96 +1536,6 @@ impl MainWindow {
             });
         })
         .detach();
-    }
-
-    /// Asks whether to download `release`; nothing happens without a yes.
-    fn offer_update(
-        &mut self,
-        release: crate::updates::Release,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let notes: SharedString = release.notes.trim().to_owned().into();
-        let current = crate::updates::compared_version();
-        window.open_dialog(cx, move |dialog, _, cx| {
-            let download = release
-                .download_url
-                .clone()
-                .unwrap_or_else(|| release.page_url.clone());
-            let page = release.page_url.clone();
-            let version = release.version.clone();
-            let muted = cx.theme().muted_foreground;
-            dialog
-                .title(format!("Pistachio {} is available", release.version))
-                .w(px(520.))
-                .child(
-                    v_flex()
-                        .gap_2()
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(muted)
-                                .child(format!("You have version {current}.")),
-                        )
-                        .when(!notes.is_empty(), |this| {
-                            this.child(
-                                div()
-                                    .id("update-notes")
-                                    .max_h(px(260.))
-                                    .overflow_y_scroll()
-                                    .text_sm()
-                                    .child(component::text::TextView::markdown(
-                                        "update-notes-text",
-                                        notes.clone(),
-                                    )),
-                            )
-                        })
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(muted)
-                                .child("The download opens in your browser."),
-                        ),
-                )
-                .footer(
-                    h_flex()
-                        .w_full()
-                        .justify_between()
-                        .child(
-                            Button::new("update-skip")
-                                .quiet(cx)
-                                .label("Skip this version")
-                                .on_click(move |_, window, cx| {
-                                    let version = version.clone();
-                                    AppSettings::update(cx, |s| s.skipped_version = Some(version));
-                                    window.close_dialog(cx);
-                                }),
-                        )
-                        .child(
-                            h_flex()
-                                .gap_2()
-                                .child(
-                                    Button::new("update-notes-page")
-                                        .label("What's new")
-                                        .on_click(move |_, _, cx| cx.open_url(&page)),
-                                )
-                                .child(
-                                    Button::new("update-later")
-                                        .label("Later")
-                                        .on_click(|_, window, cx| window.close_dialog(cx)),
-                                )
-                                .child(
-                                    Button::new("update-download")
-                                        .primary()
-                                        .label("Download")
-                                        .on_click(move |_, window, cx| {
-                                            cx.open_url(&download);
-                                            window.close_dialog(cx);
-                                        }),
-                                ),
-                        ),
-                )
-        });
     }
 
     /// "Manage SSH connections".
@@ -2684,6 +2606,7 @@ impl Render for MainWindow {
             .map(|(skills, _)| skills.clone());
         let page_open = self.page_open();
         let chat_column = v_flex()
+            .relative()
             .size_full()
             .min_w_0()
             // Whatever does not fit a narrow column is clipped here, never drawn over the
@@ -2729,10 +2652,12 @@ impl Render for MainWindow {
                             )
                         }),
                 )
-            });
+            })
+            .children(self.render_update_card(cx));
 
         div()
             .key_context(WINDOW_CONTEXT)
+            .on_key_down(cx.listener(Self::update_prompt_key))
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::new_chat))
             .on_action(cx.listener(Self::toggle_sidebar))
@@ -2787,6 +2712,7 @@ impl Render for MainWindow {
                             .child(self.right_panel.clone().cached(full())),
                     ),
             )
+            .children(self.render_update_scrim(cx))
             // Above menus and popovers (deferred at low priorities).
             .when_some(self.demo.as_ref(), |this, (cursor, _)| {
                 this.child(deferred(cursor.clone()).with_priority(1000))

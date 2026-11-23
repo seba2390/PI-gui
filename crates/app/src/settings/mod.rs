@@ -119,6 +119,8 @@ pub struct AppSettings {
     pub check_for_updates: bool,
     /// A release the user chose to skip; not offered again.
     pub skipped_version: Option<String>,
+    /// The version that ran last: after an update, the next start shows what changed.
+    pub last_run_version: Option<String>,
     /// The `pi` to run (`PISTACHIO_PI_BIN` still wins); `None` finds it on `PATH`.
     pub pi_program: Option<String>,
     /// Connect every saved SSH connection quietly when the app opens.
@@ -150,6 +152,7 @@ impl Default for AppSettings {
             request_attention: true,
             check_for_updates: true,
             skipped_version: None,
+            last_run_version: None,
             pi_program: None,
             connect_hosts_at_start: false,
             speech_model: crate::stt::catalog::DEFAULT_MODEL.to_owned(),

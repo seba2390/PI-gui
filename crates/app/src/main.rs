@@ -31,7 +31,9 @@ mod syntax;
 mod theme;
 mod ui;
 mod ui_state;
+mod updater;
 mod updates;
+mod whats_new;
 mod window;
 
 use gpui_kit::*;
