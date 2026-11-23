@@ -1814,7 +1814,7 @@ checksum = "be1e0bca6c3637f992fc1cc7cbc52a78c1ef6db076dbf1059c4323d6a2048376"
 
 [[package]]
 name = "deepsearch"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "html5ever 0.40.1",
  "markup5ever_rcdom 0.40.1+unofficial",
@@ -6454,7 +6454,7 @@ dependencies = [
 
 [[package]]
 name = "pi-config"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "pretty_assertions",
  "serde_json",
@@ -6463,7 +6463,7 @@ dependencies = [
 
 [[package]]
 name = "pi-rpc"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "async-channel",
  "futures",
@@ -6477,7 +6477,7 @@ dependencies = [
 
 [[package]]
 name = "pi-sessions"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "dirs 7.0.0",
  "log",
@@ -6532,7 +6532,7 @@ dependencies = [
 
 [[package]]
 name = "pistachio"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -7294,7 +7294,7 @@ checksum = "d902046e6a28a1e4c3cab97258a0ce11e994903f01c2d97a9447a0b3df85f4f6"
 
 [[package]]
 name = "remote"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "async-channel",
  "dirs 7.0.0",
@@ -8523,7 +8523,7 @@ dependencies = [
 
 [[package]]
 name = "term"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "alacritty_terminal",
  "async-channel",
@@ -8681,7 +8681,7 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "titles"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -8927,7 +8927,7 @@ dependencies = [
 
 [[package]]
 name = "transcript"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "insta",
  "pi-rpc",
@@ -10742,7 +10742,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "workspace"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "ignore",
  "log",
