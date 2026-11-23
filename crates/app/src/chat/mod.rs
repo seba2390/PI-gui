@@ -1167,4 +1167,23 @@ mod tests {
             "\\# not a \\*heading\\* \\[x\\]\\(y\\) \\$5\\\n&#32;&#32;&#32;&#32;indented\n\nnext\n"
         );
     }
+    /// Dollar amounts are prose, not math: the app renders no formulas, and reading
+    /// "$4.0 trillion** — about **$" as one formula broke the bold around it.
+    #[gpui_kit::test]
+    fn dollar_amounts_keep_their_emphasis(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::AppContext as _;
+        use gpui_kit::component::text::TextViewState;
+
+        cx.update(gpui_kit::component::init);
+        let source = "Roughly **$4.0 trillion** — about **$4.02T** per StockAnalysis, while \
+                      Capital.com shows **$3.99T**.";
+        let state = cx.update(|cx| cx.new(|cx| TextViewState::markdown(source, cx)));
+        cx.run_until_parked();
+        let text = state.read_with(cx, |state, _| state.rendered_text().as_str().to_owned());
+        assert_eq!(
+            text.trim(),
+            "Roughly $4.0 trillion — about $4.02T per StockAnalysis, while Capital.com shows \
+             $3.99T."
+        );
+    }
 }

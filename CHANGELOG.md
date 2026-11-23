@@ -22,6 +22,9 @@ All notable changes to PI-gui are listed here. The format follows
   model now sees a question among its examples (it names it "Nvidia current market cap"), the
   instructions say a question gets its topic as the title, and a title that states a number
   the message never mentions is rejected as an answer, so the chat keeps its first message.
+- Dollar amounts no longer break bold text in answers: "**$4.0 trillion** — about **$4.02T**"
+  rendered as `$4.0 trillion** — about **$4.02T`, because the text between two dollar signs
+  was read as a math formula. Pistachio renders no formulas, so `$` is now always plain text.
 
 ## [0.4.5] - 2026-11-23
 

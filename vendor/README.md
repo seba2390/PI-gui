@@ -30,7 +30,22 @@ Zed's `gpui_apple` (Apache-2.0), the Metal renderer `gpui-pre-macos` uses. Chang
 texture and reading it back (`render_scene_to_image`) is compiled in normal builds, not only
 with `test-support`/`bench-support`, for the frame capture above.
 
-To update either: copy the new `gpui-pre-macos` release from `~/.cargo/registry/src/*/` over this
+## gpui-base 0.11.0
+
+gpui-kit's `gpui-base` (Apache-2.0), which parses and renders the chat's Markdown. Changed in
+`src/text/format/markdown.rs` only (search for `Pistachio:`):
+
+- **Dollar amounts are prose.** Upstream parses `$…$` as inline math and, when no plugin
+  renders math, re-parses only the text between the dollars. That span can take the
+  emphasis markers on either side with it: "**$4.0 trillion** — about **$4.02T**" showed
+  `$4.0 trillion** — about **$4.02T` in bold, asterisks included. When no plugin claims inline
+  math (Pistachio has none), the whole text is parsed without it.
+
+To update: copy the release gpui-kit pins from `~/.cargo/registry/src/*/gpui-base-*` over
+`vendor/gpui-base` the same way and re-apply the change. Drop the patch once upstream treats
+unclaimed math as prose for the whole paragraph.
+
+To update the two GPUI crates: copy the new `gpui-pre-macos` release from `~/.cargo/registry/src/*/` over this
 folder (without `Cargo.lock`, `Cargo.toml.orig` and `.cargo_vcs_info.json`), re-apply the
 `Pistachio:` changes, and keep the version equal to the `gpui-pre` that gpui-kit pins (the same
 for `gpui-pre-apple`). Drop the
