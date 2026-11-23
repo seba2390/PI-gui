@@ -6,6 +6,8 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-11-23
+
 ### Added
 
 - SSH sessions use this computer's models on any host, with no setup: the same model list,
@@ -287,7 +289,8 @@ chats, skills and model management. Changes since the last private build:
 - A corrupt `hosts.json` is kept as a backup.
 - A remembered terminal height can no longer squeeze out the chat.
 
-[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.4.4...HEAD
+[0.4.4]: https://github.com/seba2390/pistachio/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/seba2390/pistachio/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/seba2390/pistachio/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/seba2390/pistachio/compare/v0.4.0...v0.4.1
