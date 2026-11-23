@@ -695,6 +695,12 @@ struct MacWindowState {
     external_files_dragged: bool,
     // Whether the next left-mouse click is also the focusing click.
     first_mouse: bool,
+    // Pistachio: set by the frame waker when the window became dirty, so pointer input can draw
+    // at once instead of waiting for the next display refresh (see `draw_for_input`).
+    redraw_pending: Rc<Cell<bool>>,
+    // Display refreshes seen by `step`, and the refresh in which input last drew a frame.
+    refresh_count: u64,
+    input_frame_at: Option<u64>,
     // When true, the whole content view is reported as app-owned titlebar content via
     // `_opaqueRectForWindowMoveWhenInTitlebar`, so AppKit does not drag the window from
     // the titlebar or delay titlebar clicks (a delay first observed on macOS 27). Such
@@ -1162,7 +1168,12 @@ impl MacWindow {
             let native_view: *mut AnyObject = msg_send![native_view, initWithFrame: content_bounds];
             assert!(!native_view.is_null());
 
-            let metal_frames = MetalFrameSource::is_available().then(Rc::<MetalFrames>::default);
+            // Pistachio: pace frames with the CVDisplayLink even where `CAMetalDisplayLink` exists. The
+            // Metal link only draws inside its own callback, which macOS runs just before it
+            // delivers that refresh's mouse events, so every hover waited a whole refresh, and it
+            // presents three refreshes after the callback (measured 63 ms from mouse move to
+            // screen at 75 Hz, against 35 ms with this and `draw_for_input`).
+            let metal_frames: Option<Rc<MetalFrames>> = None;
             let state = Rc::new(Mutex::new(MacWindowState {
                 handle,
                 foreground_executor,
@@ -1207,6 +1218,9 @@ impl MacWindow {
                 do_command_handled: None,
                 external_files_dragged: false,
                 first_mouse: false,
+                redraw_pending: Rc::default(),
+                refresh_count: 0,
+                input_frame_at: None,
                 app_owns_titlebar_drag,
                 fullscreen_restore_bounds: Bounds::default(),
                 is_exiting_fullscreen: false,
@@ -2232,7 +2246,11 @@ impl PlatformWindow for MacWindow {
     }
 
     fn frame_waker(&self) -> Option<Rc<dyn Fn()>> {
-        let metal_frames = Rc::downgrade(self.2.as_ref()?);
+        let Some(metal_frames) = self.2.as_ref() else {
+            let redraw_pending = self.0.lock().redraw_pending.clone();
+            return Some(Rc::new(move || redraw_pending.set(true)));
+        };
+        let metal_frames = Rc::downgrade(metal_frames);
         Some(Rc::new(move || {
             if let Some(metal_frames) = metal_frames.upgrade() {
                 metal_frames.wake();
@@ -3199,12 +3217,46 @@ extern "C" fn handle_view_event(this: &AnyObject, _: Sel, native_event: *mut Any
             _ => {}
         }
 
+        let pointer = matches!(
+            event,
+            PlatformInput::MouseMove(_)
+                | PlatformInput::MouseDown(_)
+                | PlatformInput::MouseUp(_)
+                | PlatformInput::MouseExited(_)
+                | PlatformInput::Scroll(_)
+        );
         if let Some(mut callback) = lock.event_callback.take() {
             drop(lock);
             callback(event);
             window_state.lock().event_callback = Some(callback);
         }
+        if pointer {
+            draw_for_input(&window_state);
+        }
     }
+}
+
+/// Pistachio: draws now when pointer input changed the window (a hover, a press, a scroll),
+/// instead of at the next display refresh. At most once per refresh, so fast input never
+/// queues more frames than the display shows; later changes wait for the refresh as before.
+fn draw_for_input(window_state: &Rc<Mutex<MacWindowState>>) {
+    let mut lock = window_state.lock();
+    let refresh = lock.refresh_count;
+    if !matches!(lock.frame_source, FrameSource::DisplayLink(Some(_)))
+        || !lock.redraw_pending.get()
+        || lock.input_frame_at == Some(refresh)
+    {
+        return;
+    }
+    let Some(mut callback) = lock.request_frame_callback.take() else {
+        return;
+    };
+    lock.redraw_pending.set(false);
+    lock.input_frame_at = Some(refresh);
+    drop(lock);
+    callback(RequestFrameOptions::default());
+    window_state.lock().request_frame_callback = Some(callback);
+    native_views::check_pointer_after_frame(window_state);
 }
 
 fn visibility(state: &MacWindowState) -> WindowVisibility {
@@ -3602,6 +3654,8 @@ extern "C" fn step(view: *mut c_void) {
     let view = view as *mut AnyObject;
     let window_state = unsafe { get_window_state(&*view) };
     let mut lock = window_state.lock();
+    lock.refresh_count = lock.refresh_count.wrapping_add(1);
+    lock.redraw_pending.set(false);
 
     if let Some(mut callback) = lock.request_frame_callback.take() {
         let signal = match &lock.frame_source {
