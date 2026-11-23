@@ -38,10 +38,11 @@ const LIST_TIMEOUT: Duration = Duration::from_secs(20);
 const KEYSCAN_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Run by the remote login shell to start a program: `$1` is the working folder (empty for
-/// none; `~` and `~/…` expand to `$HOME`), the rest is the command. A leading `~/` in the
+/// none; `~` and `~/…` expand to `$HOME`), then `PISTACHIO_ENV:NAME=value` words to export,
+/// and the rest is the command. A leading `~/` in the
 /// program expands too, and an absolute program's own folder is put in front of `PATH` so a
 /// node script installed next to its `node` (nvm, Homebrew) finds it.
-pub(crate) const LAUNCH_SCRIPT: &str = r#"d=$1; shift; case $d in "") ;; "~") cd || exit 1 ;; "~/"*) cd -- "$HOME/${d#??}" || exit 1 ;; *) cd -- "$d" || exit 1 ;; esac; case $1 in "~/"*) p=$HOME/${1#??}; shift; set -- "$p" "$@" ;; esac; case $1 in /*) PATH=${1%/*}:$PATH; export PATH ;; esac; exec "$@""#;
+pub(crate) const LAUNCH_SCRIPT: &str = r#"d=$1; shift; while :; do case $1 in PISTACHIO_ENV:*=*) export "${1#PISTACHIO_ENV:}"; shift ;; *) break ;; esac; done; case $d in "") ;; "~") cd || exit 1 ;; "~/"*) cd -- "$HOME/${d#??}" || exit 1 ;; *) cd -- "$d" || exit 1 ;; esac; case $1 in "~/"*) p=$HOME/${1#??}; shift; set -- "$p" "$@" ;; esac; case $1 in /*) PATH=${1%/*}:$PATH; export PATH ;; esac; exec "$@""#;
 
 /// Where pistachio installs its own copy of pi on a host (relative to `$HOME`).
 pub const MANAGED_DIR: &str = ".pistachio/server";
@@ -454,6 +455,17 @@ impl Ssh {
     /// prepended to `PATH`. Stopping: close the process's stdin (pi exits on EOF) or kill the
     /// local ssh, which closes the channel.
     pub fn command(&self, cwd: Option<&str>, argv: &[String]) -> (PathBuf, Vec<OsString>) {
+        self.command_with_env(cwd, &[], argv)
+    }
+
+    /// [`Ssh::command`] with environment variables set for the program (after the login
+    /// shell's own, so they win).
+    pub fn command_with_env(
+        &self,
+        cwd: Option<&str>,
+        env: &[(String, String)],
+        argv: &[String],
+    ) -> (PathBuf, Vec<OsString>) {
         let mut args = vec![OsString::from("-T")];
         if let Err(error) = self.ensure_control_dir() {
             log::warn!("{error}");
@@ -461,7 +473,7 @@ impl Ssh {
         }
         args.extend(self.base_args());
         args.push("--".into());
-        args.push(remote_launch_command(cwd, argv).into());
+        args.push(remote_launch_command(cwd, env, argv).into());
         (Self::program(), args)
     }
 
@@ -570,7 +582,7 @@ impl Ssh {
 
     /// `ssh` for this host. If the control directory is not private, sharing is switched off
     /// (ssh keeps the first value of an option) so no socket in it is ever used.
-    fn ssh_command(&self) -> Command {
+    pub(crate) fn ssh_command(&self) -> Command {
         let mut command = Command::new(Self::program());
         if let Err(error) = self.ensure_control_dir() {
             log::warn!("{error}");
@@ -688,11 +700,15 @@ esac"#,
 }
 
 /// The command string ssh hands to the remote user's shell for [`Ssh::command`].
-fn remote_launch_command(cwd: Option<&str>, argv: &[String]) -> String {
+fn remote_launch_command(cwd: Option<&str>, env: &[(String, String)], argv: &[String]) -> String {
     let mut remote = String::from("exec /bin/sh -c ");
     remote.push_str(&remote_word(&outer_launch_script()));
     remote.push_str(" pistachio ");
     remote.push_str(&remote_word(cwd.unwrap_or("")));
+    for (name, value) in env {
+        remote.push(' ');
+        remote.push_str(&remote_word(&format!("PISTACHIO_ENV:{name}={value}")));
+    }
     for arg in argv {
         remote.push(' ');
         remote.push_str(&remote_word(arg));
@@ -980,7 +996,16 @@ mod tests {
     /// Runs the remote command string the way sshd would (the user's shell, `-c`), locally
     /// with `SHELL=/bin/sh` and a scratch `HOME`.
     fn run_remote(home: &Path, cwd: Option<&str>, argv: &[String]) -> (String, String, bool) {
-        let remote = remote_launch_command(cwd, argv);
+        run_remote_with_env(home, cwd, &[], argv)
+    }
+
+    fn run_remote_with_env(
+        home: &Path,
+        cwd: Option<&str>,
+        env: &[(String, String)],
+        argv: &[String],
+    ) -> (String, String, bool) {
+        let remote = remote_launch_command(cwd, env, argv);
         let out = Command::new("/bin/sh")
             .args(["-c", &remote])
             .env("SHELL", "/bin/sh")
@@ -1022,6 +1047,26 @@ mod tests {
                 cwd.display()
             )
         );
+    }
+
+    #[test]
+    fn command_sets_environment_variables() {
+        let home = tempfile::tempdir().unwrap();
+        let env = [
+            ("PI_ONE".to_owned(), "it's $HOME `x`".to_owned()),
+            ("PI_TWO".to_owned(), "a=b".to_owned()),
+        ];
+        let argv = strings(&[
+            "/bin/sh",
+            "-c",
+            r#"printf '[%s]\n' "$PI_ONE" "$PI_TWO" "$1""#,
+            "-",
+            "PISTACHIO_ENV:X=y",
+        ]);
+        let (stdout, stderr, ok) = run_remote_with_env(home.path(), None, &env, &argv);
+        assert!(ok, "{stderr}");
+        // Only words before the program are taken as variables.
+        assert_eq!(stdout, "[it's $HOME `x`]\n[a=b]\n[PISTACHIO_ENV:X=y]\n");
     }
 
     #[cfg(unix)] // Unix shells, file modes or connection sharing

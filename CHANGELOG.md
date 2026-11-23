@@ -6,6 +6,18 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- SSH sessions use this computer's models on any host, with no setup: the same model list,
+  default model and thinking level. Model requests come back over the SSH connection and go
+  out from this computer, so models on `localhost`, the LAN or a VPN work from any host, and
+  keys and logins never leave this computer (each host gets a token that works only through
+  its own connection). pi on the host uses a settings folder Pistachio manages,
+  `~/.pistachio/agent`; the host's own `~/.pi` is left alone and its extensions and skills
+  still load. ChatGPT/Codex, GitHub Copilot and Gemini CLI logins, Vertex and Bedrock are not
+  relayed yet. The "Copy model settings" offer in the connect dialog and Manage SSH
+  connections is gone.
+
 ### Changed
 
 - The default text size is larger (the old Large); the picker gains a Larger step and your

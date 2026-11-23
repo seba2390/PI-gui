@@ -1,13 +1,10 @@
 //! The connect dialog: connects to a saved host, handles the first-connection trust prompt, a
-//! changed host key and the automatic pi install, offers to copy model settings, then lets
-//! the user pick (type, browse or create) a folder on the remote machine.
+//! changed host key and the automatic pi install, then lets the user pick (type, browse or
+//! create) a folder on the remote machine.
 
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
-use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, h_flex, v_flex,
-};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use remote::{DirListing, HostId};
@@ -31,16 +28,6 @@ enum Browse {
     Failed(SharedString),
 }
 
-/// Copying model settings to a host that has none.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum ModelsCopy {
-    Offer,
-    Copying,
-    Done,
-    Failed(SharedString),
-    Dismissed,
-}
-
 #[allow(clippy::struct_excessive_bools)] // independent UI flags
 pub struct ConnectFlow {
     host: HostId,
@@ -56,11 +43,8 @@ pub struct ConnectFlow {
     /// The "New folder" name field while it is open.
     new_folder: Option<Entity<InputState>>,
     folder_error: Option<SharedString>,
-    models: ModelsCopy,
-    include_credentials: bool,
     _subscriptions: Vec<Subscription>,
     _load: Task<()>,
-    _copy: Task<()>,
 }
 
 impl EventEmitter<ConnectFlowEvent> for ConnectFlow {}
@@ -98,11 +82,8 @@ impl ConnectFlow {
             show_hidden: false,
             new_folder: None,
             folder_error: None,
-            models: ModelsCopy::Offer,
-            include_credentials: false,
             _subscriptions: subscriptions,
             _load: Task::ready(()),
-            _copy: Task::ready(()),
         };
         let id = this.host.clone();
         match this.status(cx) {
@@ -277,26 +258,6 @@ impl ConnectFlow {
             .update(cx, |hosts, cx| hosts.replace_host_key(&id, cx));
     }
 
-    fn copy_models(&mut self, cx: &mut Context<Self>) {
-        self.models = ModelsCopy::Copying;
-        let id = self.host.clone();
-        let include = self.include_credentials;
-        let task = self
-            .hosts
-            .update(cx, |hosts, cx| hosts.copy_model_settings(&id, include, cx));
-        self._copy = cx.spawn(async move |this, cx| {
-            let result = task.await;
-            let _ = this.update(cx, |this, cx| {
-                this.models = match result {
-                    Ok(()) => ModelsCopy::Done,
-                    Err(error) => ModelsCopy::Failed(error.into()),
-                };
-                cx.notify();
-            });
-        });
-        cx.notify();
-    }
-
     fn open(&mut self, folder: String, cx: &mut Context<Self>) {
         cx.emit(ConnectFlowEvent::Open {
             host: self.host.clone(),
@@ -447,98 +408,6 @@ impl ConnectFlow {
         }
     }
 
-    /// "This host has no model settings" with a button to copy this computer's.
-    fn render_models(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let has_models = self
-            .hosts
-            .read(cx)
-            .probe(&self.host)
-            .is_none_or(|probe| probe.has_models);
-        let local_models =
-            pi_sessions::agent_dir().is_some_and(|agent| agent.join("models.json").is_file());
-        if (has_models && self.models != ModelsCopy::Done)
-            || !local_models
-            || self.models == ModelsCopy::Dismissed
-        {
-            return None;
-        }
-        let theme = cx.theme();
-        let (muted, border) = (theme.muted_foreground, theme.border);
-        let colors = crate::theme::palette(cx);
-        let label = self.label(cx);
-        let body = match &self.models {
-            ModelsCopy::Done => div()
-                .text_xs()
-                .text_color(colors.success)
-                .child(format!("Copied your model settings to {label}."))
-                .into_any_element(),
-            state => {
-                let include = self.include_credentials;
-                v_flex()
-                    .gap_1p5()
-                    .child(div().text_xs().text_color(muted).child(format!(
-                        "{label} has no pi model settings (models.json). Copy yours? An \
-                         existing file is never overwritten without a backup."
-                    )))
-                    .child(
-                        Checkbox::new("copy-credentials")
-                            .small()
-                            .checked(include)
-                            .label("Also copy my credentials (auth.json)")
-                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                this.include_credentials = *checked;
-                                cx.notify();
-                            })),
-                    )
-                    .when_some(
-                        match state {
-                            ModelsCopy::Failed(error) => Some(error.clone()),
-                            _ => None,
-                        },
-                        |this, error| {
-                            this.child(div().text_xs().text_color(colors.error).child(error))
-                        },
-                    )
-                    .child(
-                        h_flex()
-                            .justify_end()
-                            .gap_2()
-                            .child(
-                                Button::new("skip-models")
-                                    .quiet(cx)
-                                    .small()
-                                    .label("Not now")
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.models = ModelsCopy::Dismissed;
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(
-                                Button::new("copy-models")
-                                    .small()
-                                    .label(if *state == ModelsCopy::Copying {
-                                        "Copying…"
-                                    } else {
-                                        "Copy model settings"
-                                    })
-                                    .disabled(*state == ModelsCopy::Copying)
-                                    .on_click(cx.listener(|this, _, _, cx| this.copy_models(cx))),
-                            ),
-                    )
-                    .into_any_element()
-            }
-        };
-        Some(
-            div()
-                .p_2()
-                .rounded_md()
-                .border_1()
-                .border_color(border)
-                .child(body)
-                .into_any_element(),
-        )
-    }
-
     fn render_browser(&self, browse: &Browse, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let (foreground, muted, hover) = (
@@ -644,7 +513,6 @@ impl ConnectFlow {
         let show_hidden = self.show_hidden;
         v_flex()
             .gap_2()
-            .children(self.render_models(cx))
             .when(!recent.is_empty(), |this| {
                 this.child(div().text_xs().text_color(muted).child("Recent"))
                     .child(h_flex().flex_wrap().gap_1().children(

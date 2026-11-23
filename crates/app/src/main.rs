@@ -20,6 +20,7 @@ mod panels;
 mod perf;
 mod persist;
 mod pi_place;
+mod relay;
 mod remote_ui;
 mod settings;
 mod shell_env;

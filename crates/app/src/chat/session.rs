@@ -196,6 +196,8 @@ pub struct PiSession {
     /// Where automatic naming is (see [`crate::naming`]).
     naming: Naming,
     _naming_task: Task<()>,
+    /// Starts pi on a host once its settings for this computer's models are written.
+    _start_task: Task<()>,
 }
 
 /// Automatic naming looks at the first prompt only.
@@ -234,7 +236,18 @@ impl PiSession {
     ) -> Self {
         let config = cx.global::<AppConfig>().clone();
         let saved = saved_host(host.as_ref(), cx);
-        let (options, mode) = spawn_options(&config, &cwd, session_file.as_deref(), saved.as_ref());
+        // pi on a host uses this computer's models once the host's settings for them are
+        // written; when they must be written first, pi starts after that.
+        let hosts = cx
+            .try_global::<crate::hosts::HostsHandle>()
+            .map(|hosts| hosts.0.clone());
+        let remote_env = match (&host, hosts) {
+            (Some(id), Some(hosts)) => hosts.update(cx, |hosts, cx| hosts.session_env(id, cx)),
+            _ => Ok(Vec::new()),
+        };
+        let env = remote_env.as_ref().map_or(&[][..], Vec::as_slice);
+        let (options, mode) =
+            spawn_options(&config, &cwd, session_file.as_deref(), saved.as_ref(), env);
         if mode == Mode::Chat
             && let Err(error) = std::fs::create_dir_all(&cwd)
         {
@@ -271,9 +284,35 @@ impl PiSession {
             _preview_task: Task::ready(()),
             naming: Naming::NotYet,
             _naming_task: Task::ready(()),
+            _start_task: Task::ready(()),
         };
+        match remote_env {
+            Ok(_) => this.start_process(&options, cx),
+            Err(link) => {
+                this._start_task = cx.spawn(async move |this, cx| {
+                    let env = link.await;
+                    let _ = this.update(cx, |this, cx| {
+                        let config = cx.global::<AppConfig>().clone();
+                        let saved = saved_host(this.host.as_ref(), cx);
+                        let (options, _) = spawn_options(
+                            &config,
+                            &this.cwd,
+                            this.resumed_from.as_deref(),
+                            saved.as_ref(),
+                            &env,
+                        );
+                        this.start_process(&options, cx);
+                    });
+                });
+            }
+        }
+        this
+    }
 
-        match PiProcess::spawn(&options) {
+    /// Starts pi with `options` and follows its events.
+    fn start_process(&mut self, options: &SpawnOptions, cx: &mut Context<Self>) {
+        let this = self;
+        match PiProcess::spawn(options) {
             Ok((process, events)) => {
                 log::info!(
                     "started pi (pid {}) in {}",
@@ -316,9 +355,9 @@ impl PiSession {
                         options.program.display()
                     ),
                 };
+                cx.notify();
             }
         }
-        this
     }
 
     /// A placeholder without a pi process: nothing runs, nothing is read from disk. Shown
@@ -351,6 +390,7 @@ impl PiSession {
             _preview_task: Task::ready(()),
             naming: Naming::NotYet,
             _naming_task: Task::ready(()),
+            _start_task: Task::ready(()),
         }
     }
 
@@ -1540,6 +1580,7 @@ fn spawn_options(
     cwd: &Path,
     session_file: Option<&Path>,
     host: Option<&remote::SavedHost>,
+    remote_env: &[(String, String)],
 ) -> (SpawnOptions, Mode) {
     let mut options = SpawnOptions::new(cwd);
     options.program.clone_from(&config.pi_program);
@@ -1561,7 +1602,7 @@ fn spawn_options(
         )
         .collect();
     let ssh = remote::Ssh::new(host.target.clone());
-    let (program, args) = ssh.command(Some(&cwd.to_string_lossy()), &argv);
+    let (program, args) = ssh.command_with_env(Some(&cwd.to_string_lossy()), remote_env, &argv);
     options.launcher = Some(pi_rpc::Launcher { program, args });
     // The local ssh client just needs some existing folder to run in.
     options.cwd = config.home.clone().unwrap_or_else(std::env::temp_dir);
@@ -1638,7 +1679,7 @@ mod tests {
     #[test]
     fn chat_sessions_launch_with_only_deep_search_tools() {
         let config = AppConfig::for_tests("pi".into());
-        let (chat, mode) = super::spawn_options(&config, &config.chat_dir.clone(), None, None);
+        let (chat, mode) = super::spawn_options(&config, &config.chat_dir.clone(), None, None, &[]);
         assert_eq!(mode, super::Mode::Chat);
         let extension = config.deepsearch_dir.join("extension.ts");
         assert_eq!(
@@ -1659,7 +1700,7 @@ mod tests {
 
         let project = std::env::temp_dir().join("some-project");
         let session = project.join("s.jsonl");
-        let (code, mode) = super::spawn_options(&config, &project, Some(&session), None);
+        let (code, mode) = super::spawn_options(&config, &project, Some(&session), None, &[]);
         assert_eq!(mode, super::Mode::Code);
         assert_eq!(code.extra_args, [] as [std::ffi::OsString; 0]);
         assert_eq!(code.session.as_deref(), Some(session.as_path()));
@@ -1678,7 +1719,7 @@ mod tests {
             recent_folders: Vec::new(),
         };
         let folder = std::path::Path::new("/srv/my app");
-        let (options, mode) = super::spawn_options(&config, folder, None, Some(&host));
+        let (options, mode) = super::spawn_options(&config, folder, None, Some(&host), &[]);
         assert_eq!(mode, super::Mode::Code);
         let launcher = options.launcher.expect("remote sessions use a launcher");
         assert_eq!(launcher.program, PathBuf::from("ssh"));
@@ -1783,8 +1824,13 @@ mod tests {
             recent_folders: Vec::new(),
         };
         let config = AppConfig::for_tests("pi".into());
-        let (options, mode) =
-            super::spawn_options(&config, std::path::Path::new(&folder), None, Some(&host));
+        let (options, mode) = super::spawn_options(
+            &config,
+            std::path::Path::new(&folder),
+            None,
+            Some(&host),
+            &[],
+        );
         assert_eq!(mode, super::Mode::Code);
         let (process, events) = pi_rpc::PiProcess::spawn(&options).expect("spawn pi over ssh");
         let client = process.client().clone();
@@ -1841,6 +1887,7 @@ mod tests {
             std::path::Path::new(&folder),
             Some(std::path::Path::new(&file)),
             Some(&host),
+            &[],
         );
         let (process, _events) = pi_rpc::PiProcess::spawn(&options).expect("resume");
         let messages = block_on(process.client().get_messages()).expect("messages");
@@ -1851,6 +1898,231 @@ mod tests {
         assert_eq!(listed.title(), "hello from the e2e test");
         assert_eq!(listed.cwd, std::path::Path::new(&folder));
         assert!(!messages.is_empty(), "the resumed session has its history");
+    }
+
+    /// pi on an SSH host uses a model configured only on this computer, through the relay:
+    /// a fake OpenAI-compatible server here (on loopback, unreachable from the host) answers,
+    /// and gets the real key and header that only this computer has.
+    /// `PISTACHIO_SSH_TEST_HOST=<alias> cargo test -p pistachio -- --ignored models_relay_over_ssh`
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "runs pi on PISTACHIO_SSH_TEST_HOST"]
+    fn models_relay_over_ssh() {
+        use std::io::{BufRead as _, BufReader, Read as _, Write as _};
+        use std::sync::{Arc, Mutex};
+
+        use futures::executor::block_on;
+        let Ok(alias) = std::env::var("PISTACHIO_SSH_TEST_HOST") else {
+            return;
+        };
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let log = seen.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let log = log.clone();
+                std::thread::spawn(move || {
+                    let mut reader = BufReader::new(stream);
+                    let mut head = Vec::new();
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                            break;
+                        }
+                        head.push(line.trim().to_owned());
+                    }
+                    let header = |name: &str| {
+                        head.iter()
+                            .find_map(|line| {
+                                let (key, value) = line.split_once(':')?;
+                                key.eq_ignore_ascii_case(name)
+                                    .then(|| value.trim().to_owned())
+                            })
+                            .unwrap_or_default()
+                    };
+                    let length: usize = header("content-length").parse().unwrap_or(0);
+                    let mut body = vec![0; length];
+                    let _ = reader.read_exact(&mut body);
+                    log.lock().unwrap().push(format!(
+                        "{} auth={} extra={}",
+                        head.first().cloned().unwrap_or_default(),
+                        header("authorization"),
+                        header("x-extra")
+                    ));
+                    let mut out = reader.into_inner();
+                    let _ = out.write_all(
+                        b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n",
+                    );
+                    let chunk = |delta: serde_json::Value, finish: serde_json::Value| {
+                        let event = serde_json::json!({
+                            "id": "e2e", "object": "chat.completion.chunk", "created": 0,
+                            "model": "fake-1",
+                            "choices": [{ "index": 0, "delta": delta, "finish_reason": finish }],
+                        });
+                        format!("data: {event}\n\n")
+                    };
+                    let mut text = chunk(
+                        serde_json::json!({ "role": "assistant", "content": "Hello from" }),
+                        serde_json::Value::Null,
+                    );
+                    text += &chunk(
+                        serde_json::json!({ "content": " this computer." }),
+                        serde_json::Value::Null,
+                    );
+                    text += &chunk(serde_json::json!({}), "stop".into());
+                    text += "data: [DONE]\n\n";
+                    let _ = out.write_all(text.as_bytes());
+                });
+            }
+        });
+
+        // This computer's pi settings: one model on the fake server, with a key and a header
+        // that must never reach the host.
+        let local = tempfile::tempdir().unwrap();
+        std::fs::write(
+            local.path().join("models.json"),
+            serde_json::json!({ "providers": { "fake": {
+                "baseUrl": format!("http://127.0.0.1:{port}/v1"),
+                "api": "openai-completions",
+                "apiKey": "real-secret-key",
+                "headers": { "x-extra": "real-header" },
+                "models": [{ "id": "fake-1", "name": "Fake One" }],
+            }}})
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(local.path().join("auth.json"), "{}").unwrap();
+        let launch = crate::relay::Launch {
+            program: crate::config::default_pi_program(),
+            env: vec![(
+                std::ffi::OsString::from("PI_CODING_AGENT_DIR"),
+                local.path().as_os_str().to_owned(),
+            )]
+            .into(),
+            dir: local.path().join("relay"),
+        };
+
+        let ssh = remote::Ssh::new(remote::Target::Alias {
+            alias: alias.clone(),
+        });
+        ssh.connect(false).expect("connect");
+        let probe = ssh.probe("pi").expect("probe");
+        let host_id = remote::HostId("e2e-relay".into());
+        let link = crate::relay::link(&ssh, &host_id, &probe, None, &launch).expect("link");
+        eprintln!("linked on port {}: {:?}", link.port, link.env);
+        let agent = &link.env[0].1;
+        let models = String::from_utf8(
+            ssh.read_file(&format!("{agent}/models.json"))
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            models.contains(&format!("/p/fake/http/127.0.0.1:{port}/v1")),
+            "{models}"
+        );
+        assert!(
+            !models.contains("real-"),
+            "no credential on the host: {models}"
+        );
+
+        // Linking again on the same connection keeps the port.
+        let again = crate::relay::link(&ssh, &host_id, &probe, Some(&link), &launch).unwrap();
+        assert_eq!(again.port, link.port);
+
+        // pi there, with its sessions in a scratch folder.
+        let scratch = ssh
+            .exec("mktemp -d /tmp/pistachio-relay.XXXXXX")
+            .unwrap()
+            .trim()
+            .to_owned();
+        let env = vec![
+            link.env[0].clone(),
+            ("PI_CODING_AGENT_SESSION_DIR".to_owned(), scratch.clone()),
+        ];
+        let host = remote::SavedHost {
+            id: host_id,
+            label: alias,
+            target: ssh.target().clone(),
+            pi_command: probe.pi_path.clone(),
+            recent_folders: Vec::new(),
+        };
+        let config = AppConfig::for_tests("pi".into());
+        let (options, _) = super::spawn_options(
+            &config,
+            std::path::Path::new(&scratch),
+            None,
+            Some(&host),
+            &env,
+        );
+        let (process, events) = pi_rpc::PiProcess::spawn(&options).expect("spawn pi over ssh");
+        let client = process.client().clone();
+        let available = block_on(client.get_available_models()).expect("models");
+        eprintln!(
+            "available on the host: {:?}",
+            available
+                .iter()
+                .map(|m| m.qualified_id())
+                .collect::<Vec<_>>()
+        );
+        assert!(available.iter().any(|model| model.id == "fake-1"));
+        block_on(client.request(pi_rpc::protocol::Command::SetModel {
+            provider: "fake".into(),
+            model_id: "fake-1".into(),
+        }))
+        .expect("set model");
+        block_on(client.prompt("hi".into(), Vec::new(), None)).expect("prompt accepted");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while std::time::Instant::now() < deadline {
+            match block_on(events.recv()) {
+                Ok(pi_rpc::ClientEvent::Event(event))
+                    if matches!(*event, pi_rpc::protocol::Event::AgentSettled { .. }) =>
+                {
+                    break;
+                }
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+        let messages = block_on(client.get_messages()).expect("messages");
+        drop(process);
+        // Without the host's token, or for the relay's own models list, the host gets nothing.
+        let refused = ssh
+            .exec(&format!(
+                "command -v curl >/dev/null || exit 0; \
+                 curl -s -m 5 -X POST -H 'authorization: Bearer pistachio-{}-{}' -d '{{}}' \
+                   http://127.0.0.1:{}/p/fake/http/127.0.0.1:{port}/v1/chat/completions; echo; \
+                 curl -s -m 5 http://127.0.0.1:{}/_pistachio/models",
+                "0".repeat(16),
+                "0".repeat(64),
+                link.port,
+                link.port
+            ))
+            .unwrap();
+        eprintln!("without the token: {refused}");
+        assert!(
+            refused.is_empty()
+                || (refused.contains("did not come from a Pistachio session")
+                    && refused.contains("forbidden")),
+            "{refused}"
+        );
+        let _ = ssh.exec(&format!("rm -rf {}", remote::sh_quote(&scratch)));
+        let transcript = serde_json::to_string(&messages).unwrap();
+        let seen = seen.lock().unwrap().clone();
+        eprintln!("the fake server saw: {seen:?}");
+        assert!(
+            transcript.contains("Hello from this computer."),
+            "{transcript}"
+        );
+        assert!(
+            seen.iter()
+                .any(|request| request.starts_with("POST /v1/chat/completions")
+                    && request.ends_with("auth=Bearer real-secret-key extra=real-header")),
+            "{seen:?}"
+        );
+        crate::relay::stop();
     }
 
     use gpui_kit::{AppContext as _, TestAppContext};

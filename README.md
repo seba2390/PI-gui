@@ -31,6 +31,8 @@ when idle.
 - **Side panels and a terminal** in the session's folder: git changes, a file tree, and an
   integrated terminal.
 - **SSH remotes.** Run pi on another machine, and Pistachio installs pi there if it's missing.
+  Your models work there too: requests come back through the SSH connection, so keys stay on
+  your computer.
 - **Web search** for chats: quick lookups or multi-step deep research.
 - **Speech to text.** Dictate with the microphone button. A model you download once (Parakeet,
   Whisper or Moonshine) transcribes on your computer, so nothing you say leaves it.

@@ -1226,8 +1226,9 @@ impl MainWindow {
         });
     }
 
-    /// "Add model" / "Edit models.json" for the pi the visible session runs (here or on its
-    /// SSH host). After saving, pi restarts on the same session to load the file.
+    /// "Add model" / "Edit models.json" for the pi the visible session runs (here, or on its
+    /// SSH host when pi there uses the host's own models). After saving, pi restarts on the
+    /// same session to load the file.
     fn open_models_dialog(
         &mut self,
         edit_json: bool,
@@ -1235,7 +1236,10 @@ impl MainWindow {
         cx: &mut Context<Self>,
     ) -> Entity<crate::chat::models_dialog::ModelsDialog> {
         use crate::chat::models_dialog::{ModelsDialog, ModelsDialogEvent, ModelsTab};
-        let host = self.host(cx);
+        // pi on a host that uses this computer's models gets them from here: edit these.
+        let host = self
+            .host(cx)
+            .filter(|host| !crate::hosts::hosts(cx).read(cx).uses_local_models(host));
         let title = match &host {
             Some(host) => format!("Models on {}", crate::hosts::hosts(cx).read(cx).label(host)),
             None => "Models".to_owned(),
