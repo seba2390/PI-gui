@@ -192,6 +192,7 @@ impl TerminalPanel {
         config.env = cx
             .global::<AppConfig>()
             .child_env
+            .vars()
             .iter()
             .filter_map(|(key, value)| Some((key.to_str()?.to_owned(), value.to_str()?.to_owned())))
             .collect();

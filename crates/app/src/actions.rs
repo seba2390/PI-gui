@@ -86,7 +86,13 @@ pub fn init(cx: &mut App) {
             KeyBinding::new("cmd-m", Minimize, Some(WINDOW_CONTEXT)),
         ]);
     }
-    cx.set_menus(menus());
+}
+
+/// Builds the native menu bar (about 15 ms on macOS). The window opens first and calls this
+/// right after its first frame, so building it never delays the window.
+pub fn install_menus(cx: &mut App) {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    INSTALLED.call_once(|| cx.set_menus(menus()));
 }
 
 /// The native menu bar. On macOS the first menu is the app menu ("Pistachio"), so the app can be

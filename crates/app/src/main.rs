@@ -59,16 +59,18 @@ fn main() {
         log::warn!("could not move settings from the PI-gui folder: {error}");
     }
 
-    // Probing the login shell takes ~100–200 ms; overlap it with GPU/platform startup.
-    let shell_env = std::thread::spawn(shell_env::login_shell_env);
+    // Probing the login shell takes ~50–500 ms depending on the user's shell setup. Nothing
+    // needs it until the first pi or terminal starts, so it runs in the background and
+    // startup never waits for it.
+    let child_env = config::ChildEnv::probe();
 
     let app = application().with_assets(assets::AppAssets);
     app.on_reopen(window::reopen);
     app.run(move |cx| {
         perf::phase("app_run");
-        let child_env = shell_env.join().unwrap_or_default();
         let config = config::AppConfig::detect(child_env);
         init(cx);
+        perf::phase("gpui_kit_init");
         cx.set_global(settings::AppSettings::load(
             settings::AppSettings::path().as_deref(),
         ));
@@ -84,6 +86,7 @@ fn main() {
             ui_state::UiState::path().as_deref(),
         ));
         window::init(cx);
+        perf::phase("app_init");
         window::open_main_window(cx);
         perf::phase("window_opened");
         cx.activate(true);

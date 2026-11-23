@@ -77,10 +77,24 @@ pub fn open_main_window(cx: &mut App) {
         app_id: Some("pistachio".into()),
         ..TitleBar::window_options()
     };
+    // macOS may keep a benchmark run's window in the background, where frames are capped at
+    // 30 fps; measure what an active window does instead.
+    let options = if crate::perf::bench::requested() {
+        WindowOptions {
+            inactive_frame_interval: None,
+            ..options
+        }
+    } else {
+        options
+    };
     let opened = open_window(options, cx, |window, cx| {
         crate::theme::sync_with_window(window, cx);
         keep_alive_on_close(window, cx);
         crate::perf::frame("startup: first frame", window);
+        window.on_next_frame(|_, cx| {
+            cx.spawn(async |cx| cx.update(crate::actions::install_menus))
+                .detach();
+        });
         cx.new(|cx| MainWindow::new(window, cx))
     });
     if let Err(error) = opened {

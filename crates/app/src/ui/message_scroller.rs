@@ -4,7 +4,7 @@
 //! (<https://github.com/longbridge/gpui-kit>), Copyright gpui-kit contributors, licensed
 //! under the Apache License 2.0 (its text ships in THIRD-PARTY-LICENSES.txt with every
 //! release, gpui-kit being a dependency), and trimmed to what the chat uses. The one behavioural change: the list measures every row, not
-//! only the rows it has laid out. gpui-kit keeps its `ListState` private and builds it
+//! only the rows it has laid out (over a few frames, see [`super::list`]). gpui-kit keeps its `ListState` private and builds it
 //! measuring visible rows only, so the rows above the viewport of a freshly opened long
 //! session count as zero height: the scrollbar thumb starts far too big and shrinks and
 //! jumps as scrolling up measures them. Measuring all rows makes the scroll extent exact
@@ -19,11 +19,12 @@ use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, IconName, StyledExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, App, Context, ElementId, Entity, FollowMode, Hsla, InteractiveElement as _,
-    IntoElement, ListAlignment, ListOffset, ListState, ParentElement as _, RenderOnce, Role,
-    StatefulInteractiveElement as _, StyleRefinement, Styled, Window, div, linear_color_stop,
-    linear_gradient, list, px, rems,
+    AnyElement, App, Context, ElementId, Entity, Hsla, InteractiveElement as _, IntoElement,
+    ParentElement as _, RenderOnce, Role, StatefulInteractiveElement as _, StyleRefinement, Styled,
+    Window, div, linear_color_stop, linear_gradient, px, rems,
 };
+
+use super::list::{FollowMode, ListAlignment, ListOffset, ListState, list};
 
 const LIST_OVERDRAW: gpui_kit::Pixels = px(400.);
 const JUMP_BUTTON_TRANSITION: Duration = Duration::from_millis(200);
@@ -49,12 +50,11 @@ impl MessageScrollerState {
     /// list's internal borrow.
     pub fn new(item_count: usize, cx: &mut Context<Self>) -> Self {
         // `measure_all`: the scrollbar's extent must cover the rows above the viewport
-        // from the first frame (see the module docs). The list then lays out every row
-        // without a known height in each layout, which after the first is only the rows
-        // a splice or remeasure invalidated: a streamed delta costs one row, not all.
-        // Laying out every row (a reset, Ctrl+T/Ctrl+O, a change of width) costs about
-        // 30 ms for a 100-row session in a release build, against about 2 ms for the
-        // visible rows alone.
+        // from the first frame (see the module docs). After the first pass the list lays
+        // out only rows a splice or remeasure invalidated: a streamed delta costs one row,
+        // not all. Laying out every row (a reset, Ctrl+T/Ctrl+O, a change of width) costs
+        // about 30 ms for a 100-row session in a release build, so the vendored list
+        // (`super::list`) spreads it over frames, estimating rows it has not measured yet.
         let list_state =
             ListState::new(item_count, ListAlignment::Top, LIST_OVERDRAW).measure_all();
         list_state.set_follow_mode(FollowMode::Tail);
@@ -399,12 +399,13 @@ mod tests {
     use std::rc::Rc;
 
     use gpui_kit::{
-        AppContext as _, Context, Entity, IntoElement, ListOffset, ParentElement as _, Pixels,
-        Render, ScrollDelta, ScrollEvent, Styled as _, TestAppContext, VisualTestContext, Window,
-        div, point, px,
+        AppContext as _, Context, Entity, IntoElement, ParentElement as _, Pixels, Render,
+        ScrollDelta, ScrollEvent, Styled as _, TestAppContext, VisualTestContext, Window, div,
+        point, px,
     };
 
     use super::{MessageScroller, MessageScrollerState};
+    use crate::ui::list::ListOffset;
 
     /// The scroller in a 400px square, with rows of `height(index)` that count their renders.
     struct Harness {

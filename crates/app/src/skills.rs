@@ -1220,7 +1220,7 @@ mod tests {
                 .success()
         );
         let mut config = AppConfig::for_tests("pi".into());
-        config.child_env = vec![("PI_CODING_AGENT_DIR".into(), agent.path().into())];
+        config.child_env = vec![("PI_CODING_AGENT_DIR".into(), agent.path().into())].into();
         cx.update(|cx| cx.set_global(config));
         let place = PiPlace::Local {
             agent_dir: agent.path().into(),

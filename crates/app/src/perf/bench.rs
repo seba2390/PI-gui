@@ -16,8 +16,8 @@ use gpui_kit::*;
 use pi_sessions::{Mode, SessionSummary};
 
 use crate::actions::{
-    NewChat, ShowChatMode, ShowCodeMode, ShowDiff, ShowFiles, ToggleRightPanel, ToggleSidebar,
-    ToggleTerminal,
+    CheckForUpdates, NewChat, OpenSettings, ShowChatMode, ShowCodeMode, ShowDiff, ShowFiles,
+    ToggleRightPanel, ToggleSidebar, ToggleTerminal,
 };
 use crate::config::AppConfig;
 use crate::window::MainWindow;
@@ -57,6 +57,20 @@ impl Bench {
         .await?;
         sleep(cx, Duration::from_millis(800)).await;
         super::summary(); // startup renders, separately from the script's
+        // What the menu bar checks to enable its items, before any input.
+        let available = cx.update(|window, cx| {
+            [
+                ("Settings…", window.is_action_available(&OpenSettings, cx)),
+                (
+                    "Check for Updates…",
+                    window.is_action_available(&CheckForUpdates, cx),
+                ),
+                ("New Chat", window.is_action_available(&NewChat, cx)),
+            ]
+        })?;
+        for (item, enabled) in available {
+            super::phase(&format!("menu at launch: {item} enabled={enabled}"));
+        }
 
         // Chat mode: hover the list, open a few chats, hover and scroll a long one.
         self.action("switch mode", ShowChatMode, cx).await?;
@@ -82,8 +96,10 @@ impl Bench {
         for _ in 0..2 {
             self.click_mark("show-settings", "open settings", cx)
                 .await?;
+            sleep(cx, SETTLE).await;
             self.click_mark("show-settings", "close settings", cx)
                 .await?;
+            sleep(cx, SETTLE).await;
         }
 
         // Code mode: open sessions, then the side panel and terminal.
@@ -140,7 +156,16 @@ impl Bench {
         let start = Instant::now();
         while !self.this.read_with(cx, |this, cx| done(this, cx))? {
             if start.elapsed() > TIMEOUT {
-                bail!("timed out waiting for {what}");
+                let shown = self.this.read_with(cx, |this, cx| {
+                    let session = this.visible_chat().read(cx).session().read(cx);
+                    format!(
+                        "welcome {}, showing {:?} with {} items",
+                        this.welcome_visible(),
+                        session.session_file(),
+                        session.transcript().items().len()
+                    )
+                })?;
+                bail!("timed out waiting for {what} ({shown})");
             }
             sleep(cx, Duration::from_millis(2)).await;
         }
@@ -164,11 +189,12 @@ impl Bench {
     /// Opens `summary` by clicking its sidebar row: timed until the click's frame and until
     /// the conversation's history is on screen.
     async fn open(&self, summary: &SessionSummary, cx: &mut AsyncWindowContext) -> Result<()> {
-        let start = Instant::now();
-        self.click_mark(&row_mark(summary), "open session: click", cx)
+        let start = self
+            .click_mark(&row_mark(summary), "open session: click", cx)
             .await?;
         let path = summary.path.clone();
-        self.wait_until("the session's history", cx, move |this, cx| {
+        let what = format!("the history of {}", summary.path.display());
+        self.wait_until(&what, cx, move |this, cx| {
             let session = this.visible_chat().read(cx).session().read(cx);
             session.session_file().as_deref() == Some(path.as_path())
                 && !session.transcript().items().is_empty()
@@ -280,8 +306,14 @@ impl Bench {
         })
     }
 
-    /// Clicks the middle of mark `id` (see [`crate::demo::mark`]); timed as `name`.
-    async fn click_mark(&self, id: &str, name: &str, cx: &mut AsyncWindowContext) -> Result<()> {
+    /// Clicks the middle of mark `id` (see [`crate::demo::mark`]), timed as `name`; returns
+    /// when the click was dispatched.
+    async fn click_mark(
+        &self,
+        id: &str,
+        name: &str,
+        cx: &mut AsyncWindowContext,
+    ) -> Result<Instant> {
         let start = Instant::now();
         let bounds = loop {
             if let Some((bounds, _)) = crate::demo::lookup(id)
@@ -306,6 +338,7 @@ impl Bench {
             );
         })?;
         sleep(cx, Duration::from_millis(40)).await;
+        let clicked = Instant::now();
         cx.update(|window, cx| {
             window.dispatch_event(
                 PlatformInput::MouseDown(MouseDownEvent {
@@ -328,8 +361,7 @@ impl Bench {
                 cx,
             );
         })?;
-        sleep(cx, SETTLE).await;
-        Ok(())
+        Ok(clicked)
     }
 }
 

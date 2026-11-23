@@ -165,7 +165,7 @@ impl SettingsView {
                 .spawn(async move {
                     std::process::Command::new(&program)
                         .arg("--version")
-                        .envs(env)
+                        .envs(env.vars().iter().cloned())
                         .stdin(std::process::Stdio::null())
                         .output()
                         .ok()

@@ -1127,7 +1127,7 @@ impl PiSession {
         let Some(client) = self.client.clone() else {
             return;
         };
-        let env = cx.global::<AppConfig>().child_env.clone();
+        let env = cx.global::<AppConfig>().child_env.vars().to_vec();
         let dir = std::env::temp_dir().join(format!("pistachio-share-{}", std::process::id()));
         let file = dir.join("session.html");
         self.push_notice(NoticeKind::Info, "Creating a secret gist…", cx);
@@ -1543,7 +1543,7 @@ fn spawn_options(
 ) -> (SpawnOptions, Mode) {
     let mut options = SpawnOptions::new(cwd);
     options.program.clone_from(&config.pi_program);
-    options.env.clone_from(&config.child_env);
+    config.child_env.vars().clone_into(&mut options.env);
     options.session = session_file.map(Path::to_path_buf);
     let Some(host) = host else {
         let mode = config.mode_of(cwd);
@@ -1871,7 +1871,7 @@ mod tests {
         let agent = tempfile::tempdir().unwrap();
         let project = tempfile::tempdir().unwrap();
         let mut config = AppConfig::for_tests("pi".into());
-        config.child_env = vec![("PI_CODING_AGENT_DIR".into(), agent.path().into())];
+        config.child_env = vec![("PI_CODING_AGENT_DIR".into(), agent.path().into())].into();
         cx.update(|cx| cx.set_global(config));
 
         let wait_ready = async |session: &gpui_kit::Entity<PiSession>, cx: &mut TestAppContext| {

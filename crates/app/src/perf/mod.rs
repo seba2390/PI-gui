@@ -79,7 +79,7 @@ pub fn phase(name: &str) {
     }
 }
 
-/// Measures from now until the next frame has been drawn and presented, as `name`. Call it
+/// Measures from now until the frame showing the response is on screen, as `name`. Call it
 /// as an input is handled: the result is the time the user waits to see the response.
 pub fn frame(name: impl Into<String>, window: &Window) {
     if !enabled() {
@@ -94,19 +94,20 @@ pub fn frame_since(name: impl Into<String>, start: Instant, window: &Window) {
         return;
     }
     let name = name.into();
-    // Next-frame callbacks run just before the frame is drawn; a task spawned there runs
-    // once the frame callback (draw + present) has returned.
-    window.on_next_frame(move |_, cx| {
+    // Next-frame callbacks run just before a frame is drawn. The first one marks the frame
+    // that draws the response; the frame after it starts at the next display refresh,
+    // when that response is on screen. (A task spawned after the first callback could run
+    // much later: GPUI runs back-to-back frames before ordinary tasks.)
+    window.on_next_frame(move |window, _| {
         let before_draw = start.elapsed();
-        cx.spawn(async move |_| {
+        window.on_next_frame(move |_, _| {
             write(json!({
                 "kind": "interaction",
                 "name": name,
                 "ms": ms(start.elapsed()),
                 "before_draw_ms": ms(before_draw),
             }));
-        })
-        .detach();
+        });
     });
 }
 

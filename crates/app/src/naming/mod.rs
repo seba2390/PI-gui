@@ -147,7 +147,7 @@ impl PiLaunch {
     pub fn new(config: &AppConfig, cwd: PathBuf, host: Option<remote::SavedHost>) -> Self {
         Self {
             program: config.pi_program.clone(),
-            env: config.child_env.clone(),
+            env: config.child_env.vars().to_vec(),
             cwd,
             host,
             local_dir: config.home.clone().unwrap_or_else(std::env::temp_dir),
