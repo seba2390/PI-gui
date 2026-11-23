@@ -1,0 +1,26 @@
+[package]
+name = "titles"
+description = "Short names for conversations: prompts, clean-up, pi's print mode and a small local model"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+log.workspace = true
+# The optional local namer: quantized GGUF models on the CPU, pure Rust (no native
+# libraries). Only the quantized Qwen2 / Llama code paths are used; the rest is not linked.
+candle-core = "0.11.1"
+candle-transformers = "0.11.1"
+# Without the default features (C oniguruma and esaxx, a progress bar): fancy-regex is
+# pure Rust and handles the lookaheads in Qwen's and SmolLM's pre-tokenizer patterns.
+tokenizers = { version = "0.23.2", default-features = false, features = ["fancy-regex"] }
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+
+[lints]
+workspace = true

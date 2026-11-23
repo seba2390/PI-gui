@@ -168,6 +168,36 @@ the silence set in Settings, 2.5 s by default), press Enter or press stop, it be
 text in the message box, ready to edit or send. Esc discards it. Models live in
 `~/.pi/agent/pistachio/speech/`.
 
+## Conversation names
+
+Off by default (Settings → Conversation names). When on, a new conversation gets a short name
+(about 3–6 words) made from its first message instead of the message's first line, and the
+sidebar types it out letter by letter behind a caret. The message is sent to pi right away;
+naming runs beside it and never holds the conversation up. The name is saved through pi
+(`set_session_name`), so the terminal `pi` shows it too, and a name you gave the conversation
+yourself (Rename, or `/name`) is never replaced. Very short first messages ("Fix the login
+bug") are their own name, and slash commands are not named.
+
+The name is made by either:
+
+- **The conversation's own model**: one short request through a separate
+  `pi --print --no-session` with the same provider and model (no tools, skills, context files
+  or extensions, its own short instructions, thinking off). The conversation's pi, its
+  session file and the model's context never see it, so the session stays exactly what the
+  terminal shows. For a conversation on an SSH host, that pi runs on the host the same way.
+- **A small model on this computer**, downloaded once (none ship with the app) from a pinned
+  Hugging Face revision and checked against its SHA-256. It runs on the CPU (with
+  [candle](https://github.com/huggingface/candle)) once per conversation, in the background,
+  and is unloaded right after; nothing is sent anywhere.
+
+| Model | Download | Languages | |
+|---|---|---|---|
+| Qwen2.5 0.5B (Qwen, recommended) | 498 MB | many | about a second per name |
+| SmolLM2 360M (Hugging Face) | 389 MB | English | smallest |
+| Qwen2.5 1.5B (Qwen) | 1.1 GB | many | the best names, a few seconds each |
+
+All three are Apache 2.0 licensed. Models live in `~/.pi/agent/pistachio/naming/`.
+
 ## Settings and updates
 
 Settings opens from the Pistachio menu (⌘,) or the button at the bottom of the sidebar. Every
@@ -188,6 +218,9 @@ change is saved right away.
   default), and the saved hosts with their status, connecting, adding and managing them.
 - **Speech to text:** the dictation models (download, use, remove), how long a silence ends
   dictation, and the language for Whisper models.
+- **Conversation names:** automatic names for new conversations (off by default), whether the
+  conversation's own model or a small model on this computer makes them, and the local models
+  (download, use, remove).
 
 The app's own settings live in `~/.pi/agent/pistachio/settings.json`.
 

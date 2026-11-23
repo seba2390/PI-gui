@@ -217,6 +217,13 @@ impl MainWindow {
                 },
             ),
             cx.subscribe_in(
+                &crate::naming::models(cx),
+                window,
+                |_, _, event: &crate::naming::NamingModelsEvent, window, cx| {
+                    crate::naming::ui::notify_download(event, window, cx);
+                },
+            ),
+            cx.subscribe_in(
                 &crate::hosts::hosts(cx),
                 window,
                 |this, hosts, event: &HostsEvent, window, cx| match event {
@@ -375,6 +382,12 @@ impl MainWindow {
                         settings.update(cx, |settings, _| settings.start_on_speech());
                     }
                 }
+                "settings-names" => {
+                    self.open_settings(&OpenSettings, window, cx);
+                    if let Some(settings) = self.settings.as_ref().map(|s| s.0.clone()) {
+                        settings.update(cx, |settings, _| settings.start_on_names());
+                    }
+                }
                 "speech-download" => crate::stt::ui::open_download_dialog(window, cx),
                 "dictate" => {
                     let composer = self.chat.read(cx).composer().clone();
@@ -409,6 +422,21 @@ impl MainWindow {
                             cx.background_executor()
                                 .timer(std::time::Duration::from_millis(100))
                                 .await;
+                        }
+                    })
+                    .detach();
+                }
+                // Plays the sidebar's typing animation for the open session's row, as if an
+                // automatic name arrived 2.5 s after start (the name is not saved).
+                other if other.starts_with("type-name:") => {
+                    let title = other["type-name:".len()..].to_owned();
+                    let key = session_key(&self.chat, cx);
+                    cx.spawn(async move |_, cx| {
+                        cx.background_executor()
+                            .timer(std::time::Duration::from_millis(2500))
+                            .await;
+                        if let Some((host, path)) = key {
+                            cx.update(|cx| crate::naming::announce(host, Some(path), title, cx));
                         }
                     })
                     .detach();

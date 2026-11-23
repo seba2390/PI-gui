@@ -193,6 +193,21 @@ pub struct PiSession {
     /// The resumed session's history as read from its file, shown until pi answers.
     preview: Preview,
     _preview_task: Task<()>,
+    /// Where automatic naming is (see [`crate::naming`]).
+    naming: Naming,
+    _naming_task: Task<()>,
+}
+
+/// Automatic naming looks at the first prompt only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Naming {
+    /// No prompt was sent yet.
+    NotYet,
+    /// The first message waits for pi to start and report the conversation's model, which
+    /// names it.
+    WaitingForModel(String),
+    /// Started, skipped or not wanted; later prompts never name the conversation.
+    Considered,
 }
 
 /// Whether the transcript shows a preview read from the session file (see
@@ -218,14 +233,7 @@ impl PiSession {
         cx: &mut Context<Self>,
     ) -> Self {
         let config = cx.global::<AppConfig>().clone();
-        let saved = host.as_ref().and_then(|id| {
-            let hosts = cx.try_global::<crate::hosts::HostsHandle>()?.0.read(cx);
-            let mut saved = hosts.get(id).cloned()?;
-            // Prefer the exact path the probe found (conda / nvm installs may only be on an
-            // interactive shell's PATH; pistachio's own install is not on PATH at all).
-            saved.pi_command = hosts.pi_command(id);
-            Some(saved)
-        });
+        let saved = saved_host(host.as_ref(), cx);
         let (options, mode) = spawn_options(&config, &cwd, session_file.as_deref(), saved.as_ref());
         if mode == Mode::Chat
             && let Err(error) = std::fs::create_dir_all(&cwd)
@@ -261,6 +269,8 @@ impl PiSession {
             _event_pump: Task::ready(()),
             preview: Preview::None,
             _preview_task: Task::ready(()),
+            naming: Naming::NotYet,
+            _naming_task: Task::ready(()),
         };
 
         match PiProcess::spawn(&options) {
@@ -339,6 +349,8 @@ impl PiSession {
             _event_pump: Task::ready(()),
             preview: Preview::None,
             _preview_task: Task::ready(()),
+            naming: Naming::NotYet,
+            _naming_task: Task::ready(()),
         }
     }
 
@@ -563,6 +575,12 @@ impl PiSession {
         follow_up: bool,
         cx: &mut Context<Self>,
     ) {
+        if self.naming == Naming::NotYet {
+            self.naming = Naming::Considered;
+            if self.is_first_prompt() {
+                self.start_naming(&text, cx);
+            }
+        }
         // Only a visible run can be steered; anything sent before it shows (typed while pi
         // starts, or right after another message) waits its turn as a follow-up.
         let follow_up = follow_up || !self.is_running();
@@ -574,6 +592,87 @@ impl PiSession {
         self.flush_outbox(cx);
         self.report_busy(cx);
         cx.notify();
+    }
+
+    /// Whether nothing was said in this conversation yet: a new session, no prompt shown or
+    /// waiting.
+    fn is_first_prompt(&self) -> bool {
+        self.resumed_from.is_none()
+            && self.outbox.is_empty()
+            && !self
+                .transcript
+                .items()
+                .iter()
+                .any(|item| matches!(item.kind, transcript::ItemKind::User(_)))
+    }
+
+    /// Starts naming the conversation after its first `message`, if the user turned automatic
+    /// names on (see [`crate::naming`]). The prompt is sent right away regardless: naming
+    /// runs beside it, so a slow namer never holds the conversation up.
+    fn start_naming(&mut self, message: &str, cx: &mut Context<Self>) {
+        let Some(settings) = cx.try_global::<crate::settings::AppSettings>() else {
+            return;
+        };
+        if !settings.auto_names || self.title().is_some() || !titles::worth_naming(message) {
+            return;
+        }
+        let namer = settings.namer;
+        if let Some(title) = titles::as_is(message) {
+            // Already what the row shows: saved, but not typed out again.
+            self.apply_name(title, false, cx);
+            return;
+        }
+        match namer {
+            crate::naming::Namer::Local => match crate::naming::local_job(message, cx) {
+                Some(job) => self.run_naming(job, cx),
+                None => log::info!("no local naming model is installed; not naming"),
+            },
+            crate::naming::Namer::Conversation => {
+                if self.lifecycle == Lifecycle::Starting {
+                    // The model is known once pi has started (see `initialize`).
+                    self.naming = Naming::WaitingForModel(message.to_owned());
+                } else if let Some(job) = self.pi_naming_job(message.to_owned(), cx) {
+                    self.run_naming(job, cx);
+                }
+            }
+        }
+    }
+
+    /// Naming with the conversation's model, through a separate `pi --print` started the
+    /// way this conversation's pi was (on its SSH host for a remote conversation).
+    fn pi_naming_job(&self, message: String, cx: &gpui_kit::App) -> Option<crate::naming::Job> {
+        let model = self.model()?;
+        let host = saved_host(self.host.as_ref(), cx);
+        if self.host.is_some() && host.is_none() {
+            return None;
+        }
+        let config = cx.try_global::<AppConfig>()?;
+        Some(crate::naming::Job::Pi {
+            launch: Box::new(crate::naming::PiLaunch::new(config, self.cwd.clone(), host)),
+            provider: model.provider.clone(),
+            model: model.id.clone(),
+            message,
+        })
+    }
+
+    fn run_naming(&mut self, job: crate::naming::Job, cx: &mut Context<Self>) {
+        self._naming_task = cx.spawn(async move |this, cx| {
+            if let Some(title) = crate::naming::run(job).await {
+                let _ = this.update(cx, |this, cx| this.apply_name(title, true, cx));
+            }
+        });
+    }
+
+    /// Saves an automatic name through pi, unless the conversation got a name meanwhile
+    /// (Rename, `/name`): those are never replaced. `announce` has the sidebar type it out.
+    fn apply_name(&mut self, title: String, announce: bool, cx: &mut Context<Self>) {
+        if self.title().is_some() || self.client.is_none() {
+            return;
+        }
+        self.rename(title.clone(), cx);
+        if announce {
+            crate::naming::announce(self.host.clone(), self.session_file(), title, cx);
+        }
     }
 
     /// Sends the next waiting prompt once pi is ready and has answered the previous one.
@@ -1254,6 +1353,13 @@ impl PiSession {
                 if this.lifecycle == Lifecycle::Ready {
                     this.apply_pending_model(cx);
                 }
+                if matches!(this.naming, Naming::WaitingForModel(_))
+                    && let Naming::WaitingForModel(message) =
+                        std::mem::replace(&mut this.naming, Naming::Considered)
+                    && let Some(job) = this.pi_naming_job(message, cx)
+                {
+                    this.run_naming(job, cx);
+                }
                 // A replaced transcript restarts item ids: rebuild every row.
                 cx.emit(if replaced {
                     SessionEvent::Reloaded
@@ -1397,6 +1503,17 @@ impl PiSession {
         }
         cx.emit(SessionEvent::MetaChanged);
     }
+}
+
+/// The saved SSH host `host` with the `pi` to run there.
+fn saved_host(host: Option<&HostId>, cx: &gpui_kit::App) -> Option<remote::SavedHost> {
+    let id = host?;
+    let hosts = cx.try_global::<crate::hosts::HostsHandle>()?.0.read(cx);
+    let mut saved = hosts.get(id).cloned()?;
+    // Prefer the exact path the probe found (conda / nvm installs may only be on an
+    // interactive shell's PATH; pistachio's own install is not on PATH at all).
+    saved.pi_command = hosts.pi_command(id);
+    Some(saved)
 }
 
 /// How to launch pi for a session in `cwd`. Chat sessions get only the web tools
@@ -1870,6 +1987,77 @@ mod tests {
                 .collect();
             assert_eq!(prompts, ["first", "second"]);
         });
+    }
+
+    /// Automatic names with the conversation's own model: the name comes from a separate
+    /// `pi --print --no-session` (a stand-in script here), is saved through pi, and the
+    /// conversation itself only ever sees the user's prompt.
+    #[cfg(unix)]
+    #[gpui_kit::test]
+    async fn first_prompt_is_named_by_a_separate_pi(cx: &mut TestAppContext) {
+        use std::os::unix::fs::PermissionsExt as _;
+        cx.executor().allow_parking();
+        let dir = tempfile::tempdir().unwrap();
+        let fake = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../pi-rpc/tests/fake_pi.py");
+        let stdin = dir.path().join("naming-stdin");
+        let script = dir.path().join("pi");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\ncase \" $* \" in *\" --print \"*)\n  \
+                 echo \"$*\" > '{args}'; cat > '{stdin}'; echo 'Title: \"CI build failures.\"'; \
+                 exit 0;;\nesac\nexec '{fake}' \"$@\"\n",
+                args = dir.path().join("naming-args").display(),
+                stdin = stdin.display(),
+                fake = fake.display(),
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        cx.update(|cx| {
+            cx.set_global(AppConfig::for_tests(script.clone()));
+            cx.set_global(crate::settings::AppSettings {
+                auto_names: true,
+                ..crate::settings::AppSettings::default()
+            });
+        });
+        let session = cx.new(|cx| PiSession::new(std::env::temp_dir(), None, None, cx));
+        let (sender, events) = async_channel::unbounded();
+        let _subscription = cx.update(|cx| {
+            cx.subscribe(&session, move |_, event: &SessionEvent, _| {
+                let _ = sender.try_send(event.clone());
+            })
+        });
+        // Typed while pi starts: naming waits for the model, the prompt for pi.
+        let message = "Please look at why the build fails on CI since this morning";
+        session.update(cx, |session, cx| {
+            session.submit(message.into(), Vec::new(), false, cx);
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while cx.read(|cx| session.read(cx).title().is_none()) {
+            assert!(std::time::Instant::now() < deadline, "no name arrived");
+            let _ = events.recv().await;
+        }
+        cx.read(|cx| {
+            let session = session.read(cx);
+            assert_eq!(session.title().as_deref(), Some("CI build failures"));
+            let prompts: Vec<&str> = session
+                .transcript()
+                .items()
+                .iter()
+                .filter_map(|item| match &item.kind {
+                    ItemKind::User(user) => Some(user.text.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert!(prompts.len() <= 1 && prompts.iter().all(|p| *p == message));
+        });
+        let args = std::fs::read_to_string(dir.path().join("naming-args")).unwrap();
+        assert!(
+            args.contains("--no-session") && args.contains("fake-1"),
+            "{args}"
+        );
+        assert!(std::fs::read_to_string(&stdin).unwrap().contains(message));
     }
 
     #[gpui_kit::test]

@@ -1,5 +1,5 @@
-//! The Settings page, shown in the chat column: General, pi & models, Web search and SSH
-//! connections. Every change is saved right away.
+//! The Settings page, shown in the chat column: General, pi & models, Web search, SSH
+//! connections, Speech to text and Conversation names. Every change is saved right away.
 
 use std::path::{Path, PathBuf};
 
@@ -104,8 +104,9 @@ impl SettingsView {
         let brave_key = key_input(brave, "From BRAVE_API_KEY if empty", window, cx);
         let tavily_key = key_input(tavily, "From TAVILY_API_KEY if empty", window, cx);
         let subscriptions = vec![
-            // Speech to text: download progress and installed models.
+            // Speech to text and conversation names: download progress and installed models.
             cx.observe(&crate::stt::models::models(cx), |_, _, cx| cx.notify()),
+            cx.observe(&crate::naming::models(cx), |_, _, cx| cx.notify()),
             cx.subscribe(&brave_key, |_, input, event: &InputEvent, cx| {
                 if let InputEvent::Change = event {
                     let key = input.read(cx).value().trim().to_owned();
@@ -831,6 +832,11 @@ impl SettingsView {
         self.start_page = 4;
     }
 
+    /// Opens on the Conversation names page (before the first render).
+    pub fn start_on_names(&mut self) {
+        self.start_page = 5;
+    }
+
     fn speech_page(&self) -> SettingPage {
         use crate::stt::{AutoStop, catalog};
         SettingPage::new("Speech to text")
@@ -908,9 +914,91 @@ impl Render for SettingsView {
                     self.web_search_page(),
                     self.ssh_page(&weak),
                     self.speech_page(),
+                    naming_page(cx),
                 ]),
         )
     }
+}
+
+/// Settings → Conversation names: automatic names, what makes them, and the local models.
+fn naming_page(cx: &App) -> SettingPage {
+    use crate::naming::Namer;
+    let settings = cx.global::<AppSettings>();
+    let (enabled, namer) = (settings.auto_names, settings.namer);
+    let local_missing = namer == Namer::Local && crate::naming::active_model(cx).is_none();
+    SettingPage::new("Conversation names")
+        .icon(AppIcon::Sparkles)
+        .description(
+            "Give each new conversation a short name made from its first message, instead of \
+             the message's first line. The name is saved in the session, so the terminal pi \
+             shows it too. Names you give a conversation yourself (Rename, or /name) are never \
+             changed.",
+        )
+        .group(
+            SettingGroup::new()
+                .title("Automatic names")
+                .item(
+                    SettingItem::new(
+                        "Name new conversations",
+                        hover_switch(
+                            "auto-names",
+                            |cx| cx.global::<AppSettings>().auto_names,
+                            |on, cx| AppSettings::update(cx, |s| s.auto_names = on),
+                        ),
+                    )
+                    .description(
+                        "The first message is sent right away; its name arrives a moment later \
+                         and is typed out in the sidebar. Very short messages are their own \
+                         name.",
+                    ),
+                )
+                .item(
+                    SettingItem::new(
+                        "Made by",
+                        SettingField::dropdown(
+                            Namer::ALL
+                                .into_iter()
+                                .map(|namer| (namer.id().into(), namer.label().into()))
+                                .collect(),
+                            |cx| cx.global::<AppSettings>().namer.id().into(),
+                            |value, cx| {
+                                let namer = Namer::from_id(value.as_ref());
+                                AppSettings::update(cx, |s| s.namer = namer);
+                            },
+                        ),
+                    )
+                    .disabled(!enabled)
+                    .description(if local_missing {
+                        "Download one of the models below first; until then new conversations \
+                         keep their first line."
+                    } else {
+                        match namer {
+                            Namer::Conversation => {
+                                "One short extra request to the conversation's model, made by a \
+                                 separate pi that keeps no session: the conversation, its \
+                                 history and the model's context stay exactly as in the \
+                                 terminal. On an SSH host it runs on the host."
+                            }
+                            Namer::Local => {
+                                "A small model on this computer names conversations: nothing is \
+                                 sent anywhere, and it is loaded only for the second or so it \
+                                 takes."
+                            }
+                        }
+                    }),
+                ),
+        )
+        .group(
+            SettingGroup::new()
+                .title("Models on this computer")
+                .description(
+                    "Used when names are made by a small model on this computer. Downloaded \
+                     once from Hugging Face; nothing ships with the app.",
+                )
+                .item(SettingItem::render(|_, _, cx| {
+                    crate::naming::ui::settings_model_rows(cx)
+                })),
+        )
 }
 
 /// An on/off setting: gpui-kit's switch with a hover ring, so it reads as clickable.

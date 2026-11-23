@@ -19,6 +19,7 @@ pi-rpc = { path = "crates/pi-rpc" }
 pi-sessions = { path = "crates/pi-sessions" }
 remote = { path = "crates/remote" }
 transcript = { path = "crates/transcript" }
+titles = { path = "crates/titles" }
 workspace = { path = "crates/workspace" }
 term = { path = "crates/term" }
 

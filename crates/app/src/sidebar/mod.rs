@@ -8,10 +8,11 @@
 //! host and then folder, with the host's status dot on its header.
 
 mod rows;
+mod typing;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use gpui_kit::component::button::Button;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -61,11 +62,50 @@ pub enum Activity {
     Done,
 }
 
+/// A conversation's new automatic name being typed out in its row (see [`typing`]).
+#[derive(Debug, Clone)]
+struct TypedName {
+    title: String,
+    /// What the row showed when typing started, erased first (empty for a row that was not
+    /// listed before).
+    from: String,
+    /// When typing started; `None` until the session's row is listed.
+    started: Option<Instant>,
+    /// The name the session listing gave when typing started. While it still gives that
+    /// (the file was not re-read yet), the row keeps showing the new name.
+    listed_as: String,
+    /// When the name arrived (names whose row never appears are dropped after a while).
+    arrived: Instant,
+}
+
+impl TypedName {
+    /// The animation has played to the end.
+    fn finished(&self, now: Instant) -> bool {
+        self.started
+            .is_some_and(|started| now >= started + typing::duration(&self.from, &self.title))
+    }
+}
+
+/// What a session row shows as its name.
+pub(super) enum RowTitle {
+    Plain(String),
+    /// Mid-animation: the text so far, and whether the caret shows.
+    Typing {
+        text: String,
+        caret: bool,
+    },
+}
+
+#[allow(clippy::struct_excessive_bools)] // independent view flags
 pub struct Sidebar {
     mode: Mode,
     /// Sessions that are working, waiting for an answer or finished unseen, by host and file.
     activity: HashMap<(Option<HostId>, PathBuf), Activity>,
     spinner: Option<Task<()>>,
+    /// New automatic names being typed out, by host and file.
+    typed: HashMap<(Option<HostId>, PathBuf), TypedName>,
+    /// The typing animation's repaint loop is running (only while a name is being typed).
+    typing_ticking: bool,
     sessions: Vec<SessionSummary>,
     /// The open session: its host (`None`: this computer) and file.
     active: Option<(Option<HostId>, PathBuf)>,
@@ -102,12 +142,26 @@ impl Sidebar {
                 }
             }),
             // Remote session lists and host status dots.
-            cx.observe(&crate::hosts::hosts(cx), |_, _, cx| cx.notify()),
+            cx.observe(&crate::hosts::hosts(cx), |this, _, cx| {
+                this.start_typing(cx);
+                cx.notify();
+            }),
         ];
+        let mut subscriptions = subscriptions;
+        if let Some(names) = crate::naming::names(cx) {
+            subscriptions.push(cx.subscribe(
+                &names,
+                |this, _, named: &crate::naming::Named, cx| {
+                    this.type_name(named, cx);
+                },
+            ));
+        }
         let mut this = Self {
             mode,
             activity: HashMap::new(),
             spinner: None,
+            typed: HashMap::new(),
+            typing_ticking: false,
             sessions: Vec::new(),
             active: None,
             skills_active: false,
@@ -211,6 +265,139 @@ impl Sidebar {
         cx.notify();
     }
 
+    /// A conversation got an automatic name: type it out in its row, now if the row is
+    /// listed, else as soon as it is (a new session's file appears after its first answer).
+    fn type_name(&mut self, named: &crate::naming::Named, cx: &mut Context<Self>) {
+        self.typed.insert(
+            (named.host.clone(), named.path.clone()),
+            TypedName {
+                title: named.title.clone(),
+                from: String::new(),
+                started: None,
+                listed_as: String::new(),
+                arrived: Instant::now(),
+            },
+        );
+        self.start_typing(cx);
+    }
+
+    /// The name a listed session's row shows now, or `None` when it is not listed.
+    fn listed_title(&self, host: Option<&HostId>, path: &Path, cx: &App) -> Option<String> {
+        match host {
+            None => self
+                .sessions
+                .iter()
+                .find(|session| session.path == path)
+                .map(|session| session.title().to_owned()),
+            Some(host) => crate::hosts::hosts(cx)
+                .read(cx)
+                .sessions(host)
+                .iter()
+                .find(|session| session.path == path)
+                .map(|session| session.title().to_owned()),
+        }
+    }
+
+    /// Starts the animations whose rows are now listed, forgets finished and stale ones,
+    /// and runs the repaint loop while any name is being typed.
+    fn start_typing(&mut self, cx: &mut Context<Self>) {
+        if self.typed.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        let mut listed = HashMap::new();
+        for (host, path) in self.typed.keys() {
+            if let Some(title) = self.listed_title(host.as_ref(), path, cx) {
+                listed.insert((host.clone(), path.clone()), title);
+            }
+        }
+        self.typed.retain(|key, typed| {
+            if typed.started.is_none() {
+                let Some(shown) = listed.get(key) else {
+                    // The row never appeared (the conversation was left before pi wrote it).
+                    return now.duration_since(typed.arrived) < Duration::from_secs(120);
+                };
+                typed.from = if *shown == typed.title {
+                    String::new()
+                } else {
+                    shown.clone()
+                };
+                typed.listed_as.clone_from(shown);
+                typed.started = Some(now);
+            }
+            if !typed.finished(now) {
+                return true;
+            }
+            // Played: kept only while the listing is stale (still what it was at the start,
+            // not the new name nor a name the user gave since), and not for long.
+            let stale = listed
+                .get(key)
+                .is_some_and(|shown| *shown == typed.listed_as)
+                && typed.listed_as != typed.title;
+            stale && now.duration_since(typed.arrived) < Duration::from_secs(30)
+        });
+        let typing = self
+            .typed
+            .values()
+            .any(|typed| typed.started.is_some() && !typed.finished(now));
+        if typing && !self.typing_ticking {
+            self.typing_ticking = true;
+            cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor()
+                        .timer(crate::ui::spinner::FRAME)
+                        .await;
+                    let more = this.update(cx, |this, cx| {
+                        let now = Instant::now();
+                        let more = this
+                            .typed
+                            .values()
+                            .any(|typed| typed.started.is_some() && !typed.finished(now));
+                        this.typing_ticking = more;
+                        if !more {
+                            this.start_typing(cx);
+                        }
+                        cx.notify();
+                        more
+                    });
+                    if !matches!(more, Ok(true)) {
+                        break;
+                    }
+                }
+            })
+            .detach();
+        }
+    }
+
+    /// The automatic name being typed out for the session at `path` (on `host`), if any.
+    fn typed_name(&self, host: Option<&HostId>, path: &Path) -> Option<&str> {
+        self.typed
+            .get(&(host.cloned(), path.to_path_buf()))
+            .map(|typed| typed.title.as_str())
+    }
+
+    /// What the row of `session` (on `host`) shows as its name.
+    fn row_title(&self, host: Option<&HostId>, session: &SessionSummary) -> RowTitle {
+        let key = (host.cloned(), session.path.clone());
+        let now = Instant::now();
+        match self.typed.get(&key) {
+            Some(typed) => match typed.started {
+                Some(started) if !typed.finished(now) => {
+                    let frame = typing::frame(&typed.from, &typed.title, now - started);
+                    RowTitle::Typing {
+                        text: frame.text.to_owned(),
+                        caret: frame.caret,
+                    }
+                }
+                // Played to the end (but not forgotten yet): the name, even if the file
+                // listing has not caught up.
+                Some(_) => RowTitle::Plain(typed.title.clone()),
+                None => RowTitle::Plain(session.title().to_owned()),
+            },
+            None => RowTitle::Plain(session.title().to_owned()),
+        }
+    }
+
     fn activity(&self, host: Option<&HostId>, path: &Path) -> Option<Activity> {
         self.activity
             .get(&(host.cloned(), path.to_path_buf()))
@@ -296,6 +483,7 @@ impl Sidebar {
                 cx.set_global(RecentFolders(folders));
                 this.sessions = sessions;
                 this.loaded = true;
+                this.start_typing(cx);
                 cx.notify();
             });
         });

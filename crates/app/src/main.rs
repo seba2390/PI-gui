@@ -14,6 +14,8 @@ mod code_highlight;
 mod config;
 mod demo;
 mod hosts;
+mod model_store;
+mod naming;
 mod panels;
 mod persist;
 mod pi_place;
@@ -68,6 +70,7 @@ fn main() {
         theme::init(cx);
         syntax::init();
         stt::init(cx);
+        naming::init(cx);
         settings::init_text_size(cx);
         actions::init(cx);
         cx.set_global(config);

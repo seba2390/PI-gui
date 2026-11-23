@@ -8,6 +8,15 @@ All notable changes to PI-gui are listed here. The format follows
 
 ### Added
 
+- Automatic conversation names (Settings → Conversation names, off by default): a new
+  conversation is named after its first message in a few words, instead of the message's
+  first line, and the sidebar types the name out behind a caret. The name is made either by
+  the conversation's own model, through a separate `pi --print --no-session` call that leaves
+  the conversation's session and context untouched (on the SSH host for remote
+  conversations), or by a small model on this computer (Qwen2.5 0.5B, SmolLM2 360M or
+  Qwen2.5 1.5B, downloaded on request, checked against pinned SHA-256 digests and run with
+  candle). The first message is sent right away; names are saved through pi, so the
+  terminal shows them too, and names you set yourself are never replaced.
 - Pictures in the chat: when the agent reads an image (a screenshot, say), a small thumbnail
   shows to the right of the call, and an "Explored" group shows the first two with "+N".
   Pictures attached to a prompt show above it. Clicking one opens a full-window viewer; ← / →

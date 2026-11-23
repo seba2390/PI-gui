@@ -10,6 +10,8 @@ crates/
   remote/       SSH: ~/.ssh/config discovery, saved hosts, shared connections, remote probes,
                 pi auto-install, askpass prompts, remote sessions, the RemoteShell for workspace
   term/         terminal backend: alacritty_terminal + PTY, UI-agnostic snapshots
+  titles/       automatic conversation names: title clean-up, the one-shot `pi --print` call, and
+                small local models (quantized GGUF via candle, pure Rust)
   deepsearch/   chat web search (search / deep): search backends, public-only fetching, page text extraction,
                 passage ranking, settings, and the pi extension that runs them via the app
   app/          the GPUI application (binary `pistachio`)
