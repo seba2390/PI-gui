@@ -38,8 +38,9 @@ when idle.
   Whisper or Moonshine) transcribes on your computer, so nothing you say leaves it.
 - **Background sessions.** Chats keep working while you switch, plus branching, model and
   skill management.
-- **Settings and updates.** A Settings page (⌘,) for look, models, web search and SSH, and an
-  optional check for new releases that asks before downloading.
+- **Settings and updates.** A Settings page (⌘,) for look, models, web search and SSH. When a
+  new release is out, Update installs it in place (only when you say yes), and the new version
+  shows what changed.
 
 See [docs/FEATURES.md](docs/FEATURES.md) for the full list and keyboard shortcuts.
 
