@@ -502,10 +502,7 @@ mod tests {
         let green = gpui_kit::hsla(0.33, 0.65, 0.4, 1.);
         let colors = shimmer_colors("Working…", 0.5, green);
         assert_eq!(colors.len(), "Working…".chars().count());
-        let lightness: Vec<f32> = colors
-            .iter()
-            .map(|(_, color)| color.l)
-            .collect();
+        let lightness: Vec<f32> = colors.iter().map(|(_, color)| color.l).collect();
         let brightest = lightness
             .iter()
             .enumerate()

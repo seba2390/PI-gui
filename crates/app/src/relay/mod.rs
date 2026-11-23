@@ -24,7 +24,9 @@ use serde_json::{Map, Value, json};
 
 /// The relay extension pi loads.
 pub const EXTENSION_SOURCE: &str = include_str!("relay.ts");
+#[cfg(unix)]
 const SOCKET_ENV: &str = "PISTACHIO_RELAY_SOCKET";
+#[cfg(unix)]
 const KEY_ENV: &str = "PISTACHIO_RELAY_KEY";
 
 /// APIs whose requests need more than a key (cloud signing or account credentials).
@@ -501,8 +503,14 @@ mod imp {
         PathBuf::new()
     }
 
-    pub fn models(_launch: &Launch) -> Result<Vec<Value>, String> {
-        let _ = super::install_extension;
+    pub fn models(launch: &Launch) -> Result<Vec<Value>, String> {
+        // Unix sockets are what the relay listens on; not on this system yet.
+        let _ = (
+            &launch.program,
+            &launch.env,
+            &launch.dir,
+            super::install_extension,
+        );
         Err("using this computer's models on a host is not supported on this system yet".into())
     }
 
