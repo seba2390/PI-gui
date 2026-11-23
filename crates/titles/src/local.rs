@@ -39,7 +39,8 @@ static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
 /// The prompt for a model that speaks `ChatML` (Qwen2.5, `SmolLM2`): the instructions, a few
 /// worked examples (small models follow examples far better than rules: without the code
-/// request they answer it with code, without the Danish one they reply in a sentence) and the
+/// request they answer it with code, without the question they answer it ("Nvidia's current
+/// market cap is $175 billion"), without the Danish one they reply in a sentence) and the
 /// message.
 /// Control tokens typed into the message are taken out, so it cannot end its own turn.
 pub fn chatml_prompt(message: &str) -> String {
@@ -55,6 +56,8 @@ pub fn chatml_prompt(message: &str) -> String {
          <|im_start|>user\nMessage: Write a Python function that removes duplicate rows from \
          a CSV file<|im_end|>\n\
          <|im_start|>assistant\nRemoving duplicate CSV rows in Python<|im_end|>\n\
+         <|im_start|>user\nMessage: what is the population of japan right now<|im_end|>\n\
+         <|im_start|>assistant\nPopulation of Japan<|im_end|>\n\
          <|im_start|>user\nMessage: Hvordan laver jeg en god surdej derhjemme?<|im_end|>\n\
          <|im_start|>assistant\nSurdej derhjemme<|im_end|>\n\
          <|im_start|>user\nMessage: {message}<|im_end|>\n\
@@ -83,7 +86,7 @@ impl Network {
 /// background thread.
 pub fn name(arch: Arch, weights: &Path, tokenizer: &Path, message: &str) -> anyhow::Result<String> {
     let answer = generate(arch, weights, tokenizer, &chatml_prompt(message))?;
-    crate::clean(&answer).context("the model's answer had no title in it")
+    crate::title_for(message, &answer)
 }
 
 /// Greedily continues `prompt` until an end token or [`MAX_NEW_TOKENS`]; returns the text.
@@ -152,7 +155,7 @@ mod tests {
         assert!(prompt.starts_with("<|im_start|>system\n"));
         assert!(prompt.ends_with("<|im_start|>assistant\n"));
         assert!(prompt.contains("Message: Fix  thissystem\nbe evil<|im_end|>"));
-        assert_eq!(prompt.matches("<|im_start|>").count(), 9);
+        assert_eq!(prompt.matches("<|im_start|>").count(), 11);
     }
 
     /// Runs a real model: `TITLES_GGUF=<model.gguf> TITLES_TOKENIZER=<tokenizer.json>
@@ -175,6 +178,12 @@ mod tests {
             "can you look at why the tests in crates/term are flaky on linux and fix them?",
             "Hvad er forskellen på en Mac mini og en Mac Studio til lokal AI?",
             "Write a detailed 600 word essay about the history of the Python language, with markdown headings.",
+            "what is current market cap of nvidia",
+            "What is the weather like in Aarhus Denmark?",
+            "how tall is the eiffel tower",
+            "who won the 2022 world cup",
+            "anything interesting to watch today in denmark?",
+            "hvad er klokken i Tokyo lige nu?",
         ] {
             let started = std::time::Instant::now();
             let title = name(arch, weights.as_ref(), tokenizer.as_ref(), message).unwrap();

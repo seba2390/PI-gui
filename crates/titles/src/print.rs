@@ -96,7 +96,7 @@ pub fn name_with_pi(
         Err(error) if unknown_model(&error) => run(&invocation(true), &input, timeout)?,
         other => other?,
     };
-    crate::clean(&answer).context("the model's answer had no title in it")
+    crate::title_for(message, &answer)
 }
 
 /// Runs `invocation` with `input` on stdin and returns its stdout, or an error with the end

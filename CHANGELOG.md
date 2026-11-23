@@ -15,6 +15,14 @@ All notable changes to PI-gui are listed here. The format follows
   `~/.pi/agent/pistachio/skills` and passed with `--skill`; pi's own skill folders are left
   alone). The Skills page lists it under "Comes with Pistachio", read-only.
 
+### Fixed
+
+- Naming a chat that starts with a question no longer answers it: Qwen2.5 0.5B named "what is
+  current market cap of nvidia" "Nvidia's current market cap is $175 billion". The local
+  model now sees a question among its examples (it names it "Nvidia current market cap"), the
+  instructions say a question gets its topic as the title, and a title that states a number
+  the message never mentions is rejected as an answer, so the chat keeps its first message.
+
 ## [0.4.5] - 2026-11-23
 
 ### Added
