@@ -901,7 +901,10 @@ impl Render for ChatView {
                         MessageScroller::new(
                             "transcript",
                             self.scroller.clone(),
-                            move |index, window, cx| rows::render_row(&weak, index, window, cx),
+                            move |index, window, cx| {
+                                let _timer = crate::perf::render("chat_row");
+                                rows::render_row(&weak, index, window, cx)
+                            },
                         )
                         // Rows own their spacing (see rows.rs); drop the default 32px gap.
                         .with_row_style(StyleRefinement::default().pb(px(0.)))
