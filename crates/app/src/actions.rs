@@ -29,6 +29,12 @@ actions!(
     ]
 );
 
+/// The shortcut of [`NewChat`], shown on the welcome screen's button.
+pub const NEW_CHAT_KEYS: &str = if cfg!(target_os = "macos") {
+    "⌘N"
+} else {
+    "Ctrl+N"
+};
 /// Shortcuts shown in the Chat | Code switch's tooltips.
 pub const CHAT_MODE_KEYS: &str = if cfg!(target_os = "macos") {
     "⌘1"

@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::resizable::{h_resizable, resizable_panel};
@@ -2560,7 +2560,8 @@ impl MainWindow {
         let mode = self.sidebar.read(cx).mode();
         let theme = cx.theme();
         let (muted, foreground) = (theme.muted_foreground, theme.foreground);
-        let accent = crate::theme::palette(cx).accent;
+        let palette = crate::theme::palette(cx);
+        let accent = palette.accent;
         let (headline, detail, label) = match mode {
             Mode::Code => (
                 "Start a coding session",
@@ -2575,19 +2576,42 @@ impl MainWindow {
             ),
         };
         let weak = cx.weak_entity();
+        // Quiet, so the π stays the one green thing: an outline, with the green on its icon.
+        // Filled like the window, so the field's signs do not show through.
         let button = Button::new("welcome-new")
-            .primary()
-            .large()
-            .icon(component::Icon::from(AppIcon::SquarePen))
+            .custom(
+                ButtonCustomVariant::new(cx)
+                    // Its border, also under the pointer.
+                    .color(theme.input)
+                    .foreground(foreground)
+                    .hover(theme.secondary_hover)
+                    .active(theme.secondary_active),
+            )
+            .h(px(36.))
+            .px_4()
+            .border_1()
+            .border_color(theme.input)
+            .bg(theme.background)
+            .icon(component::Icon::from(AppIcon::SquarePen).text_color(palette.accent_icon))
             .label(label);
         let button = match mode {
             Mode::Chat => button
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(muted)
+                        .child(crate::actions::NEW_CHAT_KEYS),
+                )
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.new_in_default_folder(Mode::Chat, window, cx);
                 }))
                 .into_any_element(),
             Mode::Code => button
-                .dropdown_caret(true)
+                .child(
+                    component::Icon::new(IconName::ChevronDown)
+                        .small()
+                        .text_color(muted),
+                )
                 .dropdown_menu_with_anchor(Anchor::TopCenter, move |menu, _, cx| {
                     welcome_menu(menu, weak.clone(), cx)
                 })
