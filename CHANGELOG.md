@@ -6,6 +6,8 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-11-23
+
 ### Added
 
 - A built-in skill, `add-skill`, that teaches pi how to add skills: where each kind goes, the
@@ -345,7 +347,8 @@ chats, skills and model management. Changes since the last private build:
 - A corrupt `hosts.json` is kept as a backup.
 - A remembered terminal height can no longer squeeze out the chat.
 
-[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.4.5...HEAD
+[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.4.6...HEAD
+[0.4.6]: https://github.com/seba2390/pistachio/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/seba2390/pistachio/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/seba2390/pistachio/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/seba2390/pistachio/compare/v0.4.2...v0.4.3
