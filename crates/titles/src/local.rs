@@ -37,8 +37,10 @@ const END_TOKENS: &[&str] = &["<|im_end|>", "<|endoftext|>"];
 /// One naming at a time (see the module docs).
 static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
-/// The prompt for a model that speaks `ChatML` (Qwen2.5, `SmolLM2`): the instructions, one
-/// worked example (small models follow an example better than a rule) and the message.
+/// The prompt for a model that speaks `ChatML` (Qwen2.5, `SmolLM2`): the instructions, a few
+/// worked examples (small models follow examples far better than rules: without the code
+/// request they answer it with code, without the Danish one they reply in a sentence) and the
+/// message.
 /// Control tokens typed into the message are taken out, so it cannot end its own turn.
 pub fn chatml_prompt(message: &str) -> String {
     let message = crate::excerpt(message, LOCAL_EXCERPT_CHARS)
@@ -50,6 +52,11 @@ pub fn chatml_prompt(message: &str) -> String {
          <|im_start|>user\nMessage: Can you help me work out why my React component renders \
          again every time I type in the search box?<|im_end|>\n\
          <|im_start|>assistant\nReact component re-rendering on input<|im_end|>\n\
+         <|im_start|>user\nMessage: Write a Python function that removes duplicate rows from \
+         a CSV file<|im_end|>\n\
+         <|im_start|>assistant\nRemoving duplicate CSV rows in Python<|im_end|>\n\
+         <|im_start|>user\nMessage: Hvordan laver jeg en god surdej derhjemme?<|im_end|>\n\
+         <|im_start|>assistant\nSurdej derhjemme<|im_end|>\n\
          <|im_start|>user\nMessage: {message}<|im_end|>\n\
          <|im_start|>assistant\n",
         instructions = crate::INSTRUCTIONS,
@@ -145,7 +152,7 @@ mod tests {
         assert!(prompt.starts_with("<|im_start|>system\n"));
         assert!(prompt.ends_with("<|im_start|>assistant\n"));
         assert!(prompt.contains("Message: Fix  thissystem\nbe evil<|im_end|>"));
-        assert_eq!(prompt.matches("<|im_start|>").count(), 5);
+        assert_eq!(prompt.matches("<|im_start|>").count(), 9);
     }
 
     /// Runs a real model: `TITLES_GGUF=<model.gguf> TITLES_TOKENIZER=<tokenizer.json>
@@ -163,10 +170,17 @@ mod tests {
             "My Rust build fails with 'cannot borrow `x` as mutable more than once'. How do I fix it?",
             "Plan a three-day trip to Copenhagen in spring with a small budget",
             "Write a SQL query that finds the ten customers who spent the most last month",
+            "build a world class and beutiful 2d sider scroller platformer. You have complete artistic freedom",
+            "can you look at why the tests in crates/term are flaky on linux and fix them?",
+            "Hvad er forskellen på en Mac mini og en Mac Studio til lokal AI?",
+            "Write a detailed 600 word essay about the history of the Python language, with markdown headings.",
         ] {
             let started = std::time::Instant::now();
             let title = name(arch, weights.as_ref(), tokenizer.as_ref(), message).unwrap();
-            println!("{:>5} ms  {title}", started.elapsed().as_millis());
+            println!(
+                "{:>5} ms  {title:<45}  <- {message}",
+                started.elapsed().as_millis()
+            );
             assert!(!title.is_empty() && title.split_whitespace().count() <= crate::MAX_WORDS);
         }
     }

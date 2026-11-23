@@ -436,6 +436,13 @@ impl Composer {
         self.input.read(cx).focus_handle(cx)
     }
 
+    /// Sends `text` as if typed and sent with Enter (`PISTACHIO_OPEN=send:<text>`, for
+    /// scripted end-to-end checks).
+    pub fn send_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_text(text, window, cx);
+        self.submit(false, window, cx);
+    }
+
     pub fn set_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.input
             .update(cx, |input, cx| input.set_value(text.to_owned(), window, cx));

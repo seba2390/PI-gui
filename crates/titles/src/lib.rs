@@ -22,9 +22,10 @@ pub const EXCERPT_CHARS: usize = 1500;
 
 /// What a namer is told (the system prompt).
 pub const INSTRUCTIONS: &str = "You name conversations. Given the first message of a \
-conversation, reply with a short title of 3 to 6 words that says what it is about. Reply \
-with the title only: no quotes, no trailing punctuation, no explanation. Write the title in \
-the language of the message.";
+conversation, reply with a short title of 3 to 6 words that says what it is about. Do not \
+answer the message or do what it asks (no code, no answers): only name it. Reply with the \
+title only: no quotes, no trailing punctuation, no explanation. Write the title in the \
+language of the message.";
 
 /// Whether a first message gets a name at all: not an empty one (only pictures) and not a
 /// slash command, which pi expands into a prompt the user never wrote.
@@ -78,8 +79,35 @@ fn is_trailing(c: char) -> bool {
 /// Words a title cut short should not end on ("Debugging the login flow of the").
 const DANGLING: &[&str] = &[
     "a", "an", "and", "as", "at", "by", "for", "from", "in", "into", "of", "on", "or", "the", "to",
-    "with",
+    "with", "who", "which", "that", "than", "more", "most", "is", "are", "my", "your", "when",
+    "how", "what", "about", "og", "i", "til", "på", "en", "et", "der", "som", "af",
 ];
+
+/// Quote marks that come in pairs; a title cut short can be left with one of a pair.
+const QUOTES: &[char] = &['\'', '"', '`', '‘', '’', '“', '”'];
+
+/// `words` with quote marks at word edges removed when they don't pair up (a title cut
+/// mid-quote). Apostrophes inside words ("don't") are untouched.
+fn balance_quotes(words: &[&str]) -> Vec<String> {
+    let edge_quotes = words
+        .iter()
+        .map(|word| {
+            usize::from(word.starts_with(QUOTES))
+                + usize::from(word.len() > 1 && word.ends_with(QUOTES))
+        })
+        .sum::<usize>();
+    words
+        .iter()
+        .map(|word| {
+            if edge_quotes % 2 == 1 {
+                word.trim_matches(QUOTES).to_owned()
+            } else {
+                (*word).to_owned()
+            }
+        })
+        .filter(|word| !word.is_empty())
+        .collect()
+}
 
 /// A model's answer as a title: the first line that is not a lead-in ("Here is a title:"),
 /// without a "Title:" label, quotes, Markdown or trailing punctuation, on one line, at most
@@ -120,7 +148,7 @@ pub fn clean(raw: &str) -> Option<String> {
             kept.pop();
         }
     }
-    let title = kept.join(" ");
+    let title = balance_quotes(&kept).join(" ");
     let title = title.trim_end_matches(is_trailing);
     (!title.is_empty()).then(|| title.to_owned())
 }
@@ -162,6 +190,24 @@ fn strip_label(line: &str) -> &str {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn titles_cut_short_end_cleanly() {
+        // Seen from Qwen2.5 0.5B: too long, cut mid-phrase and mid-quote.
+        assert_eq!(
+            clean("Fixing 'cannot borrow `x` as mutable more than once' in Rust").as_deref(),
+            Some("Fixing cannot borrow x as mutable")
+        );
+        assert_eq!(
+            clean("SQL query to find the ten customers who spent the most").as_deref(),
+            Some("SQL query to find the ten customers")
+        );
+        // Short enough: left alone, apostrophes and paired quotes included.
+        assert_eq!(
+            clean("Don't panic: the `x` borrow").as_deref(),
+            Some("Don't panic: the `x` borrow")
+        );
+    }
 
     #[test]
     fn cleans_model_answers() {

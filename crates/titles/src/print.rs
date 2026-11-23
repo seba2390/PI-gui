@@ -156,6 +156,38 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
+    /// Names a few first messages with real pi and a real model:
+    /// `TITLES_PI_MODEL=provider/model cargo test -p titles real_pi -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "needs pi and a reachable model (TITLES_PI_MODEL)"]
+    fn real_pi_names_conversations() {
+        let model = std::env::var("TITLES_PI_MODEL").expect("TITLES_PI_MODEL=provider/model");
+        let (provider, model) = model.split_once('/').expect("provider/model");
+        let messages = [
+            "build a world class and beutiful 2d sider scroller platformer. You have complete artistic freedom",
+            "can you look at why the tests in crates/term are flaky on linux and fix them?",
+            "Hvad er forskellen på en Mac mini og en Mac Studio til lokal AI?",
+            "Write a detailed 600 word essay about the history of the Python language, with markdown headings.",
+        ];
+        let invocation = |extensions: bool| Invocation {
+            program: "pi".into(),
+            args: pi_args(provider, model, extensions)
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            env: Vec::new(),
+            cwd: std::env::temp_dir(),
+        };
+        for message in messages {
+            let started = std::time::Instant::now();
+            let title = name_with_pi(invocation, message, TIMEOUT)
+                .unwrap_or_else(|error| panic!("naming failed for {message:?}: {error:#}"));
+            eprintln!("{:>6.1?}  {title:<45}  <- {message}", started.elapsed());
+            let words = title.split_whitespace().count();
+            assert!((1..=crate::MAX_WORDS).contains(&words), "{title:?}");
+        }
+    }
+
     fn sh(script: &str) -> Invocation {
         Invocation {
             program: "/bin/sh".into(),
