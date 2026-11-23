@@ -244,9 +244,16 @@ change is saved right away.
 The app's own settings live in `~/.pi/agent/pistachio/settings.json`.
 
 **Updates.** When Pistachio opens (and from **Check for Updates…** in the Pistachio menu or
-Settings) it asks GitHub for the latest release. If there is a newer one, it shows what's new
-and offers to download it in your browser: nothing is downloaded or installed without a yes,
-and a version can be skipped. The automatic check can be turned off in Settings.
+Settings) it asks GitHub for the latest release. If there is a newer one, a prompt in the middle
+of the window shows what's new. **Update** installs it the way Pistachio was installed and opens
+the new version: `brew upgrade --cask pistachio` for a Homebrew install on macOS (otherwise the
+new app replaces the old one), the .deb or .rpm on Linux (the system asks for your password) or
+the binary the tarball installed, and `pistachio.exe` on Windows. The download is checked against
+GitHub's checksum; if anything fails, the old version stays and the prompt says what happened.
+**Download instead** opens the download in your browser, and a version can be skipped. Nothing is
+downloaded or installed without a yes, and the automatic check can be turned off in Settings.
+
+**What's new.** After an update, Pistachio shows what changed since the version you had.
 
 ## Keyboard shortcuts
 
