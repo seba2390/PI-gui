@@ -6,6 +6,11 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The default text size is larger (the old Large); the picker gains a Larger step and your
+  current size is kept.
+
 ### Fixed
 
 - A turn's copy and branch buttons show while the pointer is anywhere in its answer, not only

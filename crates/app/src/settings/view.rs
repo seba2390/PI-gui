@@ -255,28 +255,13 @@ impl SettingsView {
                         SettingItem::new(
                             "Text size",
                             SettingField::dropdown(
-                                options(&[
-                                    ("small", "Small"),
-                                    ("default", "Default"),
-                                    ("large", "Large"),
-                                    ("larger", "Larger"),
-                                ]),
-                                |cx| {
-                                    match cx.global::<AppSettings>().text_size {
-                                        TextSize::Small => "small",
-                                        TextSize::Default => "default",
-                                        TextSize::Large => "large",
-                                        TextSize::Larger => "larger",
-                                    }
-                                    .into()
-                                },
+                                options(&TextSize::ALL.map(|size| (size.id(), size.label()))),
+                                |cx| cx.global::<AppSettings>().text_size.id().into(),
                                 |value, cx| {
-                                    let size = match value.as_ref() {
-                                        "small" => TextSize::Small,
-                                        "large" => TextSize::Large,
-                                        "larger" => TextSize::Larger,
-                                        _ => TextSize::Default,
-                                    };
+                                    let size = TextSize::ALL
+                                        .into_iter()
+                                        .find(|size| size.id() == value.as_ref())
+                                        .unwrap_or_default();
                                     AppSettings::update(cx, |s| s.text_size = size);
                                 },
                             ),

@@ -22,24 +22,66 @@ pub enum ThemeChoice {
     Dark,
 }
 
+/// The interface's text size, smallest first.
+///
+/// The sizes were relabelled one step down when the old "Large" became the default, so the
+/// stored ids are the old names: each saved setting keeps its exact size (an old "default"
+/// is now called Small). Don't rename an id, or saved sizes change.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
 pub enum TextSize {
+    #[serde(rename = "small")]
+    Smaller,
+    #[serde(rename = "default")]
     Small,
     #[default]
+    #[serde(rename = "large")]
     Default,
+    #[serde(rename = "larger")]
     Large,
+    #[serde(rename = "largest")]
     Larger,
 }
 
 impl TextSize {
+    /// Every size, smallest first (the picker's order).
+    pub const ALL: [Self; 5] = [
+        Self::Smaller,
+        Self::Small,
+        Self::Default,
+        Self::Large,
+        Self::Larger,
+    ];
+
     /// Scale applied to the theme's base text size (which sizes the whole interface).
     pub fn factor(self) -> f32 {
         match self {
-            Self::Small => 0.9,
-            Self::Default => 1.0,
-            Self::Large => 1.1,
-            Self::Larger => 1.2,
+            Self::Smaller => 0.9,
+            Self::Small => 1.0,
+            Self::Default => 1.1,
+            Self::Large => 1.2,
+            Self::Larger => 1.3,
+        }
+    }
+
+    /// The name shown in Settings.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Smaller => "Smaller",
+            Self::Small => "Small",
+            Self::Default => "Default",
+            Self::Large => "Large",
+            Self::Larger => "Larger",
+        }
+    }
+
+    /// The id it is saved as (also the picker's value).
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Smaller => "small",
+            Self::Small => "default",
+            Self::Default => "large",
+            Self::Large => "larger",
+            Self::Larger => "largest",
         }
     }
 }
@@ -258,6 +300,46 @@ mod tests {
         assert!(loaded.auto_names);
         assert_eq!(loaded.namer, crate::naming::Namer::Local);
         assert_eq!(loaded.naming_model, "smollm2-360m");
+    }
+
+    #[test]
+    fn text_size_defaults_to_the_old_large() {
+        assert_eq!(TextSize::default(), TextSize::Default);
+        assert!((TextSize::default().factor() - 1.1).abs() < f32::EPSILON);
+        let loaded: AppSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(loaded.text_size, TextSize::Default);
+    }
+
+    #[test]
+    fn saved_text_sizes_keep_their_scale() {
+        // The ids and scales saved before the sizes were relabelled.
+        for (id, factor, size) in [
+            ("small", 0.9, TextSize::Smaller),
+            ("default", 1.0, TextSize::Small),
+            ("large", 1.1, TextSize::Default),
+            ("larger", 1.2, TextSize::Large),
+        ] {
+            let loaded: TextSize = serde_json::from_str(&format!("\"{id}\"")).unwrap();
+            assert_eq!(loaded, size, "{id}");
+            assert!((loaded.factor() - factor).abs() < f32::EPSILON, "{id}");
+        }
+    }
+
+    #[test]
+    fn the_new_largest_step_round_trips() {
+        let loaded: TextSize = serde_json::from_str("\"largest\"").unwrap();
+        assert_eq!(loaded, TextSize::Larger);
+        assert!(loaded.factor() > TextSize::Large.factor());
+        for size in TextSize::ALL {
+            let text = serde_json::to_string(&size).unwrap();
+            assert_eq!(text, format!("\"{}\"", size.id()));
+            assert_eq!(serde_json::from_str::<TextSize>(&text).unwrap(), size);
+        }
+        assert!(
+            TextSize::ALL
+                .windows(2)
+                .all(|pair| pair[0].factor() < pair[1].factor())
+        );
     }
 
     #[test]
