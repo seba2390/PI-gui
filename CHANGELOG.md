@@ -6,6 +6,15 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- A built-in skill, `add-skill`, that teaches pi how to add skills: where each kind goes, the
+  front matter rules, writing a description pi can route on, supporting files, and checking
+  that pi loads it. Ask pi to "make a skill for …" or call `/skill:add-skill`. Code sessions
+  on this computer load it alongside your own skills (it is written to
+  `~/.pi/agent/pistachio/skills` and passed with `--skill`; pi's own skill folders are left
+  alone). The Skills page lists it under "Comes with Pistachio", read-only.
+
 ## [0.4.5] - 2026-11-23
 
 ### Added

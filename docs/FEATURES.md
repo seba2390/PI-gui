@@ -120,6 +120,10 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   the page shows whether the project is trusted and can trust it, saved in pi's own
   `trust.json` like the terminal's `/trust`. pi reads skills when it starts, so changes restart
   it on the same session.
+- **Built-in skills**: Code sessions on this computer also load the skills that come with
+  Pistachio, written to `~/.pi/agent/pistachio/skills` and passed with `--skill` (pi's own
+  skill folders are not touched). They show read-only on the Skills page under "Comes with
+  Pistachio". So far there is one, `add-skill`, which walks pi through adding a new skill.
 - **Add model**: the model picker under the composer ends with "Add model…" and "Edit
   models.json…". The form adds a custom model to pi's `models.json`, to a provider already in
   the file or a new one (presets for Ollama, LM Studio, vLLM, llama.cpp and OpenRouter; any
