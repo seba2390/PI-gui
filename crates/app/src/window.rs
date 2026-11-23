@@ -77,15 +77,14 @@ pub fn open_main_window(cx: &mut App) {
         app_id: Some("pistachio".into()),
         ..TitleBar::window_options()
     };
-    // macOS may keep a benchmark run's window in the background, where frames are capped at
-    // 30 fps; measure what an active window does instead.
-    let options = if crate::perf::bench::requested() {
-        WindowOptions {
-            inactive_frame_interval: None,
-            ..options
-        }
-    } else {
-        options
+    // GPUI caps a window that is not focused at 30 fps, so hovering it while another app
+    // is in front (a common case) answered up to 33 ms late. Frames are still drawn only
+    // when something changes; 60 fps keeps hover snappy. A benchmark run, which macOS may
+    // keep in the background, measures what an active window does.
+    let options = WindowOptions {
+        inactive_frame_interval: (!crate::perf::bench::requested())
+            .then_some(std::time::Duration::from_micros(16_667)),
+        ..options
     };
     let opened = open_window(options, cx, |window, cx| {
         crate::theme::sync_with_window(window, cx);
