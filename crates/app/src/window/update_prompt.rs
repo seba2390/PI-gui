@@ -1,6 +1,7 @@
 //! The update prompt and the "What's new" card shown after an update: a card centered on the
-//! chat column, with the rest of the window frosted over behind it.
+//! window, with the window blurred behind it.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use super::*;
@@ -25,6 +26,18 @@ pub(super) enum Prompt {
         from: SharedString,
         notes: SharedString,
     },
+}
+
+/// What is drawn behind the card.
+pub(super) enum Backdrop {
+    None,
+    /// Waiting for a picture of the window without the card (the card shows once it is
+    /// there, so it is never in the picture).
+    Capturing,
+    /// The window as it was, blurred.
+    Blurred(Arc<RenderImage>),
+    /// No picture (other systems, or capturing failed): a dense veil instead.
+    Veil,
 }
 
 pub(super) enum UpdateState {
@@ -55,14 +68,15 @@ impl MainWindow {
         if let Err(reason) = &install {
             log::info!("this copy can't update itself: {reason}");
         }
-        self.update_prompt = Some(Prompt::Update {
-            release,
-            install,
-            state: UpdateState::Offer,
-        });
-        // Escape reaches the window, not a message box behind the card.
-        self.focus_handle.focus(window, cx);
-        cx.notify();
+        self.show_prompt(
+            Prompt::Update {
+                release,
+                install,
+                state: UpdateState::Offer,
+            },
+            window,
+            cx,
+        );
     }
 
     /// After an update (a newer version than the one that ran last): what changed. Records
@@ -85,13 +99,72 @@ impl MainWindow {
         let Some(notes) = crate::whats_new::since(&last, CURRENT_VERSION) else {
             return;
         };
-        self.update_prompt = Some(Prompt::WhatsNew {
-            version: CURRENT_VERSION.into(),
-            from: last.into(),
-            notes: notes.into(),
-        });
+        self.show_prompt(
+            Prompt::WhatsNew {
+                version: CURRENT_VERSION.into(),
+                from: last.into(),
+                notes: notes.into(),
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// Shows `prompt` over the window, once a blurred picture of the window is ready to go
+    /// behind it.
+    fn show_prompt(&mut self, prompt: Prompt, window: &mut Window, cx: &mut Context<Self>) {
+        let replacing = self.update_prompt.is_some();
+        self.update_prompt = Some(prompt);
+        // Escape reaches the window, not a message box behind the card.
         self.focus_handle.focus(window, cx);
         cx.notify();
+        // A card already up keeps its backdrop (a picture now would show that card).
+        if replacing && !matches!(self.update_backdrop, Backdrop::None) {
+            return;
+        }
+        if !cfg!(target_os = "macos") {
+            self.update_backdrop = Backdrop::Veil;
+            return;
+        }
+        self.update_backdrop = Backdrop::Capturing;
+        request_capture();
+        window.refresh();
+        let background = cx.theme().background.to_rgb();
+        let tint = [background.r, background.g, background.b];
+        cx.spawn(async move |this, cx| {
+            let mut frame = None;
+            for _ in 0..30 {
+                cx.background_executor()
+                    .timer(Duration::from_millis(16))
+                    .await;
+                frame = take_capture();
+                if frame.is_some() {
+                    break;
+                }
+            }
+            let blurred = match frame {
+                Some(frame) => Some(
+                    cx.background_executor()
+                        .spawn(async move { crate::ui::backdrop::blur(&frame, tint, 0.35) })
+                        .await,
+                ),
+                None => None,
+            };
+            let _ = this.update(cx, |this, cx| {
+                if !matches!(this.update_backdrop, Backdrop::Capturing) {
+                    return;
+                }
+                this.update_backdrop = match blurred {
+                    Some(image) => Backdrop::Blurred(image),
+                    None => {
+                        log::info!("no picture of the window to blur; using a veil");
+                        Backdrop::Veil
+                    }
+                };
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Closes the card, unless an update is being installed.
@@ -104,6 +177,12 @@ impl MainWindow {
             })
         );
         if !working && self.update_prompt.take().is_some() {
+            if let Backdrop::Blurred(image) =
+                std::mem::replace(&mut self.update_backdrop, Backdrop::None)
+            {
+                cx.drop_image(image, None);
+            }
+            self.update_backdrop = Backdrop::None;
             cx.notify();
         }
     }
@@ -176,22 +255,25 @@ impl MainWindow {
         .detach();
     }
 
-    /// Frosts the window behind the card; a click on it closes the card.
+    /// The blurred window behind the card; a click on it closes the card.
     pub(super) fn render_update_scrim(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         self.update_prompt.as_ref()?;
-        let theme = cx.theme();
-        // GPUI cannot blur what is behind an element: a dense veil of the background color,
-        // tinted toward the accent, hides the detail the way frosted glass would.
-        let veil = theme.background.alpha(0.78);
-        let tint = crate::theme::palette(cx).accent.alpha(0.05);
+        let scrim = div().id("update-scrim").absolute().inset_0().occlude();
+        let scrim = match &self.update_backdrop {
+            Backdrop::None | Backdrop::Capturing => return None,
+            Backdrop::Blurred(image) => scrim.child(
+                img(image.clone())
+                    .absolute()
+                    .inset_0()
+                    .size_full()
+                    .object_fit(ObjectFit::Fill),
+            ),
+            // GPUI cannot blur what is behind an element without a picture of it: a dense
+            // veil of the background color hides the detail instead.
+            Backdrop::Veil => scrim.bg(cx.theme().background.alpha(0.82)),
+        };
         Some(
-            div()
-                .id("update-scrim")
-                .absolute()
-                .inset_0()
-                .occlude()
-                .bg(veil)
-                .child(div().absolute().inset_0().bg(tint))
+            scrim
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, _, _, cx| this.dismiss_update_prompt(cx)),
@@ -205,9 +287,11 @@ impl MainWindow {
         )
     }
 
-    /// The card, centered on the chat column a little above the middle (drawn after
-    /// everything else, so above the frosted veil).
+    /// The card, centered on the window.
     pub(super) fn render_update_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if matches!(self.update_backdrop, Backdrop::None | Backdrop::Capturing) {
+            return None;
+        }
         let card = match self.update_prompt.as_ref()? {
             Prompt::Update {
                 release,
@@ -244,8 +328,7 @@ impl MainWindow {
                 .inset_0()
                 .items_center()
                 .justify_center()
-                .pb(px(96.))
-                .child(deferred(card).with_priority(20))
+                .child(card)
                 .into_any_element(),
         )
     }
@@ -386,6 +469,20 @@ impl MainWindow {
             )
             .into_any_element()
     }
+}
+
+/// Asks for a picture of the next frame the window draws (macOS; see
+/// `vendor/gpui-pre-macos`).
+fn request_capture() {
+    #[cfg(target_os = "macos")]
+    gpui_macos::request_frame_capture();
+}
+
+fn take_capture() -> Option<image::RgbaImage> {
+    #[cfg(target_os = "macos")]
+    return gpui_macos::take_frame_capture();
+    #[cfg(not(target_os = "macos"))]
+    None
 }
 
 fn render_whats_new(

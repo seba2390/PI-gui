@@ -3459,8 +3459,6 @@ dependencies = [
 [[package]]
 name = "gpui-pre-apple"
 version = "0.3.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f1a823038fb3da6b9661135f5f8a5d8954c6ab1bda0670185485a13291087aa"
 dependencies = [
  "anyhow",
  "async-task",
@@ -6493,7 +6491,9 @@ dependencies = [
  "env_logger",
  "futures",
  "gpui-kit",
+ "gpui-pre-macos",
  "gpui-pre-sum-tree",
+ "image",
  "log",
  "markdown",
  "pi-config",
@@ -6505,6 +6505,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "sherpa-onnx",
+ "smallvec",
  "tempfile",
  "term",
  "titles",

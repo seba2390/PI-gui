@@ -60,7 +60,8 @@ npm i -g @earendil-works/pi-coding-agent
   brew install --cask seba2390/tap/pistachio
   ```
 
-  Update with `brew upgrade --cask pistachio`.
+  Pistachio offers new versions itself and installs them with Update (or run
+  `brew upgrade --cask pistachio`).
   <details>
   <summary>macOS without Homebrew</summary>
 

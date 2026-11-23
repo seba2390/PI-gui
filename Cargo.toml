@@ -119,3 +119,4 @@ panic = "abort"
 # version in step with the gpui-pre snapshot gpui-kit pins.
 [patch.crates-io]
 gpui-pre-macos = { path = "vendor/gpui-pre-macos" }
+gpui-pre-apple = { path = "vendor/gpui-pre-apple" }

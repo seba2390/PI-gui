@@ -19,7 +19,19 @@ Zed's `gpui_macos` (Apache-2.0), as published in the `gpui-pre` snapshot that gp
 Measured on a 75 Hz display, mouse move to the frame on screen (Metal's `presentedTime`):
 63 ms before, 35 ms after (8–11 ms of that is macOS delivering the event).
 
-To update: copy the new `gpui-pre-macos` release from `~/.cargo/registry/src/*/` over this
+- **A picture of the next frame on request** (`request_frame_capture`, `take_frame_capture`):
+  the app blurs it behind its update prompt. GPUI renders a scene to an image only in test
+  builds.
+
+## gpui-pre-apple 0.3.14
+
+Zed's `gpui_apple` (Apache-2.0), the Metal renderer `gpui-pre-macos` uses. Changed in
+`src/metal_renderer.rs` only (search for `Pistachio:`): rendering a scene into an offscreen
+texture and reading it back (`render_scene_to_image`) is compiled in normal builds, not only
+with `test-support`/`bench-support`, for the frame capture above.
+
+To update either: copy the new `gpui-pre-macos` release from `~/.cargo/registry/src/*/` over this
 folder (without `Cargo.lock`, `Cargo.toml.orig` and `.cargo_vcs_info.json`), re-apply the
-`Pistachio:` changes, and keep the version equal to the `gpui-pre` that gpui-kit pins. Drop the
+`Pistachio:` changes, and keep the version equal to the `gpui-pre` that gpui-kit pins (the same
+for `gpui-pre-apple`). Drop the
 patch once upstream GPUI paces frames this way.

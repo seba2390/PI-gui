@@ -1,5 +1,6 @@
 //! Small, app-specific UI building blocks shared by the views.
 
+pub mod backdrop;
 mod button;
 mod copy_button;
 mod drag;

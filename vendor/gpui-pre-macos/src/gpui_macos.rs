@@ -43,6 +43,8 @@ pub(crate) use platform::*;
 pub(crate) use window::*;
 
 pub use platform::MacPlatform;
+// Pistachio: see `window::request_frame_capture`.
+pub use window::{request_frame_capture, take_frame_capture};
 
 trait BoolExt {
     fn to_objc(self) -> Bool;

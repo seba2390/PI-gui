@@ -6,6 +6,19 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Update from the app: when a new version is out, Update in the prompt installs it the way
+  Pistachio was installed and opens the new version, with no download to unpack. On macOS
+  that is `brew upgrade --cask pistachio` for a Homebrew install, otherwise the new app
+  replaces the old one; on Linux the .deb or .rpm (the system asks for your password) or the
+  binary the tarball installed; on Windows `pistachio.exe` is replaced. The download is
+  checked against GitHub's checksum, and if anything fails the old version stays and the
+  prompt says what happened. The prompt now sits in the middle of the window, over the window
+  blurred (a dimmed veil on Linux and Windows).
+- What's new: after an update, Pistachio shows what changed since the version you had, from
+  this changelog.
+
 ### Fixed
 
 - This computer's models on SSH hosts (#26):

@@ -189,8 +189,10 @@ pub struct MainWindow {
     demo: Option<(Entity<crate::demo::DemoCursor>, Task<()>)>,
     /// `PISTACHIO_BENCH`: the navigation benchmark being run.
     bench: Option<Task<()>>,
-    /// The update prompt or "What's new" card over the chat column.
+    /// The update prompt or "What's new" card, centered on the window.
     update_prompt: Option<update_prompt::Prompt>,
+    /// What is drawn behind it: the window, blurred.
+    update_backdrop: update_prompt::Backdrop,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -341,6 +343,7 @@ impl MainWindow {
             parked_terminals: Vec::new(),
             dialog_subscription: None,
             update_prompt: None,
+            update_backdrop: update_prompt::Backdrop::None,
             pending_remote: restore.map(|target| (target, true)),
             after_remote: Vec::new(),
             pending_latest: None,
@@ -2606,7 +2609,6 @@ impl Render for MainWindow {
             .map(|(skills, _)| skills.clone());
         let page_open = self.page_open();
         let chat_column = v_flex()
-            .relative()
             .size_full()
             .min_w_0()
             // Whatever does not fit a narrow column is clipped here, never drawn over the
@@ -2652,8 +2654,7 @@ impl Render for MainWindow {
                             )
                         }),
                 )
-            })
-            .children(self.render_update_card(cx));
+            });
 
         div()
             .key_context(WINDOW_CONTEXT)
@@ -2713,6 +2714,7 @@ impl Render for MainWindow {
                     ),
             )
             .children(self.render_update_scrim(cx))
+            .children(self.render_update_card(cx))
             // Above menus and popovers (deferred at low priorities).
             .when_some(self.demo.as_ref(), |this, (cursor, _)| {
                 this.child(deferred(cursor.clone()).with_priority(1000))
