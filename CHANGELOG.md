@@ -6,6 +6,15 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- macOS builds are for Apple Silicon only: the download is now `Pistachio-…-macos-arm64.zip`,
+  half the size of the universal one. Intel Macs stay on 0.4.6, the last universal release:
+  Homebrew won't install newer versions on them, and Update in 0.4.6 and earlier finds no
+  universal download, so it says so and keeps the version they have. On Apple Silicon,
+  Homebrew installs update as before; a copy installed from the zip updates to 0.4.7 once by
+  hand (Update in 0.4.6 looks for the universal zip), and with Update from then on.
+
 ## [0.4.6] - 2026-11-23
 
 ### Added

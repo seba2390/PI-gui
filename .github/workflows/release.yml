@@ -15,12 +15,15 @@ env:
 
 jobs:
   macos:
-    name: macOS (universal)
+    # Apple Silicon only: Intel Macs are not built for since 0.4.7 (0.4.6 was the last
+    # universal release). The zip's name says so, which also keeps updaters from 0.4.6 and
+    # earlier, which look for the `-macos-universal.zip`, from installing it on an Intel Mac.
+    name: macOS (Apple Silicon)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - run: rustup target add aarch64-apple-darwin
       - uses: Swatinem/rust-cache@v2
       # sherpa-onnx-sys downloads its prebuilt libraries into target/sherpa-onnx-prebuilt and
       # skips the download whenever that folder's lib/ exists. rust-cache keeps the folder and
@@ -35,19 +38,16 @@ jobs:
                 target/*/*/build/sherpa-onnx-sys-* target/*/*/.fingerprint/sherpa-onnx-sys-*
             fi
       - run: cargo build --release --locked --target aarch64-apple-darwin
-      - run: cargo build --release --locked --target x86_64-apple-darwin
       - name: Bundle Pistachio.app
         run: |
           mkdir -p target/release
-          lipo -create -output target/release/pistachio \
-            target/aarch64-apple-darwin/release/pistachio \
-            target/x86_64-apple-darwin/release/pistachio
+          cp target/aarch64-apple-darwin/release/pistachio target/release/pistachio
           script/bundle-macos.sh release
           res=target/release/Pistachio.app/Contents/Resources
           cp LICENSE-MIT LICENSE-APACHE "$res/"
           python3 script/third-party-licenses.py aarch64-apple-darwin > "$res/THIRD-PARTY-LICENSES.txt"
           codesign --force --sign - target/release/Pistachio.app
-          name="Pistachio-${GITHUB_REF_NAME}-macos-universal.zip"
+          name="Pistachio-${GITHUB_REF_NAME}-macos-arm64.zip"
           (cd target/release && ditto -c -k --keepParent Pistachio.app "$name")
           echo "ASSET=target/release/$name" >> "$GITHUB_ENV"
       - uses: actions/upload-artifact@v7
@@ -176,13 +176,18 @@ jobs:
         if: env.TAP_KEY != '' && !contains(github.ref_name, '-')
         run: |
           version="${GITHUB_REF_NAME#v}"
-          sha=$(sha256sum "dist/Pistachio-${GITHUB_REF_NAME}-macos-universal.zip" | cut -d' ' -f1)
+          sha=$(sha256sum "dist/Pistachio-${GITHUB_REF_NAME}-macos-arm64.zip" | cut -d' ' -f1)
           mkdir -p ~/.ssh
           printf '%s\n' "$TAP_KEY" > ~/.ssh/tap && chmod 600 ~/.ssh/tap
           export GIT_SSH_COMMAND="ssh -i ~/.ssh/tap -o StrictHostKeyChecking=accept-new"
           git clone --depth 1 git@github.com:seba2390/homebrew-tap.git tap
           cd tap
           sed -i -E "s/^  version \".*\"/  version \"$version\"/; s/^  sha256 \".*\"/  sha256 \"$sha\"/" Casks/pistachio.rb
+          # Apple Silicon only since 0.4.7: the cask's file name, and brew refuses Intel Macs
+          # (which keep 0.4.6) instead of installing an app they can't run.
+          perl -0pi -e 's/-macos-universal\.zip/-macos-arm64.zip/g;
+            s/^  depends_on macos: /  depends_on arch: :arm64\n  depends_on macos: /m
+              unless /^  depends_on arch: :arm64$/m' Casks/pistachio.rb
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -am "pistachio $version" && git push
