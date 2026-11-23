@@ -4,15 +4,15 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use pi_rpc::protocol::{
-    AgentMessage, AssistantMessage, AssistantMessageEvent, ContentBlock, Event, ThinkingLevel,
-    ToolResultMessage, Usage,
+    AgentMessage, AssistantMessage, AssistantMessageEvent, ContentBlock, Event, MessageContent,
+    ThinkingLevel, ToolResultMessage, Usage,
 };
 use serde_json::Value;
 
 use crate::format::format_tokens;
 use crate::model::{
-    AssistantItem, Block, BlockKind, ItemId, ItemKind, NestedEntry, Notice, NoticeKind, Queue,
-    RunStatus, TextBlock, ThinkingBlock, ToolBlock, ToolStatus, TranscriptItem, TurnSummary,
+    AssistantItem, Block, BlockKind, Image, ItemId, ItemKind, NestedEntry, Notice, NoticeKind,
+    Queue, RunStatus, TextBlock, ThinkingBlock, ToolBlock, ToolStatus, TranscriptItem, TurnSummary,
     UserItem,
 };
 
@@ -211,6 +211,7 @@ impl Transcript {
                         ToolStatus::Done
                     };
                     tool.output = result_text(result);
+                    tool.images = result_images(result);
                     if let Some(details) = result.get("details").filter(|d| !d.is_null()) {
                         tool.details = Some(details.clone());
                     }
@@ -324,6 +325,7 @@ impl Transcript {
                     ToolStatus::Done
                 };
                 tool.output = result_text(result);
+                tool.images = result_images(result);
                 if let Some(details) = result.get("details").filter(|d| !d.is_null()) {
                     tool.details = Some(details.clone());
                 }
@@ -396,7 +398,7 @@ impl Transcript {
             AgentMessage::User(user) => {
                 self.push(ItemKind::User(UserItem {
                     text: user.content.text(),
-                    image_count: user.content.image_count(),
+                    images: content_images(&user.content),
                 }));
             }
             AgentMessage::Assistant(assistant) => {
@@ -619,6 +621,10 @@ impl Transcript {
             let text = blocks_text(&result.content);
             if !text.is_empty() || tool.output.is_empty() {
                 tool.output = text;
+            }
+            let images = blocks_images(&result.content);
+            if !images.is_empty() {
+                tool.images = images;
             }
             if result.details.as_ref().is_some_and(|d| !d.is_null()) {
                 tool.details.clone_from(&result.details);
@@ -862,6 +868,7 @@ fn new_tool_block(id: &str, name: &str) -> ToolBlock {
         output: String::new(),
         details: None,
         duration_ms: None,
+        images: Vec::new(),
         nested: Vec::new(),
     }
 }
@@ -892,6 +899,45 @@ fn result_text(result: &Value) -> String {
                 .join("\n")
         })
         .unwrap_or_default()
+}
+
+/// The images in a live tool result (`{"content": [{"type": "image", ...}]}`).
+fn result_images(result: &Value) -> Vec<Image> {
+    result
+        .get("content")
+        .and_then(Value::as_array)
+        .map(|blocks| {
+            blocks
+                .iter()
+                .filter(|block| block.get("type").and_then(Value::as_str) == Some("image"))
+                .filter_map(|block| {
+                    let data = block.get("data").and_then(Value::as_str)?;
+                    let mime = block
+                        .get("mimeType")
+                        .and_then(Value::as_str)
+                        .unwrap_or("image/png");
+                    Some(Image::new(data, mime))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn blocks_images(blocks: &[ContentBlock]) -> Vec<Image> {
+    blocks
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Image(image) => Some(Image::new(&image.data, &image.mime_type)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn content_images(content: &MessageContent) -> Vec<Image> {
+    match content {
+        MessageContent::Text(_) => Vec::new(),
+        MessageContent::Blocks(blocks) => blocks_images(blocks),
+    }
 }
 
 fn blocks_text(blocks: &[ContentBlock]) -> String {

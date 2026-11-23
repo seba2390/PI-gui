@@ -5,6 +5,7 @@
 //! scanner reads lines cheaply and fully parses only the ones it needs. Opening a
 //! session is always done by pi itself (`switch_session` / `--session`).
 
+pub mod branch;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};

@@ -61,6 +61,8 @@ pub struct AppSettings {
     pub theme: ThemeChoice,
     /// The palette for code (syntax colors only; the rest of the theme is unchanged).
     pub code_colors: crate::code_colors::CodeColors,
+    /// How a working agent is shown (chat and sidebar).
+    pub working_indicator: crate::ui::spinner::IndicatorStyle,
     pub text_size: TextSize,
     pub start_mode: StartMode,
     /// Open the last session of the start mode (on this computer or an SSH host) at start,
@@ -85,6 +87,12 @@ pub struct AppSettings {
     pub speech_language: String,
     /// How long a silence ends dictation.
     pub speech_auto_stop: crate::stt::AutoStop,
+    /// Name new conversations from their first message (see [`crate::naming`]).
+    pub auto_names: bool,
+    /// What makes those names.
+    pub namer: crate::naming::Namer,
+    /// The local model that names conversations (a `naming::catalog` id).
+    pub naming_model: String,
 }
 
 impl Default for AppSettings {
@@ -92,6 +100,7 @@ impl Default for AppSettings {
         Self {
             theme: ThemeChoice::default(),
             code_colors: crate::code_colors::CodeColors::default(),
+            working_indicator: crate::ui::spinner::IndicatorStyle::default(),
             text_size: TextSize::default(),
             start_mode: StartMode::default(),
             reopen_last_session: false,
@@ -104,6 +113,9 @@ impl Default for AppSettings {
             speech_model: crate::stt::catalog::DEFAULT_MODEL.to_owned(),
             speech_language: String::new(),
             speech_auto_stop: crate::stt::AutoStop::default(),
+            auto_names: false,
+            namer: crate::naming::Namer::default(),
+            naming_model: crate::naming::catalog::DEFAULT_MODEL.to_owned(),
         }
     }
 }
@@ -229,6 +241,23 @@ mod tests {
         let loaded = AppSettings::load(Some(&path));
         assert_eq!(loaded.theme, ThemeChoice::Dark);
         assert!(loaded.check_for_updates, "unset keys keep their defaults");
+        assert!(
+            !loaded.auto_names,
+            "automatic names are off unless turned on"
+        );
+    }
+
+    #[test]
+    fn naming_settings_round_trip() {
+        let defaults = AppSettings::default();
+        assert!(!defaults.auto_names);
+        assert_eq!(defaults.namer, crate::naming::Namer::Conversation);
+        assert_eq!(defaults.naming_model, crate::naming::catalog::DEFAULT_MODEL);
+        let text = r#"{"auto_names": true, "namer": "local", "naming_model": "smollm2-360m"}"#;
+        let loaded: AppSettings = serde_json::from_str(text).unwrap();
+        assert!(loaded.auto_names);
+        assert_eq!(loaded.namer, crate::naming::Namer::Local);
+        assert_eq!(loaded.naming_model, "smollm2-360m");
     }
 
     #[test]

@@ -22,10 +22,13 @@ static EMBEDDED: &[(&str, &[u8])] = embedded![
     "icons/globe.svg",
     "icons/image.svg",
     "icons/message-square.svg",
+    "icons/package.svg",
     "icons/paperclip.svg",
+    "icons/pencil.svg",
     "icons/pi-logo.svg",
     "icons/rotate-ccw.svg",
     "icons/square-pen.svg",
+    "icons/wrench.svg",
     "themes/pi.json",
 ];
 

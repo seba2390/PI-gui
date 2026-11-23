@@ -6,6 +6,7 @@ mod context_panel;
 pub mod dialogs;
 mod file_picker;
 mod find;
+mod images;
 pub(crate) mod mention;
 pub mod models_dialog;
 mod rows;
@@ -13,9 +14,7 @@ pub mod session;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::time::Duration;
 
-use gpui_kit::component::message_scroller::{MessageScroller, MessageScrollerState};
 use gpui_kit::component::text::{TextView, TextViewState};
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -24,18 +23,16 @@ use transcript::{BlockKind, ItemId, ItemKind};
 
 use composer::Composer;
 pub use composer::ComposerEvent;
-pub(crate) use rows::SPINNER;
 use session::{PiSession, SessionEvent};
 
 use crate::theme::palette;
+use crate::ui::{MessageScroller, MessageScrollerState};
 
 actions!(chat, [ToggleThinking, ToggleToolOutput]);
 
 const CHAT_CONTEXT: &str = "Chat";
 /// Readable line length, like other agent UIs.
 pub const CONTENT_MAX_WIDTH: Pixels = px(780.);
-/// Frame interval of the "working" spinner.
-const SPINNER_FRAME: Duration = Duration::from_millis(80);
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
@@ -57,6 +54,8 @@ pub struct BlockKey {
 struct Markdown {
     state: Entity<TextViewState>,
     source_len: usize,
+    /// Remeasures the block's row when a parse lands (see [`ChatView::new_markdown`]).
+    _parsed: Subscription,
 }
 
 #[derive(Debug, Clone)]
@@ -93,8 +92,6 @@ pub struct ChatView {
     expand_tools: bool,
     focus_handle: FocusHandle,
     ticker: Option<Task<()>>,
-    /// Advances every [`SPINNER_FRAME`] while the agent works.
-    spinner_frame: usize,
     /// The host was re-checked after this remote session ended.
     checked_host: bool,
     /// Shown in the window (false while it works in the background).
@@ -195,7 +192,6 @@ impl ChatView {
             expand_tools: false,
             focus_handle: cx.focus_handle(),
             ticker: None,
-            spinner_frame: 0,
             checked_host: false,
             visible: true,
             roles: Vec::new(),
@@ -262,6 +258,25 @@ impl ChatView {
         self.scroller
             .update(cx, |scroller, cx| scroller.reset(0, cx));
         self.sync(cx);
+    }
+
+    /// Opens the picture viewer on the conversation's pictures, at `start`
+    /// (`PISTACHIO_OPEN=image-viewer:<n>`, for layout checks).
+    /// Returns whether there were pictures to show.
+    pub fn open_images(
+        chat: &Entity<Self>,
+        start: usize,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        let session = chat.read(cx).session.clone();
+        let all = images::all_images(session.read(cx).transcript().items());
+        if all.is_empty() {
+            return false;
+        }
+        let start = start.min(all.len() - 1);
+        images::open_viewer(all.into(), start, window, cx);
+        true
     }
 
     /// The composer, e.g. to insert an `@path` mention from the Files tab.
@@ -460,14 +475,8 @@ impl ChatView {
                     markdown.source_len = text.len();
                 }
                 (None, _) => {
-                    let state = cx.new(|cx| TextViewState::markdown(&text, cx).selectable(true));
-                    self.markdown.insert(
-                        key,
-                        Markdown {
-                            state,
-                            source_len: text.len(),
-                        },
-                    );
+                    let markdown = Self::new_markdown(key, &text, text.len(), cx);
+                    self.markdown.insert(key, markdown);
                 }
             }
         }
@@ -482,14 +491,8 @@ impl ChatView {
                     markdown.source_len = text.len();
                 }
                 None => {
-                    let state = cx.new(|cx| TextViewState::markdown(&source, cx).selectable(true));
-                    self.markdown.insert(
-                        key,
-                        Markdown {
-                            state,
-                            source_len: text.len(),
-                        },
-                    );
+                    let markdown = Self::new_markdown(key, &source, text.len(), cx);
+                    self.markdown.insert(key, markdown);
                 }
             }
         }
@@ -518,18 +521,18 @@ impl ChatView {
         self.row_versions = new_versions;
         self.working_row = running;
 
-        // 4. While working, tick at the spinner's frame rate so it animates smoothly and the
-        //    timers advance. 12.5 fps keeps the redraw cost (the chat column) small; nothing
-        //    ticks while idle.
+        // 4. While working, repaint at the working π's frame rate so it pulses smoothly and
+        //    the timers advance; nothing ticks while idle.
         if running && self.ticker.is_none() {
             self.ticker = Some(cx.spawn(async move |this, cx| {
                 loop {
-                    cx.background_executor().timer(SPINNER_FRAME).await;
+                    cx.background_executor()
+                        .timer(crate::ui::spinner::FRAME)
+                        .await;
                     let keep = this
                         .update(cx, |this, cx| {
                             let running = this.session.read(cx).is_running();
                             if running {
-                                this.spinner_frame = this.spinner_frame.wrapping_add(1);
                                 cx.notify();
                             } else {
                                 this.ticker = None;
@@ -548,8 +551,50 @@ impl ChatView {
         cx.notify();
     }
 
-    pub(crate) fn spinner_frame(&self) -> usize {
-        self.spinner_frame
+    /// A selectable markdown view of `source` for block `key`; `source_len` is the length of
+    /// the transcript text it shows (kept to stream appends in).
+    fn new_markdown(
+        key: BlockKey,
+        source: &str,
+        source_len: usize,
+        cx: &mut Context<Self>,
+    ) -> Markdown {
+        let state = cx.new(|cx| TextViewState::markdown(source, cx).selectable(true));
+        // The scroller measures every row once, those above the viewport included, so its
+        // scrollbar is right from the first frame. gpui-kit parses a text over 4 KB in the
+        // background, so such a row is first measured before its parse lands and would
+        // keep that height until scrolled into view. Remeasure it when a parse lands: the
+        // source of the parsed text changes then, and only then (selection and find
+        // highlights notify too).
+        let mut parsed = state.read(cx).rendered_text().source().len();
+        let observer = cx.observe(&state, move |this, state, cx| {
+            let len = state.read(cx).rendered_text().source().len();
+            if len != parsed {
+                parsed = len;
+                this.remeasure_item(key.item, cx);
+            }
+        });
+        Markdown {
+            state,
+            source_len,
+            _parsed: observer,
+        }
+    }
+
+    /// Measures the row of transcript item `item` again (its height changed).
+    fn remeasure_item(&mut self, item: ItemId, cx: &mut Context<Self>) {
+        let row = self
+            .session
+            .read(cx)
+            .transcript()
+            .items()
+            .iter()
+            .position(|candidate| candidate.id == item);
+        if let Some(row) = row {
+            self.scroller.update(cx, |scroller, cx| {
+                scroller.remeasure_items(row..row + 1, cx);
+            });
+        }
     }
 
     pub(crate) fn is_expanded(&self, key: BlockKey, is_thinking: bool) -> bool {

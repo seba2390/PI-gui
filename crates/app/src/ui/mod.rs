@@ -4,13 +4,16 @@ mod button;
 mod copy_button;
 mod drag;
 mod icons;
+mod message_scroller;
 mod pi_field;
+pub mod spinner;
 mod text;
 
 pub use button::QuietButton;
 pub use copy_button::CopyButton;
 pub use drag::WindowDrag;
 pub use icons::AppIcon;
+pub use message_scroller::{MessageScroller, MessageScrollerState};
 pub use pi_field::PiField;
 pub use text::{relative_time, short_path};
 

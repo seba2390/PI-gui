@@ -1,5 +1,6 @@
 //! Transcript data types. Plain data: the reducer mutates, views read.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use pi_rpc::protocol::StopReason;
@@ -37,7 +38,28 @@ pub enum ItemKind {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct UserItem {
     pub text: String,
-    pub image_count: usize,
+    /// Images attached to the prompt.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<Image>,
+}
+
+/// An image in the conversation (attached to a prompt, or returned by a tool such as
+/// `read` on a picture), base64-encoded as pi sent it. The data is shared, so copies of
+/// the transcript don't copy it; views decode it only when they show it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Image {
+    #[serde(skip)]
+    pub data: Arc<str>,
+    pub mime_type: String,
+}
+
+impl Image {
+    pub fn new(data: &str, mime_type: &str) -> Self {
+        Self {
+            data: Arc::from(data),
+            mime_type: mime_type.to_owned(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -121,6 +143,9 @@ pub struct ToolBlock {
     /// Tool-specific details, e.g. `{"diff": ..., "patch": ...}` for `edit`.
     pub details: Option<Value>,
     pub duration_ms: Option<u64>,
+    /// Images in the result (e.g. `read` on a picture), in order.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<Image>,
     /// Work done inside this call (a subagent's or code mode's own tool calls and
     /// replies), in order. Live only: pi does not store it in the session.
     #[serde(skip_serializing_if = "Vec::is_empty")]

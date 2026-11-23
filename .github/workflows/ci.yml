@@ -46,6 +46,18 @@ jobs:
             libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev \
             libx11-xcb-dev libxcb1-dev libfontconfig-dev libfreetype-dev libzstd-dev libasound2-dev
       - uses: Swatinem/rust-cache@v2
+      # sherpa-onnx-sys downloads its prebuilt libraries into target/sherpa-onnx-prebuilt and
+      # skips the download whenever that folder's lib/ exists. rust-cache keeps the folder and
+      # the build script's fingerprint but not the library files, so linking then fails. If
+      # the library itself is missing, drop the folder and the crate's build outputs.
+      - name: Re-fetch sherpa-onnx libraries the cache dropped
+        shell: bash
+        run: |
+            if ! ls target/sherpa-onnx-prebuilt/*/lib/*sherpa-onnx-c-api* >/dev/null 2>&1; then
+              rm -rf target/sherpa-onnx-prebuilt \
+                target/*/build/sherpa-onnx-sys-* target/*/.fingerprint/sherpa-onnx-sys-* \
+                target/*/*/build/sherpa-onnx-sys-* target/*/*/.fingerprint/sherpa-onnx-sys-*
+            fi
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
 
@@ -60,4 +72,16 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      # sherpa-onnx-sys downloads its prebuilt libraries into target/sherpa-onnx-prebuilt and
+      # skips the download whenever that folder's lib/ exists. rust-cache keeps the folder and
+      # the build script's fingerprint but not the library files, so linking then fails. If
+      # the library itself is missing, drop the folder and the crate's build outputs.
+      - name: Re-fetch sherpa-onnx libraries the cache dropped
+        shell: bash
+        run: |
+            if ! ls target/sherpa-onnx-prebuilt/*/lib/*sherpa-onnx-c-api* >/dev/null 2>&1; then
+              rm -rf target/sherpa-onnx-prebuilt \
+                target/*/build/sherpa-onnx-sys-* target/*/.fingerprint/sherpa-onnx-sys-* \
+                target/*/*/build/sherpa-onnx-sys-* target/*/*/.fingerprint/sherpa-onnx-sys-*
+            fi
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings

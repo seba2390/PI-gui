@@ -5,6 +5,9 @@
 //! Silicon Mac (4 CPU threads): Moonshine ~40×, Parakeet ~11×, Whisper small ~5× and
 //! Whisper turbo ~2× faster than real time.
 
+use crate::model_store::{Downloadable, Fetch};
+pub use crate::model_store::{ModelFile, size_label};
+
 /// How fast a model transcribes, relative to the others.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Speed {
@@ -37,13 +40,6 @@ pub enum Kind {
 }
 
 #[derive(Debug)]
-pub struct ModelFile {
-    pub name: &'static str,
-    pub size: u64,
-    pub sha256: &'static str,
-}
-
-#[derive(Debug)]
 pub struct Model {
     /// Stable id: the settings value and the folder name under `speech/`.
     pub id: &'static str,
@@ -61,11 +57,6 @@ pub struct Model {
 }
 
 impl Model {
-    /// Download size in bytes.
-    pub fn size(&self) -> u64 {
-        self.files.iter().map(|file| file.size).sum()
-    }
-
     pub fn size_label(&self) -> String {
         size_label(self.size())
     }
@@ -89,14 +80,25 @@ impl Model {
     }
 }
 
-/// `639 MB`, `1.0 GB`.
-#[allow(clippy::cast_precision_loss)] // display only
-pub fn size_label(bytes: u64) -> String {
-    let mb = bytes as f64 / 1_000_000.;
-    if mb >= 1000. {
-        format!("{:.1} GB", mb / 1000.)
-    } else {
-        format!("{mb:.0} MB")
+impl Downloadable for Model {
+    fn id(&self) -> &'static str {
+        self.id
+    }
+
+    fn revision(&self) -> &'static str {
+        self.revision
+    }
+
+    fn fetches(&self) -> Vec<Fetch> {
+        self.files
+            .iter()
+            .map(|file| Fetch {
+                name: file.name,
+                size: file.size,
+                sha256: file.sha256,
+                url: self.url(file),
+            })
+            .collect()
     }
 }
 
@@ -257,11 +259,7 @@ mod tests {
     fn catalog_is_consistent() {
         assert!(model(DEFAULT_MODEL).is_some());
         for model in MODELS {
-            assert_eq!(model.revision.len(), 40, "{}: pin a full commit", model.id);
-            for file in model.files {
-                assert_eq!(file.sha256.len(), 64, "{} {}", model.id, file.name);
-                assert!(file.size > 0);
-            }
+            crate::model_store::assert_pinned(model);
             let needed: &[&str] = match model.kind {
                 Kind::Parakeet => &["encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx"],
                 Kind::Moonshine => &["encoder_model.ort", "decoder_model_merged.ort"],
@@ -271,11 +269,5 @@ mod tests {
                 assert!(model.file(name).is_some(), "{}: no {name}", model.id);
             }
         }
-    }
-
-    #[test]
-    fn size_labels() {
-        assert_eq!(size_label(670_576_784), "671 MB");
-        assert_eq!(size_label(1_036_613_791), "1.0 GB");
     }
 }

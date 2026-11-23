@@ -57,6 +57,8 @@ pub fn header(tool: &ToolBlock, paths: PathContext<'_>) -> ToolHeader {
     };
     let path =
         |fallback: &str| path_arg(args).map_or_else(|| fallback.to_owned(), |p| paths.display(p));
+    // Titles are past tense, like the labels of recognized shell commands ("Listed",
+    // "Ran"); "Read" reads both ways. Grep, Find and Bash are tool names.
     let (title, detail) = match tool.name.as_str() {
         "read" => ("Read", format!("{}{}", path(""), line_range(args))),
         "bash" => {
@@ -72,9 +74,9 @@ pub fn header(tool: &ToolBlock, paths: PathContext<'_>) -> ToolHeader {
             }
             ("Bash", first_line(arg(args, "command").unwrap_or("")))
         }
-        "edit" => ("Edit", path("")),
-        "write" => ("Write", path("")),
-        "ls" => ("List", path(".")),
+        "edit" => ("Edited", path("")),
+        "write" => ("Wrote", path("")),
+        "ls" => ("Listed", path(".")),
         "grep" => {
             let detail = format!("/{}/ in {}", arg(args, "pattern").unwrap_or(""), path("."));
             match arg(args, "glob") {
@@ -87,7 +89,7 @@ pub fn header(tool: &ToolBlock, paths: PathContext<'_>) -> ToolHeader {
             format!("{} in {}", arg(args, "pattern").unwrap_or(""), path(".")),
         ),
         // Deep search (pistachio's chat extension).
-        "web_search" => ("Search", arg(args, "query").unwrap_or("").to_owned()),
+        "web_search" => ("Searched", arg(args, "query").unwrap_or("").to_owned()),
         "web_fetch" => ("Read", short_url(arg(args, "url").unwrap_or(""))),
         other => {
             return ToolHeader {
@@ -99,6 +101,70 @@ pub fn header(tool: &ToolBlock, paths: PathContext<'_>) -> ToolHeader {
     ToolHeader {
         title: title.to_owned(),
         detail,
+    }
+}
+
+/// What kind of step a tool call is, for the small icon at the start of its row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolKind {
+    /// Reads a file.
+    Read,
+    /// Creates, changes, moves or removes files.
+    Write,
+    /// Lists folders.
+    List,
+    /// Searches or checks (grep, find, `which`, versions).
+    Search,
+    /// Fetches or searches the web.
+    Web,
+    /// Installs packages.
+    Install,
+    /// Git.
+    Git,
+    /// Runs a command or script.
+    Shell,
+    /// Anything else (extension and MCP tools).
+    Other,
+}
+
+/// The kind of `tool`: by tool name, and for shell commands by what the command does (the
+/// first step of a recognized command, as its title shows).
+pub fn kind(tool: &ToolBlock) -> ToolKind {
+    match tool.name.as_str() {
+        "read" => ToolKind::Read,
+        "write" | "edit" => ToolKind::Write,
+        "ls" => ToolKind::List,
+        "grep" | "find" => ToolKind::Search,
+        "web_search" | "web_fetch" => ToolKind::Web,
+        "bash" => arg(&tool.args, "command")
+            .and_then(crate::command::summarize)
+            .and_then(|summary| summary.actions.first().map(action_kind))
+            .unwrap_or(ToolKind::Shell),
+        _ => ToolKind::Other,
+    }
+}
+
+fn action_kind(action: &crate::command::Action) -> ToolKind {
+    use crate::command::Action;
+    match action {
+        Action::Read(_) => ToolKind::Read,
+        Action::List(_) => ToolKind::List,
+        Action::Find { .. } | Action::Search { .. } | Action::Check(_) => ToolKind::Search,
+        Action::GitRead(_) | Action::Git(_) | Action::InitRepo => ToolKind::Git,
+        Action::Install { .. } => ToolKind::Install,
+        Action::CreateProject(_)
+        | Action::MakeDir(_)
+        | Action::Create(_)
+        | Action::Write(_)
+        | Action::Edit(_)
+        | Action::Remove(_)
+        | Action::Move(..)
+        | Action::Copy(..) => ToolKind::Write,
+        Action::Fetch(_) => ToolKind::Web,
+        Action::Remote {
+            inner: Some(inner), ..
+        } => inner.actions.first().map_or(ToolKind::Shell, action_kind),
+        _ => ToolKind::Shell,
     }
 }
 
@@ -169,6 +235,11 @@ fn compact_args(args: &Value) -> String {
 pub fn result_summary(tool: &ToolBlock) -> Option<String> {
     let lines = |text: &str| text.trim_end().lines().count();
     match tool.name.as_str() {
+        // A picture comes back with a one-line note; the picture is what was read.
+        "read" if !tool.images.is_empty() => Some(match tool.images.len() {
+            1 => "Read an image".to_owned(),
+            n => format!("Read {n} images"),
+        }),
         "read" => Some(plural(lines(&tool.output), "line", "Read")),
         "write" => {
             arg(&tool.args, "content").map(|content| plural(lines(content), "line", "Wrote"))
@@ -294,7 +365,35 @@ mod tests {
             output: String::new(),
             details: None,
             duration_ms: None,
+            images: Vec::new(),
             nested: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn kinds_follow_the_tool_and_the_command() {
+        let bash = |command: &str| tool("bash", json!({ "command": command }));
+        let cases = [
+            (tool("read", json!({"path":"a.rs"})), ToolKind::Read),
+            (tool("edit", json!({"path":"a.rs"})), ToolKind::Write),
+            (tool("write", json!({"path":"a.rs"})), ToolKind::Write),
+            (tool("ls", json!({})), ToolKind::List),
+            (tool("grep", json!({"pattern":"x"})), ToolKind::Search),
+            (
+                tool("web_fetch", json!({"url":"https://x.dev"})),
+                ToolKind::Web,
+            ),
+            (tool("mcp__x", json!({})), ToolKind::Other),
+            (bash("ls -la"), ToolKind::List),
+            (bash("cat Cargo.toml"), ToolKind::Read),
+            (bash("rg foo src"), ToolKind::Search),
+            (bash("mkdir -p js"), ToolKind::Write),
+            (bash("git status"), ToolKind::Git),
+            (bash("npm install"), ToolKind::Install),
+            (bash("frobnicate --hard"), ToolKind::Shell),
+        ];
+        for (tool, expected) in cases {
+            assert_eq!(kind(&tool), expected, "{} {}", tool.name, tool.args);
         }
     }
 
@@ -316,16 +415,20 @@ mod tests {
                 "Bash",
                 "frobnicate -x",
             ),
-            (tool("edit", json!({"path":"/h/x.txt"})), "Edit", "~/x.txt"),
+            (
+                tool("edit", json!({"path":"/h/x.txt"})),
+                "Edited",
+                "~/x.txt",
+            ),
             (
                 tool("grep", json!({"pattern":"fn main","glob":"*.rs"})),
                 "Grep",
                 "/fn main/ in . (*.rs)",
             ),
-            (tool("ls", json!({})), "List", "."),
+            (tool("ls", json!({})), "Listed", "."),
             (
                 tool("web_search", json!({"query":"dgx spark price"})),
-                "Search",
+                "Searched",
                 "dgx spark price",
             ),
             (

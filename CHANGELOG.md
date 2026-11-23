@@ -6,6 +6,56 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-11-23
+
+### Added
+
+- Automatic conversation names (Settings → Conversation names, off by default): a new
+  conversation is named after its first message in a few words, instead of the message's
+  first line, and the sidebar types the name out behind a caret. The name is made either by
+  the conversation's own model, through a separate `pi --print --no-session` call that leaves
+  the conversation's session and context untouched (on the SSH host for remote
+  conversations), or by a small model on this computer (Qwen2.5 0.5B, SmolLM2 360M or
+  Qwen2.5 1.5B, downloaded on request, checked against pinned SHA-256 digests and run with
+  candle). The first message is sent right away; names are saved through pi, so the
+  terminal shows them too, and names you set yourself are never replaced.
+- Pictures in the chat: when the agent reads an image (a screenshot, say), a small thumbnail
+  shows to the right of the call, and an "Explored" group shows the first two with "+N".
+  Pictures attached to a prompt show above it. Clicking one opens a full-window viewer; ← / →
+  or the arrows browse all the pictures of that call, group or prompt, and Esc closes it.
+
+### Changed
+
+- Switching to a session is near-instant: its history is read straight from the session
+  file (in about 60 ms for a long session) and shown while pi starts, instead of after pi
+  has started and sent it (around a second). pi's own history replaces it only if it
+  differs; sessions with compactions or context edits, and sessions on SSH hosts, still wait
+  for pi.
+- The working indicator is a little green π with dots orbiting it, in the chat and in the
+  sidebar, where it now sits left of the conversation's name. Settings → Appearance →
+  Working indicator picks the style, with a live preview: by default two dots chase round the
+  π at a spinner's uneven speed while it glows and a shimmer crosses "Working…"; the others
+  are a comet tail, a spinning π, a single dot, an atom ring, half-turn hops and a pulse. "Working… 12s · esc to interrupt" is centred, and "Worked for" has a
+  small π.
+- Tool calls start with a small icon for what they did (a document for reads, a pencil for
+  changes, a terminal for commands, a magnifier for searches, a folder for listings, a globe
+  for the web), instead of a green dot. It is muted when the call is done, red when it failed,
+  breathing in the accent colour while it runs and faded when interrupted, so green is left
+  for the connection and running work.
+- The model's text stands apart from its activity: runs of tool calls and thinking sit on a
+  thin rail on the left, in a slightly smaller, muted style, with more room where they meet
+  the text. An image read says "Read an image" instead of "Read 1 line".
+
+- Tool calls in the chat read in the past tense like the rest: "Wrote", "Edited", "Listed" and
+  "Searched" instead of "Write", "Edit", "List" and "Search".
+
+### Fixed
+
+- Opening a long conversation, the scrollbar now spans all of it from the start, instead of
+  starting too big and shrinking and jumping as you scroll up.
+- Clicking the conversation already behind the Settings or Skills page (or the Chat / Code
+  mode already in use) did nothing; it now closes the page and shows the conversation.
+
 ## [0.4.2] - 2026-11-22
 
 ### Added
@@ -185,7 +235,8 @@ chats, skills and model management. Changes since the last private build:
 - A corrupt `hosts.json` is kept as a backup.
 - A remembered terminal height can no longer squeeze out the chat.
 
-[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/seba2390/pistachio/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/seba2390/pistachio/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/seba2390/pistachio/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/seba2390/pistachio/compare/v0.3.0...v0.4.0

@@ -20,6 +20,7 @@ pi-rpc.workspace = true
 pi-sessions.workspace = true
 remote.workspace = true
 transcript.workspace = true
+titles.workspace = true
 workspace.workspace = true
 term.workspace = true
 anyhow.workspace = true

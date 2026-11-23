@@ -217,6 +217,13 @@ impl MainWindow {
                 },
             ),
             cx.subscribe_in(
+                &crate::naming::models(cx),
+                window,
+                |_, _, event: &crate::naming::NamingModelsEvent, window, cx| {
+                    crate::naming::ui::notify_download(event, window, cx);
+                },
+            ),
+            cx.subscribe_in(
                 &crate::hosts::hosts(cx),
                 window,
                 |this, hosts, event: &HostsEvent, window, cx| match event {
@@ -375,6 +382,12 @@ impl MainWindow {
                         settings.update(cx, |settings, _| settings.start_on_speech());
                     }
                 }
+                "settings-names" => {
+                    self.open_settings(&OpenSettings, window, cx);
+                    if let Some(settings) = self.settings.as_ref().map(|s| s.0.clone()) {
+                        settings.update(cx, |settings, _| settings.start_on_names());
+                    }
+                }
                 "speech-download" => crate::stt::ui::open_download_dialog(window, cx),
                 "dictate" => {
                     let composer = self.chat.read(cx).composer().clone();
@@ -391,6 +404,47 @@ impl MainWindow {
                     self.show_files(&ShowFiles, window, cx);
                     self.right_panel
                         .update(cx, |panel, cx| panel.open_file(path, window, cx));
+                }
+                other if other.starts_with("image-viewer:") => {
+                    let start = other["image-viewer:".len()..].parse().unwrap_or(0);
+                    // The session loads in the background; a scripted check waits (up to a few
+                    // seconds) for its pictures.
+                    cx.spawn_in(window, async move |this, cx| {
+                        for _ in 0..50 {
+                            let opened = this
+                                .update_in(cx, |this, window, cx| {
+                                    ChatView::open_images(&this.chat.clone(), start, window, cx)
+                                })
+                                .unwrap_or(true);
+                            if opened {
+                                break;
+                            }
+                            cx.background_executor()
+                                .timer(std::time::Duration::from_millis(100))
+                                .await;
+                        }
+                    })
+                    .detach();
+                }
+                // Plays the sidebar's typing animation for the open session's row, as if an
+                // automatic name arrived 2.5 s after start (the name is not saved).
+                other if other.starts_with("type-name:") => {
+                    let title = other["type-name:".len()..].to_owned();
+                    let key = session_key(&self.chat, cx);
+                    cx.spawn(async move |_, cx| {
+                        cx.background_executor()
+                            .timer(std::time::Duration::from_millis(2500))
+                            .await;
+                        if let Some((host, path)) = key {
+                            cx.update(|cx| crate::naming::announce(host, Some(path), title, cx));
+                        }
+                    })
+                    .detach();
+                }
+                other if other.starts_with("send:") => {
+                    let text = other["send:".len()..].to_owned();
+                    let composer = self.chat.read(cx).composer().clone();
+                    composer.update(cx, |composer, cx| composer.send_text(&text, window, cx));
                 }
                 other if other.starts_with("find:") => {
                     let chat = self.chat.clone();
@@ -560,6 +614,8 @@ impl MainWindow {
         self.sidebar
             .update(cx, |sidebar, cx| sidebar.set_mode(mode, window, cx));
         if self.mode(cx) == mode {
+            // Already this mode: back to its chat from the Skills or Settings page.
+            self.close_pages(cx);
             return;
         }
         if mode == Mode::Chat {
@@ -982,8 +1038,14 @@ impl MainWindow {
         cx: &mut Context<Self>,
     ) {
         match event {
-            SidebarEvent::Open(None, summary) => drop(self.open_session(None, summary, window, cx)),
+            // Clicking a conversation shows it, even the one already behind the Skills or
+            // Settings page (opening it is a no-op then, so close the page here).
+            SidebarEvent::Open(None, summary) => {
+                self.close_pages(cx);
+                drop(self.open_session(None, summary, window, cx));
+            }
             SidebarEvent::Open(Some(host), summary) => {
+                self.close_pages(cx);
                 let target = RemoteTarget {
                     host: host.clone(),
                     folder: summary.cwd.clone(),
@@ -1304,6 +1366,15 @@ impl MainWindow {
     /// Whether the chat column shows a page (Skills or Settings) instead of the chat.
     fn page_open(&self) -> bool {
         self.skills_open || self.settings.is_some()
+    }
+
+    /// Back from the Skills or Settings page to the chat behind it.
+    fn close_pages(&mut self, cx: &mut Context<Self>) {
+        if self.page_open() {
+            self.close_skills(cx);
+            self.close_settings(cx);
+            cx.notify();
+        }
     }
 
     /// Shows (or hides) the Settings page.
@@ -1792,11 +1863,7 @@ impl MainWindow {
         if self.mode(cx) == mode && self.chat.read(cx).session().read(cx).is_empty() {
             // The Skills or Settings page covers the chat: going back to it is the new
             // conversation (otherwise the click seems to do nothing).
-            if self.page_open() {
-                self.close_skills(cx);
-                self.close_settings(cx);
-                cx.notify();
-            }
+            self.close_pages(cx);
             focus_chat(&self.chat, window, cx);
             return;
         }

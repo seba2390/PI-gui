@@ -1,5 +1,5 @@
-//! The Settings page, shown in the chat column: General, pi & models, Web search and SSH
-//! connections. Every change is saved right away.
+//! The Settings page, shown in the chat column: General, pi & models, Web search, SSH
+//! connections, Speech to text and Conversation names. Every change is saved right away.
 
 use std::path::{Path, PathBuf};
 
@@ -22,6 +22,7 @@ use super::{AppSettings, StartMode, TextSize, ThemeChoice};
 use crate::code_colors::CodeColors;
 use crate::config::AppConfig;
 use crate::ui::AppIcon;
+use crate::ui::spinner::IndicatorStyle;
 
 /// What the window does for the page (dialogs and connections live there).
 #[derive(Debug, Clone)]
@@ -63,6 +64,13 @@ pub struct SettingsView {
     start_page: usize,
     /// The Code colors palette under the pointer in the open picker; the preview shows it.
     code_colors_hover: Option<CodeColors>,
+    /// The working-indicator style under the pointer in the open picker; the preview shows it.
+    indicator_hover: Option<IndicatorStyle>,
+    /// The indicator preview was drawn since the last tick; its repaint loop runs only while
+    /// it keeps being drawn (the General page is open).
+    indicator_drawn: std::rc::Rc<std::cell::Cell<bool>>,
+    /// The preview's repaint loop is running.
+    indicator_ticking: std::rc::Rc<std::cell::Cell<bool>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -96,8 +104,9 @@ impl SettingsView {
         let brave_key = key_input(brave, "From BRAVE_API_KEY if empty", window, cx);
         let tavily_key = key_input(tavily, "From TAVILY_API_KEY if empty", window, cx);
         let subscriptions = vec![
-            // Speech to text: download progress and installed models.
+            // Speech to text and conversation names: download progress and installed models.
             cx.observe(&crate::stt::models::models(cx), |_, _, cx| cx.notify()),
+            cx.observe(&crate::naming::models(cx), |_, _, cx| cx.notify()),
             cx.subscribe(&brave_key, |_, input, event: &InputEvent, cx| {
                 if let InputEvent::Change = event {
                     let key = input.read(cx).value().trim().to_owned();
@@ -135,6 +144,9 @@ impl SettingsView {
             pi_version: None,
             start_page: 0,
             code_colors_hover: None,
+            indicator_hover: None,
+            indicator_drawn: std::rc::Rc::default(),
+            indicator_ticking: std::rc::Rc::default(),
             _subscriptions: subscriptions,
         };
         this.probe_pi_version(cx);
@@ -228,6 +240,16 @@ impl SettingsView {
                             let chosen = cx.global::<AppSettings>().code_colors;
                             code_colors_preview(hovered.unwrap_or(chosen), cx)
                         }
+                    }))
+                    .item(
+                        SettingItem::new("Working indicator", indicator_field(weak.clone()))
+                            .description(
+                                "How a working agent is shown in the chat and the sidebar.",
+                            ),
+                    )
+                    .item(SettingItem::render({
+                        let weak = weak.clone();
+                        move |_, _, cx| indicator_preview(&weak, cx)
                     }))
                     .item(
                         SettingItem::new(
@@ -810,6 +832,11 @@ impl SettingsView {
         self.start_page = 4;
     }
 
+    /// Opens on the Conversation names page (before the first render).
+    pub fn start_on_names(&mut self) {
+        self.start_page = 5;
+    }
+
     fn speech_page(&self) -> SettingPage {
         use crate::stt::{AutoStop, catalog};
         SettingPage::new("Speech to text")
@@ -887,9 +914,91 @@ impl Render for SettingsView {
                     self.web_search_page(),
                     self.ssh_page(&weak),
                     self.speech_page(),
+                    naming_page(cx),
                 ]),
         )
     }
+}
+
+/// Settings → Conversation names: automatic names, what makes them, and the local models.
+fn naming_page(cx: &App) -> SettingPage {
+    use crate::naming::Namer;
+    let settings = cx.global::<AppSettings>();
+    let (enabled, namer) = (settings.auto_names, settings.namer);
+    let local_missing = namer == Namer::Local && crate::naming::active_model(cx).is_none();
+    SettingPage::new("Conversation names")
+        .icon(AppIcon::Sparkles)
+        .description(
+            "Give each new conversation a short name made from its first message, instead of \
+             the message's first line. The name is saved in the session, so the terminal pi \
+             shows it too. Names you give a conversation yourself (Rename, or /name) are never \
+             changed.",
+        )
+        .group(
+            SettingGroup::new()
+                .title("Automatic names")
+                .item(
+                    SettingItem::new(
+                        "Name new conversations",
+                        hover_switch(
+                            "auto-names",
+                            |cx| cx.global::<AppSettings>().auto_names,
+                            |on, cx| AppSettings::update(cx, |s| s.auto_names = on),
+                        ),
+                    )
+                    .description(
+                        "The first message is sent right away; its name arrives a moment later \
+                         and is typed out in the sidebar. Very short messages are their own \
+                         name.",
+                    ),
+                )
+                .item(
+                    SettingItem::new(
+                        "Made by",
+                        SettingField::dropdown(
+                            Namer::ALL
+                                .into_iter()
+                                .map(|namer| (namer.id().into(), namer.label().into()))
+                                .collect(),
+                            |cx| cx.global::<AppSettings>().namer.id().into(),
+                            |value, cx| {
+                                let namer = Namer::from_id(value.as_ref());
+                                AppSettings::update(cx, |s| s.namer = namer);
+                            },
+                        ),
+                    )
+                    .disabled(!enabled)
+                    .description(if local_missing {
+                        "Download one of the models below first; until then new conversations \
+                         keep their first line."
+                    } else {
+                        match namer {
+                            Namer::Conversation => {
+                                "One short extra request to the conversation's model, made by a \
+                                 separate pi that keeps no session: the conversation, its \
+                                 history and the model's context stay exactly as in the \
+                                 terminal. On an SSH host it runs on the host."
+                            }
+                            Namer::Local => {
+                                "A small model on this computer names conversations: nothing is \
+                                 sent anywhere, and it is loaded only for the second or so it \
+                                 takes."
+                            }
+                        }
+                    }),
+                ),
+        )
+        .group(
+            SettingGroup::new()
+                .title("Models on this computer")
+                .description(
+                    "Used when names are made by a small model on this computer. Downloaded \
+                     once from Hugging Face; nothing ships with the app.",
+                )
+                .item(SettingItem::render(|_, _, cx| {
+                    crate::naming::ui::settings_model_rows(cx)
+                })),
+        )
 }
 
 /// An on/off setting: gpui-kit's switch with a hover ring, so it reads as clickable.
@@ -996,6 +1105,125 @@ fn code_colors_field(weak: WeakEntity<SettingsView>) -> SettingField<SharedStrin
                 })
         },
     )
+}
+
+/// The working-indicator picker: a menu of the styles; the preview below follows the pointer.
+fn indicator_field(weak: WeakEntity<SettingsView>) -> SettingField<SharedString> {
+    SettingField::render(
+        move |options: &RenderOptions, _: &mut Window, cx: &mut App| {
+            let current = cx.global::<AppSettings>().working_indicator;
+            let weak = weak.clone();
+            Button::new("indicator-picker")
+                .label(current.label())
+                .dropdown_caret(true)
+                .outline()
+                .with_size(options.size())
+                .dropdown_menu_with_anchor(Anchor::TopRight, move |mut menu, _, cx| {
+                    let on_dismiss = weak.clone();
+                    cx.subscribe_self(move |_, _: &DismissEvent, cx| {
+                        set_indicator_hover(&on_dismiss, None, cx);
+                    })
+                    .detach();
+                    for style in IndicatorStyle::ALL {
+                        let (on_hover, on_click) = (weak.clone(), weak.clone());
+                        menu = menu.item(
+                            PopupMenuItem::element(move |_, _| {
+                                let on_hover = on_hover.clone();
+                                div()
+                                    .id(SharedString::from(format!("indicator-{}", style.id())))
+                                    .w_full()
+                                    .on_hover(move |hovered, _, cx| {
+                                        if *hovered {
+                                            set_indicator_hover(&on_hover, Some(style), cx);
+                                        }
+                                    })
+                                    .child(style.label())
+                            })
+                            .checked(style == current)
+                            .on_click(move |_, _, cx| {
+                                set_indicator_hover(&on_click, None, cx);
+                                AppSettings::update(cx, |s| s.working_indicator = style);
+                            }),
+                        );
+                    }
+                    menu
+                })
+        },
+    )
+}
+
+fn set_indicator_hover(
+    weak: &WeakEntity<SettingsView>,
+    style: Option<IndicatorStyle>,
+    cx: &mut App,
+) {
+    let _ = weak.update(cx, |view, cx| {
+        if view.indicator_hover != style {
+            view.indicator_hover = style;
+            cx.notify();
+        }
+    });
+}
+
+/// The working indicator, live, as the chat shows it: the style under the pointer in the
+/// picker, else the chosen one. It animates only while it is on screen: each draw marks it
+/// drawn, and its repaint loop stops at the first tick it wasn't.
+fn indicator_preview(weak: &WeakEntity<SettingsView>, cx: &mut App) -> AnyElement {
+    let Some(view) = weak.upgrade() else {
+        return div().into_any_element();
+    };
+    let (hovered, drawn, ticking) = {
+        let view = view.read(cx);
+        (
+            view.indicator_hover,
+            view.indicator_drawn.clone(),
+            view.indicator_ticking.clone(),
+        )
+    };
+    drawn.set(true);
+    if !ticking.replace(true) {
+        let weak = weak.clone();
+        cx.spawn(async move |cx| {
+            loop {
+                cx.background_executor()
+                    .timer(crate::ui::spinner::FRAME)
+                    .await;
+                if !drawn.replace(false) || weak.update(cx, |_, cx| cx.notify()).is_err() {
+                    ticking.set(false);
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+    let style = hovered.unwrap_or(cx.global::<AppSettings>().working_indicator);
+    let theme = cx.theme();
+    let accent = crate::theme::palette(cx).accent;
+    h_flex()
+        .w_full()
+        .justify_center()
+        .items_center()
+        .gap_1p5()
+        .py_4()
+        .rounded_lg()
+        .bg(theme.background)
+        .text_sm()
+        .child(crate::ui::spinner::working_indicator(
+            style,
+            px(13.),
+            accent,
+        ))
+        .child(crate::ui::spinner::working_label(
+            style,
+            "Working…".into(),
+            accent,
+        ))
+        .child(
+            div()
+                .text_color(theme.muted_foreground)
+                .child("12s · esc to interrupt"),
+        )
+        .into_any_element()
 }
 
 fn set_code_colors_hover(

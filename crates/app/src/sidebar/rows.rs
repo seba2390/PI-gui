@@ -11,7 +11,7 @@ use pi_sessions::SessionSummary;
 
 use remote::HostId;
 
-use super::{Activity, Sidebar, SidebarEvent};
+use super::{Activity, RowTitle, Sidebar, SidebarEvent};
 use crate::config::AppConfig;
 use crate::ui::QuietButton as _;
 use crate::ui::{AppIcon, relative_time};
@@ -30,7 +30,6 @@ pub fn session_row(
     let active = sidebar.is_active(host, &session.path);
     let activity = sidebar.activity(host, &session.path);
     let colors = crate::theme::palette(cx);
-    let spinner = crate::chat::SPINNER[sidebar.spinner_frame % crate::chat::SPINNER.len()];
     let theme = cx.theme();
     let (hover_bg, active_bg) = (theme.secondary_hover, theme.accent);
     let host = host.cloned();
@@ -49,7 +48,17 @@ pub fn session_row(
         Some(Activity::Done) => ", finished",
         None => "",
     };
-    let accessible_name = SharedString::from(format!("{}{status}", session.title()));
+    let title = sidebar.row_title(host.as_ref(), session);
+    let accessible_name = SharedString::from(format!(
+        "{}{status}",
+        match &title {
+            // The name being typed, in full: a screen reader should not read it letter by letter.
+            RowTitle::Typing { .. } => sidebar
+                .typed_name(host.as_ref(), &session.path)
+                .unwrap_or(session.title()),
+            RowTitle::Plain(text) => text,
+        }
+    ));
     h_flex()
         .id(ElementId::Name(id.clone()))
         .role(Role::Button)
@@ -71,24 +80,52 @@ pub fn session_row(
         .when(active, |this| this.bg(active_bg))
         .hover(|style| style.bg(hover_bg))
         .on_click(cx.listener(move |_, _, _, cx| cx.emit(open.clone())))
-        .child(
-            div()
+        // A working agent: its indicator, before the name.
+        .when(activity == Some(Activity::Working), |this| {
+            this.child(crate::ui::spinner::working_indicator(
+                cx.global::<crate::settings::AppSettings>()
+                    .working_indicator,
+                px(9.),
+                colors.accent,
+            ))
+        })
+        .child(match title {
+            RowTitle::Plain(text) => div()
                 .flex_1()
                 .min_w_0()
                 .text_sm()
                 .truncate()
                 .text_color(theme.foreground)
-                .child(session.title().to_owned()),
-        )
-        .child(match activity {
-            Some(Activity::Working) => div()
-                .flex_none()
-                .w(px(14.))
-                .text_sm()
-                .text_center()
-                .text_color(colors.accent)
-                .child(spinner)
+                .child(text)
                 .into_any_element(),
+            RowTitle::Typing { text, caret } => h_flex()
+                .flex_1()
+                .min_w_0()
+                .gap(px(1.))
+                .child(
+                    div()
+                        .min_w_0()
+                        .text_sm()
+                        .truncate()
+                        .text_color(theme.foreground)
+                        .child(text),
+                )
+                // The caret: a thin bar in the accent colour, kept in the layout while it
+                // blinks so the text never shifts.
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(1.5))
+                        .h(px(14.))
+                        .rounded_full()
+                        .bg(colors.accent)
+                        .when(!caret, |this| this.invisible()),
+                )
+                .into_any_element(),
+        })
+        .child(match activity {
+            // The age gives way while it works (the π says so on the left).
+            Some(Activity::Working) => div().into_any_element(),
             other => h_flex()
                 .flex_none()
                 .gap_1p5()

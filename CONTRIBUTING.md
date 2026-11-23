@@ -66,9 +66,12 @@ checks scriptable:
   every tool call in the chat (like Ctrl+O); `view-file:<path>` opens a file (relative to the
   folder) in the Files tab's viewer.
 - Sessions and popovers: `latest`, `new-chat` (like ⌘N), `attach`, `context`; `find:<text>` opens the find bar
-  searching for `<text>`.
+  searching for `<text>`; `send:<text>` sends `<text>` as a message; `image-viewer:<n>` opens the picture viewer on the session's
+  `<n>`th picture.
 - Dialogs: `add-host`, `manage-hosts`, `add-model`, `add-provider`, `edit-models`.
-- Skills page: `skills`, `new-skill`, `open-skill:<path>`; the Settings page: `settings`.
+- Skills page: `skills`, `new-skill`, `open-skill:<path>`; the Settings page: `settings`
+  (`settings-speech` and `settings-names` open those pages); `type-name:<text>` plays the
+  sidebar's typing animation for the open session 2.5 s after start (nothing is saved).
 - SSH: `ssh:<alias>`, `remote:<alias>:<folder>` and `remote-latest:<alias>` open a remote
   session once connected. Panels listed after them apply to that session.
 
@@ -100,6 +103,13 @@ These tests are all `#[ignore]`d. Run them with `PISTACHIO_SSH_TEST_HOST=<alias>
   - `real_pi_over_ssh` starts real pi the way a remote session does.
   - `askpass_prompt_reaches_the_app` also needs `PISTACHIO_SSH_PASSWORD_HOST`, a host that
     offers password login.
+
+`PISTACHIO_PREVIEW_CHECK=<folder of session copies> cargo test -p pistachio preview_matches_pi --
+--ignored` runs real pi on each session file and checks that the history Pistachio previews
+from the file matches pi's (use copies: pi may migrate files it opens).
+
+`TITLES_PI_MODEL=<provider/model> cargo test -p titles real_pi -- --ignored --nocapture` names
+a few sample first messages with real pi and that model (the conversation-model namer).
 
 `crates/transcript/tests/fixtures` holds sanitized recordings of real `pi --mode rpc`
 sessions. The replay tests check that streaming and history render the same way.
