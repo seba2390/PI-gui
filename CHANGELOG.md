@@ -51,6 +51,8 @@ All notable changes to PI-gui are listed here. The format follows
 
 ### Fixed
 
+- A conversation name is never a code block's language ("rust"): when a small naming model
+  answers with code instead of a title, the conversation keeps its first-line title.
 - Opening a long conversation, the scrollbar now spans all of it from the start, instead of
   starting too big and shrinking and jumping as you scroll up.
 - Clicking the conversation already behind the Settings or Skills page (or the Chat / Code

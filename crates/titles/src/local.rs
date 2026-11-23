@@ -170,6 +170,7 @@ mod tests {
             "My Rust build fails with 'cannot borrow `x` as mutable more than once'. How do I fix it?",
             "Plan a three-day trip to Copenhagen in spring with a small budget",
             "Write a SQL query that finds the ten customers who spent the most last month",
+            "write a rust program that prints the fibonacci sequence",
             "build a world class and beutiful 2d sider scroller platformer. You have complete artistic freedom",
             "can you look at why the tests in crates/term are flaky on linux and fix them?",
             "Hvad er forskellen på en Mac mini og en Mac Studio til lokal AI?",
@@ -177,6 +178,15 @@ mod tests {
         ] {
             let started = std::time::Instant::now();
             let title = name(arch, weights.as_ref(), tokenizer.as_ref(), message).unwrap();
+            if std::env::var_os("TITLES_RAW").is_some() {
+                let raw = generate(
+                    arch,
+                    weights.as_ref(),
+                    tokenizer.as_ref(),
+                    &chatml_prompt(message),
+                );
+                println!("raw: {raw:?}");
+            }
             println!(
                 "{:>5} ms  {title:<45}  <- {message}",
                 started.elapsed().as_millis()
