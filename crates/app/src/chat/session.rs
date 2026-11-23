@@ -1590,6 +1590,8 @@ fn spawn_options(
         let mode = config.mode_of(cwd);
         if mode == Mode::Chat {
             chat_args(config, &mut options);
+        } else {
+            builtin_skill_args(config, &mut options);
         }
         return (options, mode);
     };
@@ -1607,6 +1609,22 @@ fn spawn_options(
     // The local ssh client just needs some existing folder to run in.
     options.cwd = config.home.clone().unwrap_or_else(std::env::temp_dir);
     (options, Mode::Code)
+}
+
+/// `--skill` for each skill that comes with the app (see [`crate::builtin_skills`]). Chats
+/// leave them out: they have no tools to act on them.
+fn builtin_skill_args(config: &AppConfig, options: &mut SpawnOptions) {
+    match crate::builtin_skills::install(&config.builtin_skills_dir) {
+        Ok(folders) => {
+            for folder in folders {
+                options.extra_args.extend(["--skill".into(), folder.into()]);
+            }
+        }
+        Err(error) => log::warn!(
+            "the built-in skills are unavailable: could not write them to {}: {error}",
+            config.builtin_skills_dir.display()
+        ),
+    }
 }
 
 /// pi's arguments and environment for a chat: the web tools only (see [`spawn_options`]).
@@ -1702,7 +1720,19 @@ mod tests {
         let session = project.join("s.jsonl");
         let (code, mode) = super::spawn_options(&config, &project, Some(&session), None, &[]);
         assert_eq!(mode, super::Mode::Code);
-        assert_eq!(code.extra_args, [] as [std::ffi::OsString; 0]);
+        assert_eq!(
+            code.extra_args,
+            [
+                "--skill".into(),
+                std::ffi::OsString::from(config.builtin_skills_dir.join("add-skill")),
+            ]
+        );
+        assert!(
+            config
+                .builtin_skills_dir
+                .join("add-skill/SKILL.md")
+                .exists()
+        );
         assert_eq!(code.session.as_deref(), Some(session.as_path()));
     }
 

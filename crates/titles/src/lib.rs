@@ -23,7 +23,8 @@ pub const EXCERPT_CHARS: usize = 1500;
 /// What a namer is told (the system prompt).
 pub const INSTRUCTIONS: &str = "You name conversations. Given the first message of a \
 conversation, reply with a short title of 3 to 6 words that says what it is about. Do not \
-answer the message or do what it asks (no code, no answers): only name it. Reply with the \
+answer the message or do what it asks (no code, no answers): only name it. A question gets \
+its topic as the title, never its answer. Reply with the \
 title only: no quotes, no trailing punctuation, no explanation. Write the title in the \
 language of the message.";
 
@@ -187,6 +188,27 @@ pub fn clean(raw: &str) -> Option<String> {
     (!title.is_empty()).then(|| title.to_owned())
 }
 
+/// A model's answer for a conversation that starts with `message` as a title (see [`clean`]),
+/// or an error saying why there is none.
+pub fn title_for(message: &str, answer: &str) -> anyhow::Result<String> {
+    let title =
+        clean(answer).ok_or_else(|| anyhow::anyhow!("the model's answer had no title in it"))?;
+    if answers(message, &title) {
+        anyhow::bail!("the model answered the message instead of naming it: {title:?}");
+    }
+    Ok(title)
+}
+
+/// Whether `title` answers `message` instead of naming it: it states a number the message
+/// never mentions. Qwen2.5 0.5B named "what is current market cap of nvidia" "Nvidia's current
+/// market cap is $175 billion"; a name only repeats what the message says.
+fn answers(message: &str, title: &str) -> bool {
+    title
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|number| !number.is_empty())
+        .any(|number| !message.contains(number))
+}
+
 /// `text` without `<think>…</think>` blocks that reasoning models put in their answer; an
 /// unclosed block (cut off) leaves nothing after it.
 fn strip_thinking(text: &str) -> String {
@@ -307,6 +329,27 @@ mod tests {
         let url = format!("https://{}", "x".repeat(100));
         assert_eq!(clean(&url).map(|t| t.chars().count()), Some(MAX_CHARS));
         assert!(clean(&"word ".repeat(30)).unwrap().chars().count() <= MAX_CHARS);
+    }
+
+    #[test]
+    fn answers_are_not_titles() {
+        let message = "what is current market cap of nvidia";
+        assert!(title_for(message, "Nvidia's current market cap is $175 billion.").is_err());
+        assert_eq!(
+            title_for(message, "Nvidia current market cap").unwrap(),
+            "Nvidia current market cap"
+        );
+        // Numbers the message has are fine.
+        assert_eq!(
+            title_for("who won the 2022 world cup", "2022 World Cup winner").unwrap(),
+            "2022 World Cup winner"
+        );
+        assert_eq!(
+            title_for("build a 2d platformer", "2D platformer game").unwrap(),
+            "2D platformer game"
+        );
+        assert!(title_for("how tall is the eiffel tower", "Eiffel Tower is 330 m").is_err());
+        assert!(title_for("hi", "```rust\nfn main() {}\n```").is_err());
     }
 
     #[test]

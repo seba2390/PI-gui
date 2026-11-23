@@ -6,6 +6,34 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-11-23
+
+### Added
+
+- A built-in skill, `add-skill`, that teaches pi how to add skills: where each kind goes, the
+  front matter rules, writing a description pi can route on, supporting files, and checking
+  that pi loads it. Ask pi to "make a skill for …" or call `/skill:add-skill`. Code sessions
+  on this computer load it alongside your own skills (it is written to
+  `~/.pi/agent/pistachio/skills` and passed with `--skill`; pi's own skill folders are left
+  alone). The Skills page lists it under "Comes with Pistachio", read-only.
+- Formulas in answers are drawn as math: `$…$` and `\(…\)` inline, `$$…$$` and `\[…\]`
+  blocks centered on their own lines. KaTeX lays them out (a Rust port with KaTeX's fonts,
+  so they look as they do on the web), sharp at any size and in the text color of either
+  theme. A formula KaTeX can't read shows as written, and copying a formula gives its LaTeX.
+
+### Fixed
+
+- Naming a chat that starts with a question no longer answers it: Qwen2.5 0.5B named "what is
+  current market cap of nvidia" "Nvidia's current market cap is $175 billion". The local
+  model now sees a question among its examples (it names it "Nvidia current market cap"), the
+  instructions say a question gets its topic as the title, and a title that states a number
+  the message never mentions is rejected as an answer, so the chat keeps its first message.
+- Dollar amounts no longer break bold text in answers: "**$4.0 trillion** — about **$4.02T**"
+  rendered as `$4.0 trillion** — about **$4.02T`, because the text between two dollar signs
+  was read as a formula. Dollar signs now follow pandoc's rules: a formula's closing `$` is
+  never followed by a digit, so prices ("$5 and $10") stay text, and `$` in code is left
+  alone.
+
 ## [0.4.5] - 2026-11-23
 
 ### Added
@@ -319,7 +347,8 @@ chats, skills and model management. Changes since the last private build:
 - A corrupt `hosts.json` is kept as a backup.
 - A remembered terminal height can no longer squeeze out the chat.
 
-[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.4.5...HEAD
+[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.4.6...HEAD
+[0.4.6]: https://github.com/seba2390/pistachio/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/seba2390/pistachio/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/seba2390/pistachio/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/seba2390/pistachio/compare/v0.4.2...v0.4.3

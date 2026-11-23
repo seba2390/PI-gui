@@ -8,6 +8,7 @@ mod file_links;
 mod file_picker;
 mod find;
 mod images;
+mod math;
 pub(crate) mod mention;
 pub mod models_dialog;
 mod rows;
@@ -1165,6 +1166,86 @@ mod tests {
         assert_eq!(
             literal_markdown("# not a *heading* [x](y) $5\n    indented\n\nnext"),
             "\\# not a \\*heading\\* \\[x\\]\\(y\\) \\$5\\\n&#32;&#32;&#32;&#32;indented\n\nnext\n"
+        );
+    }
+    /// The text a chat view shows for `source`, with the chat's own Markdown extensions.
+    fn shown(source: &str, cx: &mut gpui_kit::TestAppContext) -> String {
+        use gpui_kit::AppContext as _;
+        use gpui_kit::component::text::TextViewState;
+
+        struct Host(gpui_kit::Entity<TextViewState>);
+        impl gpui_kit::Render for Host {
+            fn render(
+                &mut self,
+                _: &mut gpui_kit::Window,
+                _: &mut gpui_kit::Context<Self>,
+            ) -> impl gpui_kit::IntoElement {
+                super::markdown_view(&self.0)
+            }
+        }
+
+        cx.update(gpui_kit::component::init);
+        let state = cx.update(|cx| cx.new(|cx| TextViewState::markdown(source, cx)));
+        let host = state.clone();
+        let window = cx.add_window(move |_, _| Host(host));
+        // The view applies the extensions when it draws, then parses again.
+        for _ in 0..2 {
+            window.update(cx, |_, window, _| window.refresh()).unwrap();
+            cx.run_until_parked();
+        }
+        state.read_with(cx, |state, _| {
+            state.rendered_text().as_str().trim().to_owned()
+        })
+    }
+
+    /// Formulas are drawn (their text is their source, for copying); prices around them stay
+    /// prose with their emphasis. Without the math plugin, `*y*` would be emphasis.
+    #[gpui_kit::test]
+    fn formulas_and_prices_together(cx: &mut gpui_kit::TestAppContext) {
+        assert_eq!(
+            shown(
+                "Since $x*y*z$ holds, **$4.0 trillion** and \\(x^2\\) cost $5 and $10.",
+                cx
+            ),
+            "Since $x*y*z$ holds, $4.0 trillion and \\(x^2\\) cost $5 and $10."
+        );
+        // The same text without the plugin (a plain view): no formulas.
+        let plain = {
+            use gpui_kit::AppContext as _;
+            let state = cx.update(|cx| {
+                cx.new(|cx| {
+                    gpui_kit::component::text::TextViewState::markdown("Since $x*y*z$ holds", cx)
+                })
+            });
+            cx.run_until_parked();
+            state.read_with(cx, |state, _| {
+                state.rendered_text().as_str().trim().to_owned()
+            })
+        };
+        assert_eq!(plain, "Since $xyz$ holds");
+        // A formula KaTeX can't read shows as written.
+        assert_eq!(shown("bad $\\frac{a}{$ here", cx), "bad $\\frac{a}{$ here");
+        // Code keeps its dollars.
+        assert_eq!(shown("run `echo $HOME $1`", cx), "run echo $HOME $1");
+    }
+
+    /// Dollar amounts are prose, not math, also in a plain view without the math plugin:
+    /// reading "$4.0 trillion** — about **$" as one formula broke the bold around it.
+    #[gpui_kit::test]
+    fn dollar_amounts_keep_their_emphasis(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::AppContext as _;
+        use gpui_kit::component::text::TextViewState;
+
+        cx.update(gpui_kit::component::init);
+        let source = "Roughly **$4.0 trillion** — about **$4.02T** per StockAnalysis, while \
+                      Capital.com shows **$3.99T**.";
+        let state = cx.update(|cx| cx.new(|cx| TextViewState::markdown(source, cx)));
+        cx.run_until_parked();
+        let text = state.read_with(cx, |state, _| state.rendered_text().as_str().to_owned());
+        assert_eq!(
+            text.trim(),
+            "Roughly $4.0 trillion — about $4.02T per StockAnalysis, while Capital.com shows \
+             $3.99T."
         );
     }
 }

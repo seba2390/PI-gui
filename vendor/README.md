@@ -30,7 +30,33 @@ Zed's `gpui_apple` (Apache-2.0), the Metal renderer `gpui-pre-macos` uses. Chang
 texture and reading it back (`render_scene_to_image`) is compiled in normal builds, not only
 with `test-support`/`bench-support`, for the frame capture above.
 
-To update either: copy the new `gpui-pre-macos` release from `~/.cargo/registry/src/*/` over this
+## gpui-base 0.11.0
+
+gpui-kit's `gpui-base` (Apache-2.0), which parses and renders the chat's Markdown. Changed in
+`src/text/format/markdown.rs` only (search for `Pistachio:`):
+
+- **Formulas by pandoc's rules.** Upstream lets the `markdown` crate pair any two `$` as
+  inline math, so in "**$4.0 trillion** — about **$4.02T**" the span between the dollars took
+  the `**` on either side with it and the bold showed as asterisks. Now only `$` that delimit
+  a formula by pandoc's rules reach the parser (`math_delimiters`): a formula opens with a `$`
+  followed by a non-space and closes at the next `$`, which follows a non-space and is not
+  followed by a digit, so "$5 and $10" stay prices. Other `$` outside code are swapped for a
+  placeholder byte while parsing and turned back into `$` in the tree (`restore_dollars`).
+  `\(…\)` and `\[…\]` (on lines of their own) are read as `$$…$$`. Every swap keeps the
+  length, so source positions are unchanged.
+- **Unclaimed math is prose.** When no plugin claims inline math (a text view without the
+  app's math plugin, such as the update prompt), the whole text is parsed without it, since
+  re-parsing only the span between the dollars leaves emphasis around it broken.
+- One upstream test (`claimed_inline_math_survives_prose_flattening`) expects "$5 and $10"
+  to be a formula; it now expects prices.
+
+To update: copy the release gpui-kit pins from `~/.cargo/registry/src/*/gpui-base-*` over
+`vendor/gpui-base` the same way and re-apply the change. Run its tests after a change: copy
+`vendor/gpui-base` two folders deep into a scratch folder with the registry's `Cargo.lock` and
+its `README.md` two levels above (a test includes `../../../../README.md`), then
+`cargo test --lib --features test-support text::`.
+
+To update the two GPUI crates: copy the new `gpui-pre-macos` release from `~/.cargo/registry/src/*/` over this
 folder (without `Cargo.lock`, `Cargo.toml.orig` and `.cargo_vcs_info.json`), re-apply the
 `Pistachio:` changes, and keep the version equal to the `gpui-pre` that gpui-kit pins (the same
 for `gpui-pre-apple`). Drop the

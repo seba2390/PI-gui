@@ -6,7 +6,7 @@ exclude = ["vendor"]
 default-members = ["crates/app"]
 
 [workspace.package]
-version = "0.4.5"
+version = "0.4.6"
 edition = "2024"
 rust-version = "1.90"
 publish = false
@@ -115,8 +115,9 @@ codegen-units = 1
 strip = "debuginfo"
 panic = "abort"
 
-# GPUI's macOS backend with a lower-latency frame pacing; see vendor/README.md. Keep the
-# version in step with the gpui-pre snapshot gpui-kit pins.
+# GPUI's macOS backend with a lower-latency frame pacing, and gpui-base's Markdown with dollar
+# amounts as prose; see vendor/README.md. Keep the versions in step with what gpui-kit pins.
 [patch.crates-io]
+gpui-base = { path = "vendor/gpui-base" }
 gpui-pre-macos = { path = "vendor/gpui-pre-macos" }
 gpui-pre-apple = { path = "vendor/gpui-pre-apple" }

@@ -385,12 +385,11 @@ impl MarkdownPlugin for FileLinkPlugin {
     }
 }
 
-/// The markdown extensions every chat text view uses: drawing file links.
+/// The markdown extensions every chat text view uses: drawing file links and formulas.
 pub fn markdown_extensions() -> MarkdownExtensions {
     static EXTENSIONS: LazyLock<MarkdownExtensions> = LazyLock::new(|| {
         // A fixed revision: text views rebuilt every frame keep their parsed text.
-        MarkdownExtensions::default()
-            .plugin(FileLinkPlugin)
+        super::math::plugins(MarkdownExtensions::default().plugin(FileLinkPlugin))
             .parser_revision(1)
     });
     EXTENSIONS.clone()

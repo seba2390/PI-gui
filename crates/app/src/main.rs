@@ -8,6 +8,7 @@
 
 mod actions;
 mod assets;
+mod builtin_skills;
 mod chat;
 mod code_colors;
 mod code_highlight;

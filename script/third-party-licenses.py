@@ -43,6 +43,14 @@ def main() -> None:
             f for f in os.listdir(directory)
             if f.lower().startswith(NAMES) and os.path.isfile(os.path.join(directory, f))
         )
+        # Fonts a crate embeds carry their own license next to them (katex-native's
+        # fonts/OFL.txt), which has to ship with the fonts.
+        fonts = os.path.join(directory, "fonts")
+        if os.path.isdir(fonts):
+            files += sorted(
+                os.path.join("fonts", f) for f in os.listdir(fonts)
+                if f.lower().startswith(NAMES + ("ofl",)) and f.lower().endswith((".txt", ".md"))
+            )
         texts = []
         for name in files:
             with open(os.path.join(directory, name), encoding="utf-8", errors="replace") as handle:

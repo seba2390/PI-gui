@@ -18,7 +18,9 @@ use gpui_kit::*;
 use pi_config::skills::{self, FrontMatter};
 use pi_config::trust::{self, Trust};
 
+use crate::builtin_skills;
 use crate::chat::session::{Lifecycle, PiSession};
+use crate::config::AppConfig;
 use crate::pi_place::PiPlace;
 use crate::ui::{AppIcon, QuietButton as _};
 
@@ -74,6 +76,7 @@ enum Scope {
     Project,
     Personal,
     Other,
+    BuiltIn,
 }
 
 /// One row of the list.
@@ -87,6 +90,8 @@ struct Entry {
     loaded: bool,
     /// Part of a pi package: edit it where the package comes from.
     from_package: bool,
+    /// Comes with Pistachio, which rewrites it whenever a session starts.
+    builtin: bool,
 }
 
 /// What the folder scan found.
@@ -229,6 +234,7 @@ impl SkillsView {
 
     /// The list: skills pi loaded, then project skills it skipped.
     fn entries(&self, cx: &App) -> Vec<Entry> {
+        let builtin_dir = &cx.global::<AppConfig>().builtin_skills_dir;
         let session = self.session.read(cx);
         let mut entries: Vec<Entry> = session
             .commands()
@@ -236,6 +242,7 @@ impl SkillsView {
             .filter(|command| command.source == "skill")
             .map(|command| {
                 let info = command.source_info.clone().unwrap_or_default();
+                let builtin = builtin_skills::is_builtin(builtin_dir, &info.path);
                 Entry {
                     name: command
                         .name
@@ -244,11 +251,13 @@ impl SkillsView {
                         .to_owned(),
                     description: command.description.clone().unwrap_or_default(),
                     scope: match info.scope.as_str() {
+                        _ if builtin => Scope::BuiltIn,
                         "project" => Scope::Project,
                         "user" => Scope::Personal,
                         _ => Scope::Other,
                     },
                     from_package: info.origin == "package" || info.path.contains("/node_modules/"),
+                    builtin,
                     path: info.path,
                     loaded: true,
                 }
@@ -271,6 +280,7 @@ impl SkillsView {
                     scope: Scope::Project,
                     loaded: false,
                     from_package: false,
+                    builtin: false,
                 });
             }
         }
@@ -502,6 +512,7 @@ impl SkillsView {
                             Scope::Project => "This project",
                             Scope::Personal => "Personal (every project)",
                             Scope::Other => "From settings and packages",
+                            Scope::BuiltIn => "Comes with Pistachio",
                         }),
                 );
             }
@@ -797,7 +808,7 @@ impl SkillsView {
             .entries(cx)
             .into_iter()
             .find(|entry| entry.path == path);
-        let home = cx.global::<crate::config::AppConfig>().home.clone();
+        let home = cx.global::<AppConfig>().home.clone();
         let shown_path = self.place.as_ref().map_or_else(
             || path.to_owned(),
             |place| place.describe(path, home.as_deref()),
@@ -825,7 +836,10 @@ impl SkillsView {
             .map(|entry| entry.name.clone())
             .or(front.name.clone())
             .unwrap_or_default();
-        let read_only = entry.as_ref().is_some_and(|entry| entry.from_package);
+        let read_only = entry
+            .as_ref()
+            .is_some_and(|entry| entry.from_package || entry.builtin);
+        let builtin = entry.as_ref().is_some_and(|entry| entry.builtin);
         let loaded = entry.as_ref().is_none_or(|entry| entry.loaded);
         let only = skills::parse_front_matter(&self.editor.read(cx).value()).only_on_request;
         let (toggle_path, save_path, trash_path) =
@@ -863,9 +877,12 @@ impl SkillsView {
                 ))
             })
             .when(read_only, |this| {
-                this.child(div().text_xs().text_color(muted).child(
-                    "This skill comes from a pi package; change it where the package comes from.",
-                ))
+                this.child(div().text_xs().text_color(muted).child(if builtin {
+                    "This skill comes with Pistachio, which restores it whenever a session \
+                     starts. To change it, copy it into a new skill with another name."
+                } else {
+                    "This skill comes from a pi package; change it where the package comes from."
+                }))
             })
             .when(!read_only, |this| {
                 this.child(
