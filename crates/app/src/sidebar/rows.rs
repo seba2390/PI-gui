@@ -167,7 +167,9 @@ pub fn session_row(
                 .right_1()
                 .items_center()
                 .pl_2()
-                .bg(if active { active_bg } else { hover_bg })
+                // Only shown while the row is hovered, and a hovered row is `hover_bg` even
+                // when it is the open one.
+                .bg(hover_bg)
                 .invisible()
                 .group_hover("session-row", |style| style.visible())
                 .child(

@@ -30,6 +30,8 @@ All notable changes to PI-gui are listed here. The format follows
   launch instead of staying greyed out until something in the window was clicked.
 - A turn's copy and branch buttons show while the pointer is anywhere in its answer, not only
   over the "Worked for" row.
+- Hovering the open session in the sidebar no longer shows its rename and trash buttons on a
+  darker patch: they take the hovered row's colour.
 
 ## [0.4.3] - 2026-11-23
 
