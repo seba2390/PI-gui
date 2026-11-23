@@ -1006,13 +1006,14 @@ impl SkillsView {
                 )
             })
             .child(
-                Button::new("intro-new-skill")
-                    .primary()
-                    .icon(IconName::Plus)
-                    .label("New skill")
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.select(Selection::New, window, cx)),
-                    ),
+                div().pt_2().child(
+                    Button::new("intro-new-skill")
+                        .quiet_outline(IconName::Plus, cx)
+                        .label("New skill")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.select(Selection::New, window, cx);
+                        })),
+                ),
             )
             .into_any_element()
     }

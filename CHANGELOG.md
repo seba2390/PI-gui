@@ -15,8 +15,8 @@ All notable changes to PI-gui are listed here. The format follows
   and the file is left as it is. "+" below the list adds one. Turning a connection off ends everything running over it (it asks
   first when pi is working there), also stops one that is still connecting, and nothing in the
   background connects again until you turn it on or reconnect.
-- The welcome screen's New session and New chat buttons are a quiet outline with a green icon
-  instead of a solid green block; New chat shows its shortcut.
+- The welcome screen's New session and New chat buttons, and New skill on the Skills page, are a
+  quiet outline with a green icon instead of a solid green block; New chat shows its shortcut.
 - macOS builds are for Apple Silicon only: the download is now `Pistachio-…-macos-arm64.zip`,
   half the size of the universal one. Intel Macs stay on 0.4.6, the last universal release:
   Homebrew won't install newer versions on them, and Update in 0.4.6 and earlier finds no
