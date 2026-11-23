@@ -80,6 +80,12 @@ pub fn session_row(
         .when(active, |this| this.bg(active_bg))
         .hover(|style| style.bg(hover_bg))
         .on_click(cx.listener(move |_, _, _, cx| cx.emit(open.clone())))
+        .when(host.is_none(), |this| {
+            this.children(crate::demo::probe(format!(
+                "session:{}",
+                session.path.display()
+            )))
+        })
         // A working agent: its indicator, before the name.
         .when(activity == Some(Activity::Working), |this| {
             this.child(crate::ui::spinner::working_indicator(

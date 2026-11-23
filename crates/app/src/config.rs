@@ -88,6 +88,16 @@ impl AppConfig {
                 .unwrap_or_default(),
             demo: demo_storyboard(),
         }
+        .with_bench()
+    }
+
+    /// The navigation benchmark needs marked controls and no reopened session.
+    fn with_bench(mut self) -> Self {
+        if crate::perf::bench::requested() {
+            crate::demo::enable();
+            self.open_at_startup.push("bench".to_owned());
+        }
+        self
     }
 
     /// Whether the app runs scripted (`PISTACHIO_OPEN` or a demo): no session reopened at

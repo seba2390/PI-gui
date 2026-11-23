@@ -52,7 +52,7 @@ fn record(id: &SharedString, bounds: Bounds<Pixels>) {
 }
 
 /// The bounds of mark `id` and their sequence number (newer recordings have larger ones).
-fn lookup(id: &str) -> Option<(Bounds<Pixels>, u64)> {
+pub(crate) fn lookup(id: &str) -> Option<(Bounds<Pixels>, u64)> {
     MARKS.with(|marks| marks.borrow().1.get(id).map(|mark| (mark.bounds, mark.seq)))
 }
 

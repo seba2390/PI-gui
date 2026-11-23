@@ -80,6 +80,7 @@ pub fn open_main_window(cx: &mut App) {
     let opened = open_window(options, cx, |window, cx| {
         crate::theme::sync_with_window(window, cx);
         keep_alive_on_close(window, cx);
+        crate::perf::frame("startup: first frame", window);
         cx.new(|cx| MainWindow::new(window, cx))
     });
     if let Err(error) = opened {
@@ -171,6 +172,8 @@ pub struct MainWindow {
     chat_subscription: Subscription,
     /// Demo mode: the cursor overlay and the storyboard being played.
     demo: Option<(Entity<crate::demo::DemoCursor>, Task<()>)>,
+    /// `PISTACHIO_BENCH`: the navigation benchmark being run.
+    bench: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -251,12 +254,18 @@ impl MainWindow {
                 },
             ),
         ];
+        // The window starts on the welcome screen, which has no message box: focus the window
+        // itself, so its actions (Settings…, Check for Updates…, ⌘N…) are available in the
+        // menu bar and from the keyboard right away. Whenever focus is lost later (a focused
+        // control went away), it comes back here for the same reason.
         let focus_handle = cx.focus_handle();
-        let chat_for_focus = chat.clone();
+        let mut subscriptions = subscriptions;
+        subscriptions.push(cx.on_focus_lost(window, |this, window, cx| {
+            this.focus_handle.focus(window, cx);
+        }));
         let open_at_startup = cx.global::<AppConfig>().open_at_startup.clone();
-        window.defer(cx, move |window, cx| {
-            focus_chat(&chat_for_focus, window, cx);
-        });
+        let start_focus = focus_handle.clone();
+        window.defer(cx, move |window, cx| start_focus.focus(window, cx));
         let this = cx.weak_entity();
         let (reopen, check_updates) = {
             let settings = cx.default_global::<AppSettings>();
@@ -330,8 +339,13 @@ impl MainWindow {
             focus_handle,
             chat_subscription,
             demo,
+            bench: None,
             _subscriptions: subscriptions,
         }
+    }
+
+    pub(crate) fn sidebar_entity(&self) -> &Entity<Sidebar> {
+        &self.sidebar
     }
 
     /// The conversation in the chat column (demo mode drives it).
@@ -519,6 +533,7 @@ impl MainWindow {
                     let composer = self.chat.read(cx).composer().clone();
                     composer.update(cx, |composer, cx| composer.open_attach_picker(window, cx));
                 }
+                "bench" => self.bench = Some(crate::perf::bench::start(window, cx)),
                 other => log::warn!("PISTACHIO_OPEN: unknown panel {other:?}"),
             }
         }
@@ -1600,7 +1615,7 @@ impl MainWindow {
         self.show_chat(chat, window, cx);
     }
 
-    fn confirm_delete(
+    pub(crate) fn confirm_delete(
         &mut self,
         host: Option<HostId>,
         summary: SessionSummary,
@@ -1740,19 +1755,27 @@ impl MainWindow {
                 .detach();
             }
             None => {
-                if let Err(error) = trash::delete_all(&paths) {
-                    log::warn!("could not trash sessions of {}: {error}", folder.display());
-                    window.push_notification(
-                        format!("Some sessions could not be moved to the trash: {error}"),
-                        cx,
-                    );
-                }
-                self.sidebar.update(cx, |sidebar, cx| sidebar.refresh(cx));
+                let task = self
+                    .sidebar
+                    .update(cx, |sidebar, cx| sidebar.trash_sessions(paths, cx));
+                let folder = folder.to_path_buf();
+                cx.spawn_in(window, async move |_, cx| {
+                    if let Err(error) = task.await {
+                        log::warn!("could not trash sessions of {}: {error}", folder.display());
+                        let _ = cx.update(|window, cx| {
+                            window.push_notification(
+                                format!("Some sessions could not be moved to the trash: {error}"),
+                                cx,
+                            );
+                        });
+                    }
+                })
+                .detach();
             }
         }
     }
 
-    fn delete_session(
+    pub(crate) fn delete_session(
         &mut self,
         host: Option<HostId>,
         summary: &SessionSummary,
@@ -1791,14 +1814,22 @@ impl MainWindow {
             .detach();
             return;
         }
-        if let Err(error) = trash::delete(&summary.path) {
-            log::warn!("could not trash {}: {error}", summary.path.display());
-            window.push_notification(
-                format!("Could not move the session to the trash: {error}"),
-                cx,
-            );
-        }
-        self.sidebar.update(cx, |sidebar, cx| sidebar.refresh(cx));
+        let path = summary.path.clone();
+        let task = self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.trash_sessions(vec![path.clone()], cx)
+        });
+        cx.spawn_in(window, async move |_, cx| {
+            if let Err(error) = task.await {
+                log::warn!("could not trash {}: {error}", path.display());
+                let _ = cx.update(|window, cx| {
+                    window.push_notification(
+                        format!("Could not move the session to the trash: {error}"),
+                        cx,
+                    );
+                });
+            }
+        })
+        .detach();
     }
 
     fn prompt_rename(
@@ -2605,6 +2636,7 @@ impl Focusable for MainWindow {
 
 impl Render for MainWindow {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _timer = crate::perf::render("window");
         let (background, foreground, font_family) = (
             cx.theme().background,
             cx.theme().foreground,

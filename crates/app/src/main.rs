@@ -17,6 +17,7 @@ mod hosts;
 mod model_store;
 mod naming;
 mod panels;
+mod perf;
 mod persist;
 mod pi_place;
 mod remote_ui;
@@ -44,6 +45,9 @@ fn main() {
     if let Some(code) = remote::askpass::run_client_if_requested() {
         std::process::exit(code);
     }
+    // After the helper modes above: those runs are child processes of the app and must not
+    // touch its PISTACHIO_PERF file.
+    perf::init();
     env_logger::Builder::from_env(
         env_logger::Env::default().default_filter_or("warn,pistachio=info"),
     )
@@ -61,6 +65,7 @@ fn main() {
     let app = application().with_assets(assets::AppAssets);
     app.on_reopen(window::reopen);
     app.run(move |cx| {
+        perf::phase("app_run");
         let child_env = shell_env.join().unwrap_or_default();
         let config = config::AppConfig::detect(child_env);
         init(cx);
@@ -80,6 +85,7 @@ fn main() {
         ));
         window::init(cx);
         window::open_main_window(cx);
+        perf::phase("window_opened");
         cx.activate(true);
     });
 }

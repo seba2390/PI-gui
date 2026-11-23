@@ -886,6 +886,7 @@ impl SettingsView {
 
 impl Render for SettingsView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _timer = crate::perf::render("settings");
         let weak = cx.weak_entity();
         div().size_full().bg(cx.theme().background).child(
             Settings::new("app-settings")

@@ -1003,6 +1003,7 @@ impl SkillsView {
 
 impl Render for SkillsView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _timer = crate::perf::render("skills");
         let detail = match self.selection.clone() {
             Selection::None => self.render_intro(cx),
             Selection::New => self.render_new(cx),

@@ -396,6 +396,7 @@ fn is_in_git_dir(path: &Path) -> bool {
 
 impl Render for RightPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _timer = crate::perf::render("right_panel");
         if !self.visible {
             // Being rendered means being on screen (a hidden resizable panel renders nothing).
             cx.defer_in(window, |this, _, cx| this.set_visible(true, cx));

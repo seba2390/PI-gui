@@ -10,7 +10,7 @@
 mod rows;
 mod typing;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -107,6 +107,9 @@ pub struct Sidebar {
     /// The typing animation's repaint loop is running (only while a name is being typed).
     typing_ticking: bool,
     sessions: Vec<SessionSummary>,
+    /// Session files being moved to the trash: hidden from the list right away, also from
+    /// scans that finish before the trash does.
+    trashing: HashSet<PathBuf>,
     /// The open session: its host (`None`: this computer) and file.
     active: Option<(Option<HostId>, PathBuf)>,
     /// The Skills page is showing (its button is highlighted).
@@ -163,6 +166,7 @@ impl Sidebar {
             typed: HashMap::new(),
             typing_ticking: false,
             sessions: Vec::new(),
+            trashing: HashSet::new(),
             active: None,
             skills_active: false,
             settings_active: false,
@@ -427,6 +431,16 @@ impl Sidebar {
             .is_some_and(|(active_host, active)| active_host.as_ref() == host && active == path)
     }
 
+    /// Whether the first scan of pi's session folder has finished.
+    pub fn is_loaded(&self) -> bool {
+        self.loaded
+    }
+
+    /// Every listed local session, newest first.
+    pub fn listed(&self) -> &[SessionSummary] {
+        &self.sessions
+    }
+
     /// The summary of a listed session, if known.
     pub fn summary(&self, path: &Path) -> Option<SessionSummary> {
         self.sessions
@@ -463,7 +477,7 @@ impl Sidebar {
         let chat_dir = config.chat_dir.clone();
         let previous = self.sessions.clone();
         self._refresh = cx.spawn(async move |this, cx| {
-            let (sessions, folders) = cx
+            let (mut sessions, folders) = cx
                 .background_executor()
                 .spawn(async move {
                     let sessions = pi_sessions::scan_reusing(&dir, &previous);
@@ -481,12 +495,48 @@ impl Sidebar {
                 .await;
             let _ = this.update(cx, |this, cx| {
                 cx.set_global(RecentFolders(folders));
+                sessions.retain(|session| !this.trashing.contains(&session.path));
                 this.sessions = sessions;
+                if !this.loaded {
+                    crate::perf::phase("sessions_listed");
+                }
                 this.loaded = true;
                 this.start_typing(cx);
                 cx.notify();
             });
         });
+    }
+
+    /// Moves local session files to the trash. Their rows go at once; the trash itself (a
+    /// Finder request on macOS, which can take a second) runs in the background. On failure
+    /// the list is scanned again, so files that are still there come back.
+    pub fn trash_sessions(
+        &mut self,
+        paths: Vec<PathBuf>,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<(), String>> {
+        self.trashing.extend(paths.iter().cloned());
+        self.sessions
+            .retain(|session| !paths.contains(&session.path));
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn({
+                    let paths = paths.clone();
+                    async move { trash::delete_all(&paths).map_err(|error| error.to_string()) }
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                for path in &paths {
+                    this.trashing.remove(path);
+                }
+                if result.is_err() {
+                    this.refresh(cx);
+                }
+            });
+            result
+        })
     }
 
     fn watch(&mut self, cx: &mut Context<Self>) {
@@ -881,6 +931,7 @@ fn bucket(modified: SystemTime, now: SystemTime) -> &'static str {
 
 impl Render for Sidebar {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _timer = crate::perf::render("sidebar");
         let colors = palette(cx);
         let new_label = match self.mode {
             Mode::Chat => "New chat",

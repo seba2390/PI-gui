@@ -578,6 +578,7 @@ impl Focusable for TerminalPanel {
 
 impl Render for TerminalPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _timer = crate::perf::render("terminal");
         let header = self.render_header(cx);
         let grid = self.render_grid(window, cx);
         let theme = cx.theme();

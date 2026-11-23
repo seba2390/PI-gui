@@ -854,6 +854,7 @@ impl Focusable for ChatView {
 
 impl Render for ChatView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _timer = crate::perf::render("chat");
         let is_empty = self.session.read(cx).is_empty() && !self.session.read(cx).is_running();
         let weak = cx.weak_entity();
         let background = cx.theme().background;

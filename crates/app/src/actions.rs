@@ -71,7 +71,11 @@ pub fn init(cx: &mut App) {
         KeyBinding::new(primary!("w"), CloseWindow, Some(WINDOW_CONTEXT)),
         KeyBinding::new(primary!(","), OpenSettings, Some(WINDOW_CONTEXT)),
     ]);
-    cx.on_action(|_: &Quit, cx| cx.quit());
+    cx.on_action(|_: &Quit, cx| {
+        crate::perf::summary();
+        crate::perf::phase("quit");
+        cx.quit();
+    });
     cx.on_action(|_: &Hide, cx| cx.hide());
     cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
     cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());

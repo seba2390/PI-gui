@@ -1549,6 +1549,7 @@ impl Composer {
 
 impl Render for Composer {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _timer = crate::perf::render("composer");
         let colors = palette(cx);
         let queue = self.render_queue(cx);
         let suggestions = self.render_suggestions(cx);
