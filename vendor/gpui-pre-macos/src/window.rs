@@ -16,7 +16,7 @@ use gpui::{
     SharedString, Size, SystemWindowTab, WindowAppearance, WindowBackgroundAppearance,
     WindowBounds, WindowControlArea, WindowKind, WindowParams, WindowVisibility, point, px, size,
 };
-#[cfg(any(test, feature = "test-support"))]
+// Pistachio: also for `request_frame_capture` in normal builds.
 use image::RgbaImage;
 
 use core_foundation::base::{CFRelease, CFTypeRef};
@@ -2204,6 +2204,10 @@ impl PlatformWindow for MacWindow {
         native_views::update_background(&mut this, scene);
         native_views::scene_drawn(&mut this, scene);
         this.renderer.draw(scene);
+        // Pistachio: hand the frame to the app when it asked for it (`request_frame_capture`).
+        if FRAME_CAPTURE_REQUESTED.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            capture_frame(&mut this.renderer, scene);
+        }
         drop(this);
         native_views::apply_layout(&self.0, native_view_layout);
     }
@@ -4394,5 +4398,39 @@ mod tests {
                 .expect("test screen description ivar")
                 .load::<*mut AnyObject>(screen)
         }
+    }
+}
+
+// Pistachio: the app blurs a picture of the window behind its update prompt. GPUI only
+// renders a scene to an image in test builds; this captures the next frame drawn instead.
+static FRAME_CAPTURE_REQUESTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static CAPTURED_FRAME: Mutex<Option<RgbaImage>> = Mutex::new(None);
+
+/// Pistachio: renders the next frame drawn (of whichever window draws first) into an image
+/// as well, for [`take_frame_capture`]. Ask the window to redraw after calling this.
+pub fn request_frame_capture() {
+    *CAPTURED_FRAME.lock() = None;
+    FRAME_CAPTURE_REQUESTED.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Pistachio: the frame [`request_frame_capture`] asked for, once it was drawn (device
+/// pixels, RGBA).
+pub fn take_frame_capture() -> Option<RgbaImage> {
+    CAPTURED_FRAME.lock().take()
+}
+
+fn capture_frame(renderer: &mut renderer::Renderer, scene: &gpui::Scene) {
+    let Some(layer) = renderer.layer() else {
+        return;
+    };
+    let drawable = layer.drawableSize();
+    let size = size(
+        gpui::DevicePixels(drawable.width.ceil() as i32),
+        gpui::DevicePixels(drawable.height.ceil() as i32),
+    );
+    match renderer.render_scene_to_image(scene, size) {
+        Ok(image) => *CAPTURED_FRAME.lock() = Some(image),
+        Err(error) => log::warn!("could not capture the window: {error}"),
     }
 }

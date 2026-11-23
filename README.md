@@ -60,7 +60,8 @@ npm i -g @earendil-works/pi-coding-agent
   brew install --cask seba2390/tap/pistachio
   ```
 
-  Update with `brew upgrade --cask pistachio`.
+  Pistachio offers new versions itself and installs them with Update (or run
+  `brew upgrade --cask pistachio`).
   <details>
   <summary>macOS without Homebrew</summary>
 
@@ -80,20 +81,20 @@ npm i -g @earendil-works/pi-coding-agent
   - Debian, Ubuntu:
 
     ```bash
-    curl -fLO https://github.com/seba2390/pistachio/releases/download/v0.4.4/pistachio_0.4.4-1_$(dpkg --print-architecture).deb && sudo apt install ./pistachio_0.4.4-1_$(dpkg --print-architecture).deb
+    curl -fLO https://github.com/seba2390/pistachio/releases/download/v0.4.5/pistachio_0.4.5-1_$(dpkg --print-architecture).deb && sudo apt install ./pistachio_0.4.5-1_$(dpkg --print-architecture).deb
     ```
 
   - Fedora and other RPM-based systems:
 
     ```bash
-    sudo dnf install https://github.com/seba2390/pistachio/releases/download/v0.4.4/pistachio-0.4.4-1.$(uname -m).rpm
+    sudo dnf install https://github.com/seba2390/pistachio/releases/download/v0.4.5/pistachio-0.4.5-1.$(uname -m).rpm
     ```
 
   - Any other distribution (installs for your user only, no root, and adds "Pistachio" to your
     app launcher):
 
     ```bash
-    curl -fL https://github.com/seba2390/pistachio/releases/download/v0.4.4/pistachio-v0.4.4-linux-$(uname -m).tar.gz | tar xz && pistachio-v0.4.4-linux-$(uname -m)/install.sh
+    curl -fL https://github.com/seba2390/pistachio/releases/download/v0.4.5/pistachio-v0.4.5-linux-$(uname -m).tar.gz | tar xz && pistachio-v0.4.5-linux-$(uname -m)/install.sh
     ```
 
   Or download the files yourself from [Releases](https://github.com/seba2390/pistachio/releases).

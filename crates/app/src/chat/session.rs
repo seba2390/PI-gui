@@ -1952,6 +1952,24 @@ mod tests {
                         header("x-extra")
                     ));
                     let mut out = reader.into_inner();
+                    // A careless server that writes the credentials it got into its answer.
+                    if head
+                        .first()
+                        .is_some_and(|line| line.starts_with("GET /v1/echo"))
+                    {
+                        let body = format!(
+                            "{{\"got\":\"{}\",\"extra\":\"{}\"}}",
+                            header("authorization"),
+                            header("x-extra")
+                        );
+                        let _ = write!(
+                            out,
+                            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\
+                             content-length: {}\r\nconnection: close\r\n\r\n{body}",
+                            body.len()
+                        );
+                        return;
+                    }
                     let _ = out.write_all(
                         b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n",
                     );
@@ -2010,6 +2028,7 @@ mod tests {
         ssh.connect(false).expect("connect");
         let probe = ssh.probe("pi").expect("probe");
         let host_id = remote::HostId("e2e-relay".into());
+        let token = crate::relay::token(&host_id);
         let link = crate::relay::link(&ssh, &host_id, &probe, None, &launch).expect("link");
         eprintln!("linked on port {}: {:?}", link.port, link.env);
         let agent = &link.env[0].1;
@@ -2038,9 +2057,11 @@ mod tests {
             .unwrap()
             .trim()
             .to_owned();
+        // With the relay port, so pi starts only once that answers.
         let env = vec![
             link.env[0].clone(),
             ("PI_CODING_AGENT_SESSION_DIR".to_owned(), scratch.clone()),
+            link.env[2].clone(),
         ];
         let host = remote::SavedHost {
             id: host_id,
@@ -2102,6 +2123,20 @@ mod tests {
             ))
             .unwrap();
         eprintln!("without the token: {refused}");
+        // An answer that is not a stream never carries this computer's credentials back.
+        let echoed = ssh
+            .exec(&format!(
+                "command -v curl >/dev/null || exit 0; \
+                 curl -s -m 5 -H 'authorization: Bearer {token}' \
+                   http://127.0.0.1:{}/p/fake/http/127.0.0.1:{port}/v1/echo",
+                link.port
+            ))
+            .unwrap();
+        eprintln!("echoed: {echoed}");
+        assert!(
+            echoed.is_empty() || (echoed.contains("[redacted]") && !echoed.contains("real-")),
+            "{echoed}"
+        );
         assert!(
             refused.is_empty()
                 || (refused.contains("did not come from a Pistachio session")

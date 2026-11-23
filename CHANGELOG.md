@@ -6,6 +6,36 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-11-23
+
+### Added
+
+- Update from the app: when a new version is out, Update in the prompt installs it the way
+  Pistachio was installed and opens the new version, with no download to unpack. On macOS
+  that is `brew upgrade --cask pistachio` for a Homebrew install, otherwise the new app
+  replaces the old one; on Linux the .deb or .rpm (the system asks for your password) or the
+  binary the tarball installed; on Windows `pistachio.exe` is replaced. The download is
+  checked against GitHub's checksum, and if anything fails the old version stays and the
+  prompt says what happened. The prompt now sits in the middle of the window, over the window
+  blurred (a dimmed veil on Linux and Windows).
+- What's new: after an update, Pistachio shows what changed since the version you had, from
+  this changelog.
+
+### Fixed
+
+- This computer's models on SSH hosts (#26):
+  - The relay sends a request to the address in this computer's model settings, never to
+    one taken from the request (only the path comes from it). The address was already
+    checked against those settings; this also clears a code-scanning alert.
+  - An answer that is not a stream (an error, a list of models) no longer carries this
+    computer's key or provider headers back to the host, even from a server that writes the
+    credentials it got into its answer.
+  - When the SSH connection is made again in the moment before a session starts, pi on the
+    host no longer starts without a way to reach this computer's models: the session stops
+    with a message and offers to reconnect.
+  - Relative paths in the host's own pi settings (`"extensions": ["./my-ext"]`, local
+    packages) still point into the host's agent folder.
+
 ## [0.4.4] - 2026-11-23
 
 ### Added
@@ -289,7 +319,8 @@ chats, skills and model management. Changes since the last private build:
 - A corrupt `hosts.json` is kept as a backup.
 - A remembered terminal height can no longer squeeze out the chat.
 
-[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.4.4...HEAD
+[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.4.5...HEAD
+[0.4.5]: https://github.com/seba2390/pistachio/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/seba2390/pistachio/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/seba2390/pistachio/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/seba2390/pistachio/compare/v0.4.1...v0.4.2

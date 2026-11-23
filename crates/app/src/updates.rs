@@ -1,5 +1,5 @@
 //! Checking GitHub for a newer release. Nothing is downloaded or installed here: when there
-//! is one, the app asks and opens the download in the browser.
+//! is one, the app asks, and [`crate::updater`] installs it on a yes.
 
 use serde::Deserialize;
 
@@ -32,6 +32,38 @@ pub struct Release {
     pub download_url: Option<String>,
     /// The release notes (Markdown).
     pub notes: String,
+    /// Every file of the release.
+    pub assets: Vec<Asset>,
+}
+
+/// A file of a release.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Asset {
+    pub name: String,
+    #[serde(rename = "browser_download_url")]
+    pub url: String,
+    #[serde(default)]
+    pub size: u64,
+    /// `sha256:<hex>`, for files GitHub has a checksum of.
+    #[serde(default)]
+    pub digest: Option<String>,
+}
+
+impl Asset {
+    /// The SHA-256 checksum GitHub lists for the file, in lowercase hex.
+    pub fn sha256(&self) -> Option<&str> {
+        self.digest
+            .as_deref()?
+            .strip_prefix("sha256:")
+            .filter(|hex| hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+    }
+}
+
+impl Release {
+    /// The file called exactly `name`.
+    pub fn asset(&self, name: &str) -> Option<&Asset> {
+        self.assets.iter().find(|asset| asset.name == name)
+    }
 }
 
 #[derive(Deserialize)]
@@ -45,13 +77,7 @@ struct GithubRelease {
     #[serde(default)]
     prerelease: bool,
     #[serde(default)]
-    assets: Vec<GithubAsset>,
-}
-
-#[derive(Deserialize)]
-struct GithubAsset {
-    name: String,
-    browser_download_url: String,
+    assets: Vec<Asset>,
 }
 
 /// The platform's part of release file names (Linux builds are per architecture).
@@ -78,12 +104,13 @@ pub fn parse_latest(json: &str, platform: &str) -> Result<Option<Release>, Strin
         .assets
         .iter()
         .find(|asset| asset.name.to_ascii_lowercase().contains(platform))
-        .map(|asset| asset.browser_download_url.clone());
+        .map(|asset| asset.url.clone());
     Ok(Some(Release {
         version: release.tag_name.trim_start_matches('v').to_owned(),
         page_url: release.html_url,
         download_url,
         notes: release.body.unwrap_or_default(),
+        assets: release.assets,
     }))
 }
 
@@ -140,7 +167,8 @@ mod tests {
         "draft": false,
         "prerelease": false,
         "assets": [
-            {"name": "Pistachio-v0.3.0-macos-universal.zip", "browser_download_url": "https://x/mac.zip"},
+            {"name": "Pistachio-v0.3.0-macos-universal.zip", "browser_download_url": "https://x/mac.zip",
+             "size": 42, "digest": "sha256:86098aca61dd6ca376252c05ece6a1ade9381a1bfa872e36953a5e9aadb0dd5e"},
             {"name": "pistachio-v0.3.0-linux-aarch64.tar.gz", "browser_download_url": "https://x/linux-arm.tgz"},
             {"name": "pistachio-v0.3.0-linux-x86_64.tar.gz", "browser_download_url": "https://x/linux.tgz"},
             {"name": "pistachio-v0.3.0-windows-x86_64.zip", "browser_download_url": "https://x/win.zip"}
@@ -160,6 +188,22 @@ mod tests {
         assert_eq!(arm.download_url.as_deref(), Some("https://x/linux-arm.tgz"));
         let other = parse_latest(LATEST, "freebsd").unwrap().unwrap();
         assert_eq!(other.download_url, None);
+
+        let zip = release
+            .asset("Pistachio-v0.3.0-macos-universal.zip")
+            .unwrap();
+        assert_eq!(zip.size, 42);
+        assert_eq!(
+            zip.sha256(),
+            Some("86098aca61dd6ca376252c05ece6a1ade9381a1bfa872e36953a5e9aadb0dd5e")
+        );
+        assert_eq!(
+            release
+                .asset("pistachio-v0.3.0-linux-x86_64.tar.gz")
+                .unwrap()
+                .sha256(),
+            None
+        );
     }
 
     #[test]
