@@ -120,6 +120,10 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   the page shows whether the project is trusted and can trust it, saved in pi's own
   `trust.json` like the terminal's `/trust`. pi reads skills when it starts, so changes restart
   it on the same session.
+- **Formulas**: answers draw LaTeX math with KaTeX's layout and fonts: `$…$` and `\(…\)`
+  inline, `$$…$$` and `\[…\]` as centered blocks (scrolling sideways when wider than the
+  chat). Dollar signs follow pandoc's rules, so prices such as "$5 and $10" stay text, and
+  code keeps its `$`. A formula that doesn't parse shows as written; copying gives its LaTeX.
 - **Built-in skills**: Code sessions on this computer also load the skills that come with
   Pistachio, written to `~/.pi/agent/pistachio/skills` and passed with `--skill` (pi's own
   skill folders are not touched). They show read-only on the Skills page under "Comes with

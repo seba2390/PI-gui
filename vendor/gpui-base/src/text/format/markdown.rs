@@ -78,10 +78,18 @@ fn plain_text_root(source: &str) -> Node {
 /// Parse Markdown into a tree of nodes.
 pub(crate) fn parse(source: &str, cx: &mut NodeContext) -> Result<ParsedDocument, SharedString> {
     let options = cx.markdown_extensions.parse_options();
-    let mut root = match to_mdast(source, &options) {
+    // Pistachio: only `$` that delimit a formula by pandoc's rules reach the parser as `$`
+    // (see [`math_delimiters`]); `\(…\)` and `\[…\]` become `$$…$$`. Both keep every byte
+    // offset, so positions in the tree still point into `source`.
+    let prepared = math_delimiters(source, &options, &|| cx.markdown_extensions.parse_options());
+    let parsed = to_mdast(prepared.as_deref().unwrap_or(source), &options);
+    let mut root = match parsed {
         Some(result) => result?,
         None => return Ok(ast_to_document(source, plain_text_root(source), cx)),
     };
+    if prepared.is_some() {
+        restore_dollars(&mut root);
+    }
     // Pistachio: when no plugin claims inline math, `$` is plain prose, so parse the whole
     // text without inline math. Re-parsing only the math node (below) is not enough: in
     // "**$4.0 trillion** — about **$4.02T**" the span from the first `$` to the second takes
@@ -98,6 +106,257 @@ pub(crate) fn parse(source: &str, cx: &mut NodeContext) -> Result<ParsedDocument
     prose.constructs.math_flow = false;
     flatten_unclaimed_math(&mut root, source, &prose, cx);
     Ok(ast_to_document(source, root, cx))
+}
+
+/// Pistachio: stands in for a `$` that is not a formula delimiter while the text is parsed
+/// with math on, so the parser can't pair it; [`restore_dollars`] turns it back into `$`. A
+/// text that already holds this byte is parsed as it is.
+const NOT_A_DELIMITER: u8 = 0x01;
+
+/// Pistachio: `source` prepared for parsing with inline math, or `None` when it needs no
+/// change. The `markdown` crate pairs any two `$`, so "$4.0 trillion** — about **$4.02T"
+/// would be one formula. Pandoc's rules decide instead: a formula opens with a `$` followed
+/// by a non-space, and closes at the next `$`, which must follow a non-space and not be
+/// followed by a digit (so "$5 and $10" are prices). Every `$` outside code that does not
+/// delimit a formula is replaced by [`NOT_A_DELIMITER`]. `$$…$$` is display math as before.
+/// `\(…\)` becomes `$$…$$` (inline, the source still says which), and `\[…\]` on lines
+/// of their own becomes a `$$` block. Every replacement keeps the length, so no offset moves.
+fn math_delimiters(
+    source: &str,
+    options: &ParseOptions,
+    fresh_options: &dyn Fn() -> ParseOptions,
+) -> Option<String> {
+    let bytes = source.as_bytes();
+    if !options.constructs.math_text
+        || bytes.contains(&NOT_A_DELIMITER)
+        || !(bytes.contains(&b'$') || source.contains("\\(") || source.contains("\\["))
+    {
+        return None;
+    }
+    let code = code_ranges(source, fresh_options());
+    let in_code = |at: usize| code.iter().find(|range| range.contains(&at)).map(|r| r.end);
+    let escaped = |at: usize| {
+        bytes[..at]
+            .iter()
+            .rev()
+            .take_while(|byte| **byte == b'\\')
+            .count()
+            % 2
+            == 1
+    };
+    // The next unescaped `needle` after `from`, outside code and before a blank line.
+    let find = |from: usize, needle: &[u8]| -> Option<usize> {
+        let mut at = from;
+        while at + needle.len() <= bytes.len() {
+            if let Some(end) = in_code(at) {
+                at = end;
+                continue;
+            }
+            if bytes[at] == b'\n' && blank_line_follows(bytes, at) {
+                return None;
+            }
+            if bytes[at..].starts_with(needle) && !escaped(at) {
+                return Some(at);
+            }
+            at += 1;
+        }
+        None
+    };
+    let mut out = bytes.to_vec();
+    let mut changed = false;
+    let mut at = 0;
+    while at < bytes.len() {
+        if let Some(end) = in_code(at) {
+            at = end;
+            continue;
+        }
+        match bytes[at] {
+            b'$' if !escaped(at) => {
+                if bytes.get(at + 1) == Some(&b'$') {
+                    match find_display_end(bytes, at + 2, &in_code, &escaped) {
+                        Some(end) => at = end + 2,
+                        None => {
+                            out[at] = NOT_A_DELIMITER;
+                            out[at + 1] = NOT_A_DELIMITER;
+                            changed = true;
+                            at += 2;
+                        }
+                    }
+                    continue;
+                }
+                let opens = bytes
+                    .get(at + 1)
+                    .is_some_and(|next| !next.is_ascii_whitespace());
+                let close = opens.then(|| find(at + 1, b"$")).flatten().filter(|end| {
+                    !bytes[end - 1].is_ascii_whitespace()
+                        && !bytes.get(end + 1).is_some_and(u8::is_ascii_digit)
+                        && bytes.get(end + 1) != Some(&b'$')
+                });
+                match close {
+                    Some(end) => at = end + 1,
+                    None => {
+                        out[at] = NOT_A_DELIMITER;
+                        changed = true;
+                        at += 1;
+                    }
+                }
+            }
+            b'\\' if !escaped(at) => match bytes.get(at + 1) {
+                Some(b'(') => match find(at + 2, b"\\)") {
+                    Some(end) => {
+                        out[at..at + 2].copy_from_slice(b"$$");
+                        out[end..end + 2].copy_from_slice(b"$$");
+                        changed = true;
+                        at = end + 2;
+                    }
+                    None => at += 2,
+                },
+                Some(b'[') if starts_line(bytes, at) => {
+                    match find_display_close(bytes, at + 2, &in_code, &escaped) {
+                        Some(end) => {
+                            out[at..at + 2].copy_from_slice(b"$$");
+                            out[end..end + 2].copy_from_slice(b"$$");
+                            changed = true;
+                            at = end + 2;
+                        }
+                        None => at += 2,
+                    }
+                }
+                _ => at += 2,
+            },
+            _ => at += 1,
+        }
+    }
+    // Only ASCII bytes were replaced, by ASCII bytes.
+    changed.then(|| String::from_utf8(out).expect("ASCII replaced by ASCII"))
+}
+
+/// Pistachio: the byte ranges of code (spans and blocks) in `source`, where `$` is text.
+fn code_ranges(source: &str, mut plain: ParseOptions) -> Vec<Range<usize>> {
+    plain.constructs.math_text = false;
+    plain.constructs.math_flow = false;
+    let mut ranges = Vec::new();
+    if let Some(Ok(root)) = to_mdast(source, &plain) {
+        collect_code(&root, &mut ranges);
+    }
+    ranges.sort_by_key(|range| range.start);
+    ranges
+}
+
+fn collect_code(node: &Node, ranges: &mut Vec<Range<usize>>) {
+    match node {
+        Node::Code(_) | Node::InlineCode(_) | Node::Html(_) => {
+            if let Some(position) = node.position() {
+                ranges.push(position.start.offset..position.end.offset);
+            }
+        }
+        _ => {
+            for child in node.children().into_iter().flatten() {
+                collect_code(child, ranges);
+            }
+        }
+    }
+}
+
+/// Pistachio: whether the line break at `at` is followed by a blank line (a paragraph ends).
+fn blank_line_follows(bytes: &[u8], at: usize) -> bool {
+    bytes[at + 1..]
+        .iter()
+        .take_while(|byte| **byte != b'\n')
+        .all(u8::is_ascii_whitespace)
+}
+
+/// Pistachio: whether only spaces come before `at` on its line.
+fn starts_line(bytes: &[u8], at: usize) -> bool {
+    bytes[..at]
+        .iter()
+        .rev()
+        .take_while(|byte| **byte != b'\n')
+        .all(|byte| *byte == b' ' || *byte == b'\t')
+}
+
+/// Pistachio: where the `$$` closing display math opened before `from` starts.
+fn find_display_end(
+    bytes: &[u8],
+    from: usize,
+    in_code: &impl Fn(usize) -> Option<usize>,
+    escaped: &impl Fn(usize) -> bool,
+) -> Option<usize> {
+    let mut at = from;
+    while at + 2 <= bytes.len() {
+        if let Some(end) = in_code(at) {
+            at = end;
+            continue;
+        }
+        if bytes[at..].starts_with(b"$$") && !escaped(at) {
+            return Some(at);
+        }
+        at += 1;
+    }
+    None
+}
+
+/// Pistachio: where the `\]` closing a `\[` display starts, when only spaces follow it on its
+/// line.
+fn find_display_close(
+    bytes: &[u8],
+    from: usize,
+    in_code: &impl Fn(usize) -> Option<usize>,
+    escaped: &impl Fn(usize) -> bool,
+) -> Option<usize> {
+    let mut at = from;
+    while at + 2 <= bytes.len() {
+        if let Some(end) = in_code(at) {
+            at = end;
+            continue;
+        }
+        if bytes[at..].starts_with(b"\\]") && !escaped(at) {
+            let rest = bytes[at + 2..].iter().take_while(|byte| **byte != b'\n');
+            return rest.clone().all(u8::is_ascii_whitespace).then_some(at);
+        }
+        at += 1;
+    }
+    None
+}
+
+/// Pistachio: turns every [`NOT_A_DELIMITER`] in the tree's text back into `$`.
+fn restore_dollars(node: &mut Node) {
+    let fix = |text: &mut String| {
+        if text.contains(char::from(NOT_A_DELIMITER)) {
+            *text = text.replace(char::from(NOT_A_DELIMITER), "$");
+        }
+    };
+    match node {
+        Node::Text(n) => fix(&mut n.value),
+        Node::InlineCode(n) => fix(&mut n.value),
+        Node::Code(n) => fix(&mut n.value),
+        Node::Html(n) => fix(&mut n.value),
+        Node::InlineMath(n) => fix(&mut n.value),
+        Node::Math(n) => fix(&mut n.value),
+        Node::Link(n) => {
+            fix(&mut n.url);
+            if let Some(title) = &mut n.title {
+                fix(title);
+            }
+        }
+        Node::Image(n) => {
+            fix(&mut n.url);
+            fix(&mut n.alt);
+            if let Some(title) = &mut n.title {
+                fix(title);
+            }
+        }
+        Node::Definition(n) => {
+            fix(&mut n.url);
+            if let Some(title) = &mut n.title {
+                fix(title);
+            }
+        }
+        _ => {}
+    }
+    if let Some(children) = node.children_mut() {
+        children.iter_mut().for_each(restore_dollars);
+    }
 }
 
 /// Pistachio: whether `node` holds an inline math node.
@@ -2946,7 +3205,9 @@ mod tests {
             ..Default::default()
         };
         let document = parse("area $x^2$ costs $5 and $10", &mut cx).unwrap();
-        assert_eq!(document.text(), "area [x^2] costs [5 and ]10\n");
+        // Pistachio: "$5 and $10" are prices by pandoc's rules (see `math_delimiters`);
+        // upstream claims "[5 and ]" as a formula.
+        assert_eq!(document.text(), "area [x^2] costs $5 and $10\n");
     }
 
     #[test]
@@ -3204,5 +3465,65 @@ mod tests {
                 symbol: "TSLA.US".to_string()
             })
         );
+    }
+}
+
+/// Pistachio: which `$` delimit formulas (see [`math_delimiters`]).
+#[cfg(test)]
+mod pistachio_math_delimiters {
+    use super::{NOT_A_DELIMITER, math_delimiters};
+    use markdown::ParseOptions;
+
+    fn options() -> ParseOptions {
+        let mut options = ParseOptions::gfm();
+        options.constructs.math_text = true;
+        options.constructs.math_flow = true;
+        options
+    }
+
+    /// `source` with each `$` that is not a delimiter shown as `·`.
+    fn marked(source: &str) -> String {
+        math_delimiters(source, &options(), &options)
+            .unwrap_or_else(|| source.to_owned())
+            .replace(char::from(NOT_A_DELIMITER), "·")
+    }
+
+    #[test]
+    fn prices_are_not_formulas() {
+        assert_eq!(
+            marked("**$4.0 trillion** — about **$4.02T** while it shows **$3.99T**."),
+            "**·4.0 trillion** — about **·4.02T** while it shows **·3.99T**."
+        );
+        assert_eq!(marked("between $5 and $10"), "between ·5 and ·10");
+        assert_eq!(marked("$20,000 and $30,000"), "·20,000 and ·30,000");
+        assert_eq!(marked("it costs $5."), "it costs ·5.");
+    }
+
+    #[test]
+    fn formulas_are_kept() {
+        assert_eq!(marked("so $x^2 + 1$ grows"), "so $x^2 + 1$ grows");
+        assert_eq!(marked("$2x$ and $a_1$."), "$2x$ and $a_1$.");
+        // A price before a formula does not swallow it.
+        assert_eq!(marked("Price: $5. Then $x$ is"), "Price: ·5. Then $x$ is");
+        assert_eq!(marked("$$\\sum_i x_i$$"), "$$\\sum_i x_i$$");
+        assert_eq!(marked("$$\nx^2\n$$\n"), "$$\nx^2\n$$\n");
+    }
+
+    #[test]
+    fn code_and_escapes_are_left_alone() {
+        assert_eq!(marked("`echo $HOME` and $x$"), "`echo $HOME` and $x$");
+        assert_eq!(marked("```sh\necho $1 $2\n```\n"), "```sh\necho $1 $2\n```\n");
+        assert_eq!(marked("costs \\$5 and \\$6"), "costs \\$5 and \\$6");
+        // A formula does not reach across a blank line.
+        assert_eq!(marked("$a\n\nb$"), "·a\n\nb·");
+    }
+
+    #[test]
+    fn backslash_delimiters_become_dollars() {
+        assert_eq!(marked("so \\(x^2\\) grows"), "so $$x^2$$ grows");
+        assert_eq!(marked("\\[\nx^2\n\\]\n"), "$$\nx^2\n$$\n");
+        // `\[` inside a line is an escaped bracket, not display math.
+        assert_eq!(marked("see a\\[0\\] here"), "see a\\[0\\] here");
+        assert_eq!(marked("\\(unclosed"), "\\(unclosed");
     }
 }

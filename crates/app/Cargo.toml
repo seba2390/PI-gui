@@ -38,6 +38,10 @@ toml = { version = "1", default-features = false, features = ["std", "parse", "s
 sherpa-onnx = "2.0.3"
 # Finds file names in answers (src/chat/file_links.rs); the version gpui-kit already links.
 markdown = "1.0.0"
+# Draws formulas in answers (src/chat/math.rs): KaTeX's layout and fonts, flattened to paths by
+# usvg, the version katex-native's resvg uses.
+katex-native = { version = "0.1.1", features = ["raster"] }
+usvg = "0.45.1"
 sha2 = "0.10.9"
 ureq = { version = "=3.5.2", default-features = false, features = ["rustls"] }
 # Complete highlight queries for grammars gpui-kit ships incomplete (see src/syntax.rs).

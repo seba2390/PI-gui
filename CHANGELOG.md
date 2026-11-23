@@ -14,6 +14,10 @@ All notable changes to PI-gui are listed here. The format follows
   on this computer load it alongside your own skills (it is written to
   `~/.pi/agent/pistachio/skills` and passed with `--skill`; pi's own skill folders are left
   alone). The Skills page lists it under "Comes with Pistachio", read-only.
+- Formulas in answers are drawn as math: `$…$` and `\(…\)` inline, `$$…$$` and `\[…\]`
+  blocks centered on their own lines. KaTeX lays them out (a Rust port with KaTeX's fonts,
+  so they look as they do on the web), sharp at any size and in the text color of either
+  theme. A formula KaTeX can't read shows as written, and copying a formula gives its LaTeX.
 
 ### Fixed
 
@@ -24,7 +28,9 @@ All notable changes to PI-gui are listed here. The format follows
   the message never mentions is rejected as an answer, so the chat keeps its first message.
 - Dollar amounts no longer break bold text in answers: "**$4.0 trillion** — about **$4.02T**"
   rendered as `$4.0 trillion** — about **$4.02T`, because the text between two dollar signs
-  was read as a math formula. Pistachio renders no formulas, so `$` is now always plain text.
+  was read as a formula. Dollar signs now follow pandoc's rules: a formula's closing `$` is
+  never followed by a digit, so prices ("$5 and $10") stay text, and `$` in code is left
+  alone.
 
 ## [0.4.5] - 2026-11-23
 
