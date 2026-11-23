@@ -27,7 +27,7 @@ term = { path = "crates/term" }
 # Syntax colors (models.json, SKILL.md, chat code blocks): `tree-sitter` brings JSON, and
 # each `tree-sitter-<lang>` one more grammar. Only these are compiled in; each adds to the
 # binary, so add languages deliberately.
-gpui-kit = { version = "=0.10.0", default-features = false, features = [
+gpui-kit = { version = "=0.11.0", default-features = false, features = [
     "component",
     "assets",
     # Microphone capture and the speech widgets; the recognizer is our own (src/stt).

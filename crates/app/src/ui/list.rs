@@ -1,6 +1,6 @@
 //! The virtual list behind the chat's message scroller.
 //!
-//! Vendored from GPUI (`gpui-pre` 0.3.12, `src/elements/list.rs`,
+//! Vendored from GPUI (`gpui-pre` 0.3.14, `src/elements/list.rs`,
 //! <https://github.com/zed-industries/zed>), Copyright Zed Industries, licensed under the
 //! Apache License 2.0 (its text ships in THIRD-PARTY-LICENSES.txt with every release, GPUI
 //! being a dependency). Changes, marked `Pistachio:` in the code:
@@ -18,8 +18,8 @@ use gpui_kit::Refineable as _;
 use gpui_kit::{
     Along as _, AnyElement, App, AvailableSpace, Axis, Bounds, ContentMask, DispatchPhase, Edges,
     Element, EntityId, FocusHandle, GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId,
-    IntoElement, Overflow, Pixels, Point, ScrollDelta, ScrollEvent, Size, Style, StyleRefinement,
-    Styled, Window, point, px, size,
+    Overflow, Pixels, Point, ScrollDelta, ScrollEvent, Size, Style, StyleRefinement, Styled,
+    Window, point, px, size,
 };
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -1711,14 +1711,6 @@ fn content_insets(style: &Style, size: Size<Pixels>, rem_size: Pixels) -> Edges<
     let border = style.border_widths.to_pixels(rem_size);
 
     padding + border
-}
-
-impl IntoElement for List {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
-    }
 }
 
 impl Styled for List {

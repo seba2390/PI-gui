@@ -32,7 +32,7 @@ async-channel.workspace = true
 base64 = "0.23"
 trash = "5"
 # The vendored GPUI list (src/ui/list.rs); keep it at the version gpui-kit locks.
-sum_tree = { package = "gpui-pre-sum-tree", version = "=0.3.12" }
+sum_tree = { package = "gpui-pre-sum-tree", version = "=0.3.14" }
 toml = { version = "1", default-features = false, features = ["std", "parse", "serde"] }
 # Local speech to text (src/stt): sherpa-onnx links its prebuilt static libraries.
 sherpa-onnx = "2.0.3"
