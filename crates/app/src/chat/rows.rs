@@ -14,7 +14,7 @@ use transcript::explore::{Group, RowRole};
 use transcript::search::Field;
 use transcript::tool::{self, DiffKind, PathContext, ToolKind};
 use transcript::{
-    AssistantItem, BlockKind, ItemKind, NestedEntry, NoticeKind, RunStatus, ThinkingBlock,
+    AssistantItem, BlockKind, ItemId, ItemKind, NestedEntry, NoticeKind, RunStatus, ThinkingBlock,
     ToolBlock, ToolStatus, TranscriptItem, format_duration,
 };
 
@@ -138,7 +138,18 @@ pub fn render_row(
         _ => (px(6.), px(6.)),
     };
 
+    // Each row reports the pointer to the chat, so a turn's hover actions (on its "Worked
+    // for" row) show while the pointer is anywhere in its answer: rows are separate list
+    // items, which a GPUI hover group cannot span. The row is keyed by its item, so a
+    // replaced transcript starts with fresh hover state. Rows sit flush (their spacing is
+    // padding inside this element), so moving between rows of a turn never leaves it.
+    let hover_id = items.get(row).map_or(u64::MAX, |item| item.id.0);
+    let hover_chat = weak.clone();
     h_flex()
+        .id(("transcript-row", hover_id))
+        .on_hover(move |hovered, _, cx| {
+            let _ = hover_chat.update(cx, |chat, cx| chat.set_row_hovered(row, *hovered, cx));
+        })
         .w_full()
         .justify_center()
         .px_4()
@@ -324,6 +335,10 @@ fn turn_actions(id: u64, cx: &RowContext<'_>, app: &App) -> impl IntoElement {
         .gap_0p5()
         .invisible()
         .group_hover("turn-end", |style| style.visible())
+        // The pointer is elsewhere in this turn's answer (see `render_row`).
+        .when(cx.chat.hovered_turn() == Some(ItemId(id)), |this| {
+            this.visible()
+        })
         .when(!reply.is_empty(), |this| {
             this.child(CopyButton::new(("copy-reply", id), reply).tooltip("Copy reply"))
         })
@@ -372,6 +387,21 @@ fn action_button(
         .accessibility_label(tooltip)
         .tooltip(tooltip)
         .on_click(move |_, _, cx| session.update(cx, |session, cx| action(session, cx)))
+}
+
+/// The "Worked for" row ending the turn that row `row` belongs to, if that turn has ended.
+/// A turn's answer runs from just after its last prompt down to its `TurnSummary` (the same
+/// stretch "Copy reply" copies); prompts, and rows after a turn ended but before the next
+/// prompt, belong to no turn.
+pub(crate) fn turn_end(items: &[TranscriptItem], row: usize) -> Option<usize> {
+    if matches!(items.get(row)?.kind, ItemKind::User(_)) {
+        return None;
+    }
+    items[row..]
+        .iter()
+        .position(|item| matches!(item.kind, ItemKind::User(_) | ItemKind::TurnSummary(_)))
+        .map(|offset| row + offset)
+        .filter(|end| matches!(items[*end].kind, ItemKind::TurnSummary(_)))
 }
 
 /// How many prompts come after `row` (0 for the last one): pi's fork list is matched from
@@ -1245,8 +1275,93 @@ fn render_working(status: &RunStatus, cx: &RowContext<'_>) -> AnyElement {
 
 #[cfg(test)]
 mod tests {
-    use super::{BlockKey, element_id};
-    use transcript::ItemId;
+    use std::time::Duration;
+
+    use super::{BlockKey, element_id, turn_end};
+    use transcript::{ItemId, ItemKind, Notice, NoticeKind, TranscriptItem, TurnSummary, UserItem};
+
+    fn item(id: u64, kind: ItemKind) -> TranscriptItem {
+        TranscriptItem {
+            id: ItemId(id),
+            version: 0,
+            kind,
+        }
+    }
+
+    fn prompt(id: u64) -> TranscriptItem {
+        item(
+            id,
+            ItemKind::User(UserItem {
+                text: "hi".to_owned(),
+                images: Vec::new(),
+            }),
+        )
+    }
+
+    /// Stands in for any answer row (thinking, tool calls, text).
+    fn answer(id: u64) -> TranscriptItem {
+        item(
+            id,
+            ItemKind::Notice(Notice {
+                kind: NoticeKind::Info,
+                text: "step".to_owned(),
+            }),
+        )
+    }
+
+    fn summary(id: u64) -> TranscriptItem {
+        item(
+            id,
+            ItemKind::TurnSummary(TurnSummary {
+                duration: Duration::from_secs(17),
+                aborted: false,
+            }),
+        )
+    }
+
+    #[test]
+    fn every_row_of_an_answer_belongs_to_its_turn() {
+        let items = [
+            prompt(0),
+            answer(1),
+            answer(2),
+            summary(3),
+            prompt(4),
+            answer(5),
+            summary(6),
+        ];
+        let turns: Vec<_> = (0..=items.len()).map(|row| turn_end(&items, row)).collect();
+        assert_eq!(
+            turns,
+            [
+                None,
+                Some(3),
+                Some(3),
+                Some(3),
+                None,
+                Some(6),
+                Some(6),
+                // The trailing "Working…" row.
+                None,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_running_turn_and_rows_between_turns_belong_to_none() {
+        // A notice after a turn ended, then a turn still running (no summary yet).
+        let items = [prompt(0), summary(1), answer(2), prompt(3), answer(4)];
+        let turns: Vec<_> = (0..items.len()).map(|row| turn_end(&items, row)).collect();
+        assert_eq!(turns, [None, Some(1), None, None, None]);
+    }
+
+    #[test]
+    fn rows_before_a_steering_prompt_belong_to_no_turn() {
+        // "Copy reply" copies only the answer after the turn's last prompt.
+        let items = [prompt(0), answer(1), prompt(2), answer(3), summary(4)];
+        let turns: Vec<_> = (0..items.len()).map(|row| turn_end(&items, row)).collect();
+        assert_eq!(turns, [None, None, None, Some(4), Some(4)]);
+    }
 
     #[test]
     fn a_whole_group_has_an_element_id() {

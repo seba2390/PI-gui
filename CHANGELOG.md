@@ -6,6 +6,11 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- A turn's copy and branch buttons show while the pointer is anywhere in its answer, not only
+  over the "Worked for" row.
+
 ## [0.4.3] - 2026-11-23
 
 ### Added

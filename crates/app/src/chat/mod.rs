@@ -117,6 +117,11 @@ pub struct ChatView {
     highlights: std::cell::RefCell<crate::code_highlight::HighlightCache>,
     /// The find bar (⌘F), while open.
     find: Option<find::Find>,
+    /// The transcript row under the pointer.
+    hovered_row: Option<usize>,
+    /// The "Worked for" item of the turn the pointer is in: its hover actions show while the
+    /// pointer is anywhere in that turn's answer, not only over the "Worked for" row.
+    hovered_turn: Option<ItemId>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -201,6 +206,8 @@ impl ChatView {
             pi_field: None,
             highlights: std::cell::RefCell::default(),
             find: None,
+            hovered_row: None,
+            hovered_turn: None,
             _subscriptions: subscriptions,
         };
         this.sync(cx);
@@ -255,6 +262,8 @@ impl ChatView {
         self.toggled.clear();
         self.row_versions.clear();
         self.working_row = false;
+        // Row numbers now point at other items; the row under the pointer reports itself again.
+        self.hovered_row = None;
         self.scroller
             .update(cx, |scroller, cx| scroller.reset(0, cx));
         self.sync(cx);
@@ -518,8 +527,13 @@ impl ChatView {
                 scroller.remeasure_items(index..index + 1, cx);
             }
         });
+        if new_items < old_items {
+            self.hovered_row = None;
+        }
         self.row_versions = new_versions;
         self.working_row = running;
+        // A turn under the pointer may just have ended (or the transcript was replaced).
+        self.update_hovered_turn(cx);
 
         // 4. While working, repaint at the working π's frame rate so it pulses smoothly and
         //    the timers advance; nothing ticks while idle.
@@ -594,6 +608,39 @@ impl ChatView {
             self.scroller.update(cx, |scroller, cx| {
                 scroller.remeasure_items(row..row + 1, cx);
             });
+        }
+    }
+
+    /// The "Worked for" item of the turn under the pointer (see [`Self::set_row_hovered`]).
+    pub(crate) fn hovered_turn(&self) -> Option<ItemId> {
+        self.hovered_turn
+    }
+
+    /// The pointer entered (or left) transcript row `row`. Rows report enter and leave in
+    /// either order when the pointer crosses between them, so a leave only counts for the
+    /// row last entered.
+    pub(crate) fn set_row_hovered(&mut self, row: usize, hovered: bool, cx: &mut Context<Self>) {
+        if hovered {
+            self.hovered_row = Some(row);
+        } else if self.hovered_row == Some(row) {
+            self.hovered_row = None;
+        } else {
+            return;
+        }
+        self.update_hovered_turn(cx);
+    }
+
+    /// Recomputes the turn under the pointer, re-rendering only when it changed (not as the
+    /// pointer crosses rows of the same turn).
+    fn update_hovered_turn(&mut self, cx: &mut Context<Self>) {
+        let items = self.session.read(cx).transcript().items();
+        let turn = self
+            .hovered_row
+            .and_then(|row| rows::turn_end(items, row))
+            .map(|end| items[end].id);
+        if turn != self.hovered_turn {
+            self.hovered_turn = turn;
+            cx.notify();
         }
     }
 
