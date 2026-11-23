@@ -29,7 +29,7 @@ impl Ssh {
         let mut installed = None;
         let mut log: Vec<String> = Vec::new();
         let output =
-            process::run_streaming(self.script_command(&script), INSTALL_TIMEOUT, |line| {
+            process::run_streaming(self.script_command(&script)?, INSTALL_TIMEOUT, |line| {
                 if let Some(step) = line.strip_prefix("PISTACHIO_STEP=") {
                     on_step(step);
                 } else if let Some(path) = line.strip_prefix("PISTACHIO_INSTALLED=") {

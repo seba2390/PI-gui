@@ -1,16 +1,20 @@
 //! SSH UI: the device status dot, the add-host dialog, the connect / folder-browser dialog,
-//! the host manager and ssh's password / passphrase prompts. The connection logic itself lives
+//! the host manager, the saved connections in Settings and ssh's password / passphrase prompts. The connection logic itself lives
 //! in [`crate::hosts`] and the `remote` crate.
 
 mod add_host;
 mod connect;
 mod manage;
 mod prompt;
+mod saved_hosts;
 
 pub use add_host::{AddHost, AddHostEvent};
 pub use connect::{ConnectFlow, ConnectFlowEvent};
 pub use manage::{ManageHosts, ManageHostsEvent};
 pub use prompt::open_prompt;
+pub use saved_hosts::{
+    SavedHostAction, confirm_remove_host, open_change_host, open_rename_host, saved_hosts,
+};
 
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::*;

@@ -936,6 +936,8 @@ impl ChatView {
         let resumable = session.session_file().is_some();
         let text = if status.is_connected() {
             format!("pi stopped on {label}.")
+        } else if hosts.is_turned_off(host) {
+            format!("The connection to {label} is turned off.")
         } else {
             format!("The connection to {label} was lost.")
         };

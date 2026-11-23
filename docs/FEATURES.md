@@ -74,7 +74,8 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   light) runs pi on another machine. "Add SSH connection…" lists the hosts in your
   `~/.ssh/config` (following `Include`), or takes a custom host, user, port, key and jump host;
   connections are saved in `~/.pi/agent/pistachio/hosts.json` and "Manage SSH connections…"
-  renames them, changes the command that starts pi and removes them. pi runs **on the
+  renames them, changes the command that starts pi and removes them, as does each one's "⋮" in
+  Settings → SSH connections, where a switch connects it or turns it off. pi runs **on the
   remote** (its tools, `AGENTS.md`, skills and sessions all live there)
   through the system `ssh`, so your config, keys, ssh-agent and `known_hosts` apply.
   - One shared connection per host (ControlMaster) makes later commands ~30 ms. With

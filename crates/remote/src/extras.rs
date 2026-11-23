@@ -55,6 +55,7 @@ impl Ssh {
         askpass_env: &[(OsString, OsString)],
         trust_recorded_key: bool,
     ) -> Result<(), RemoteError> {
+        let _changing = self.start_connecting()?;
         if self.is_connected() {
             return Ok(());
         }
@@ -87,6 +88,7 @@ impl Ssh {
     /// `command`, the login shell runs it first and stays open afterwards.
     pub fn terminal_command(&self, cwd: &str, command: Option<&str>) -> (PathBuf, Vec<OsString>) {
         let mut args: Vec<OsString> = vec!["-t".into()];
+        args.extend(self.unshared_args());
         args.extend(self.base_args());
         args.push("--".into());
         let script = terminal_script();
@@ -122,7 +124,7 @@ impl Ssh {
             sh_quote(path),
             if backup { "1" } else { "0" }
         );
-        let output = process::run(self.script_command(&script), Some(contents), SHELL_TIMEOUT)?;
+        let output = process::run(self.script_command(&script)?, Some(contents), SHELL_TIMEOUT)?;
         script_result(output).map(drop)
     }
 
@@ -143,7 +145,7 @@ impl Ssh {
     /// Runs a POSIX script on the host with `stdin` (for secrets that must not appear on a
     /// command line) and returns its stdout.
     pub fn exec_with_input(&self, script: &str, stdin: Vec<u8>) -> Result<Vec<u8>, RemoteError> {
-        let output = process::run(self.script_command(script), Some(stdin), SHELL_TIMEOUT)?;
+        let output = process::run(self.script_command(script)?, Some(stdin), SHELL_TIMEOUT)?;
         script_result(output).map(|output| output.stdout)
     }
 
@@ -196,7 +198,7 @@ impl workspace::RemoteShell for Ssh {
         stdin: Option<Vec<u8>>,
         max_stdout: Option<usize>,
     ) -> std::io::Result<workspace::ShellOutput> {
-        let command = self.script_command(script);
+        let command = self.script_command(script).map_err(std::io::Error::other)?;
         let result = match max_stdout {
             Some(max) => process::run_capped(command, stdin, SHELL_TIMEOUT, max),
             None => process::run(command, stdin, SHELL_TIMEOUT).map(|output| (output, false)),

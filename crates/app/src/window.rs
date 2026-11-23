@@ -28,6 +28,7 @@ use crate::hosts::HostsEvent;
 use crate::panels::{RightPanel, RightPanelEvent, RightTab, TerminalPanel, TerminalPanelEvent};
 use crate::remote_ui::{
     AddHost, AddHostEvent, ConnectFlow, ConnectFlowEvent, ManageHosts, ManageHostsEvent,
+    SavedHostAction,
 };
 use crate::settings::AppSettings;
 use crate::settings::view::{SettingsEvent, SettingsView};
@@ -417,6 +418,12 @@ impl MainWindow {
                 "manage-hosts" => self.open_manage_hosts(window, cx),
                 "skills" => self.toggle_skills(window, cx),
                 "settings" => self.open_settings(&OpenSettings, window, cx),
+                "settings-ssh" => {
+                    self.open_settings(&OpenSettings, window, cx);
+                    if let Some(settings) = self.settings.as_ref().map(|s| s.0.clone()) {
+                        settings.update(cx, |settings, _| settings.start_on_ssh());
+                    }
+                }
                 "settings-speech" => {
                     self.open_settings(&OpenSettings, window, cx);
                     if let Some(settings) = self.settings.as_ref().map(|s| s.0.clone()) {
@@ -1328,6 +1335,14 @@ impl MainWindow {
         }
         let chat_id = self.chat.entity_id();
         self.models_reload.retain(|pending| pending.chat != chat_id);
+        // Starting pi would connect again to a host that was turned off; Reconnect starts it
+        // anew anyway.
+        let off = self
+            .host(cx)
+            .is_some_and(|host| crate::hosts::hosts(cx).read(cx).is_turned_off(&host));
+        if off {
+            return;
+        }
         let (cwd, file, host) = {
             let session = self.chat.read(cx).session().read(cx);
             (
@@ -1491,13 +1506,83 @@ impl MainWindow {
         match event {
             SettingsEvent::AddModel => drop(self.open_models_dialog(false, window, cx)),
             SettingsEvent::EditModels => drop(self.open_models_dialog(true, window, cx)),
-            SettingsEvent::AddHost => self.open_add_host(window, cx),
-            SettingsEvent::ManageHosts => self.open_manage_hosts(window, cx),
-            SettingsEvent::ConnectHost(host) => {
-                crate::hosts::hosts(cx).update(cx, |hosts, cx| hosts.connect(host, false, cx));
-            }
+            SettingsEvent::Host(action) => self.on_saved_host_action(action, window, cx),
             SettingsEvent::CheckForUpdates => self.check_for_updates(true, window, cx),
         }
+    }
+
+    fn on_saved_host_action(
+        &mut self,
+        action: &SavedHostAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::hosts::HostStatus;
+        match action {
+            SavedHostAction::Add => self.open_add_host(window, cx),
+            SavedHostAction::Connect(host) => {
+                let hosts = crate::hosts::hosts(cx);
+                let asks = matches!(
+                    hosts.read(cx).status(host),
+                    HostStatus::NeedsTrust { .. } | HostStatus::KeyChanged
+                );
+                if asks {
+                    // The dialog shows the host key to confirm, then closes itself.
+                    self.pending_remote = None;
+                    self.open_connect_dialog(host.clone(), true, window, cx);
+                } else {
+                    hosts.update(cx, |hosts, cx| hosts.connect(host, false, cx));
+                }
+            }
+            SavedHostAction::Disconnect(host) => self.disconnect_host(host, window, cx),
+            SavedHostAction::Rename(host) => {
+                crate::remote_ui::open_rename_host(host, window, cx);
+            }
+            SavedHostAction::Change(host) => {
+                crate::remote_ui::open_change_host(host, window, cx);
+            }
+            SavedHostAction::Remove(host) => {
+                crate::remote_ui::confirm_remove_host(host, window, cx);
+            }
+        }
+    }
+
+    /// Turns `host`'s connection off, asking first when pi is working there.
+    fn disconnect_host(&mut self, host: &HostId, window: &mut Window, cx: &mut Context<Self>) {
+        let working = std::iter::once(&self.chat)
+            .chain(self.background.iter().map(|(chat, _)| chat))
+            .filter(|chat| {
+                chat.read(cx).session().read(cx).host() == Some(host) && keeps_working(chat, cx)
+            })
+            .count();
+        let hosts = crate::hosts::hosts(cx);
+        if working == 0 {
+            hosts.update(cx, |hosts, cx| hosts.disconnect(host, cx));
+            return;
+        }
+        let label = hosts.read(cx).label(host);
+        let description = if working == 1 {
+            "pi is working in a session there and stops. You can resume the session later."
+                .to_owned()
+        } else {
+            format!(
+                "pi is working in {working} sessions there and stops. You can resume them later."
+            )
+        };
+        let host = host.clone();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let host = host.clone();
+            alert
+                .title(format!("Disconnect from {label}?"))
+                .description(description.clone())
+                .confirm()
+                .ok_text("Disconnect")
+                .ok_variant(component::button::ButtonVariant::Danger)
+                .on_ok(move |_, _, cx| {
+                    crate::hosts::hosts(cx).update(cx, |hosts, cx| hosts.disconnect(&host, cx));
+                    true
+                })
+        });
     }
 
     /// Looks for a newer release in the background. `manual` (the menu or Settings) also says
