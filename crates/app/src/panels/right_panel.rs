@@ -113,13 +113,25 @@ impl RightPanel {
 
     /// Shows `path` (absolute, or relative to the folder) in the Files tab's viewer.
     pub fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_file_at(path, None, window, cx);
+    }
+
+    /// [`Self::open_file`], scrolled to `line` (1-based).
+    pub fn open_file_at(
+        &mut self,
+        path: PathBuf,
+        line: Option<u32>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let path = if path.is_relative() {
             self.cwd.join(path)
         } else {
             path
         };
-        let viewer =
-            cx.new(|cx| FileViewer::new(self.cwd.clone(), path, self.location.clone(), window, cx));
+        let viewer = cx.new(|cx| {
+            FileViewer::new(self.cwd.clone(), path, self.location.clone(), window, cx).at_line(line)
+        });
         let subscription = cx.subscribe(
             &viewer,
             |this, _, event: &FileViewerEvent, cx| match event {

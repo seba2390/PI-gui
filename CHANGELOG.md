@@ -17,6 +17,11 @@ All notable changes to PI-gui are listed here. The format follows
   still load. ChatGPT/Codex, GitHub Copilot and Gemini CLI logins, Vertex and Bedrock are not
   relayed yet. The "Copy model settings" offer in the connect dialog and Manage SSH
   connections is gone.
+- File names in answers are links (Code sessions): a file of the session's folder that an
+  answer mentions (`fib.rs`, src/main.rs:12) opens in the Files tab, at its line, and so does
+  the file of a Read, Edited or Wrote row. Only the chat's display changes: what pi and the
+  model see, copying and the session file keep the answer as it was. A name is linked only
+  when it points at exactly one file.
 
 ### Changed
 

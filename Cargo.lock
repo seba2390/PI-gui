@@ -6495,6 +6495,7 @@ dependencies = [
  "gpui-kit",
  "gpui-pre-sum-tree",
  "log",
+ "markdown",
  "pi-config",
  "pi-rpc",
  "pi-sessions",

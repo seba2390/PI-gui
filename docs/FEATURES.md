@@ -147,6 +147,13 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   **Mention** in its header, the **+** on a row, or ⌥-click in the tree puts an `@path`
   mention in the message box instead. Binary files show a short notice, and files over
   512 KB open with their first 512 KB. Files on an SSH host are read over the connection.
+- **File links** (Code mode): a file of the session's folder that an answer names, in
+  backticks (`fib.rs`) or as a path in the text (src/main.rs:12), is a link that opens it in
+  the panel, at the line when one is given; the path of a Read, Edited or Wrote row does the
+  same. A bare name is linked only when exactly one file in the folder has it. Links are
+  added when an answer is finished (the folder is listed again when a turn ends, so files
+  the turn made are found) and only in what the chat draws: pi, the session file and
+  copying keep the answer as the model wrote it.
 - Syntax colors for code by file extension: chat code blocks, the agent's edits (its diffs
   in the chat), the files it reads, and the Changes panel's diffs. Diffs keep their red and
   green backgrounds with the code colors on top; the old and new text are rebuilt from each

@@ -750,6 +750,17 @@ fn render_group(group: &Group, cx: &RowContext<'_>) -> AnyElement {
 fn render_tool(key: BlockKey, tool: &ToolBlock, cx: &RowContext<'_>) -> AnyElement {
     let expanded = cx.chat.is_expanded(key, false);
     let header = tool::header(tool, cx.paths);
+    let file_link = cx
+        .session
+        .read(cx.app)
+        .has_folder_tools()
+        .then(|| tool::file_target(tool))
+        .flatten()
+        .filter(|_| tool.status != ToolStatus::Failed)
+        .map(|(path, line)| super::OpenFileLink {
+            path: path.to_owned(),
+            line,
+        });
     // A labelled bash call shows its command when expanded.
     let labelled = tool.name == "bash" && header.title != "Bash";
     let diff = tool::diff_lines(tool);
@@ -839,11 +850,25 @@ fn render_tool(key: BlockKey, tool: &ToolBlock, cx: &RowContext<'_>) -> AnyEleme
                         )
                         .child(
                             div()
+                                .id(element_id("tool-path", key))
                                 .min_w_0()
                                 .truncate()
                                 .font_family(cx.mono.clone())
                                 .text_color(cx.palette.subtle)
-                                .child(header.detail),
+                                .child(header.detail)
+                                // The file a read, edit or write was about opens in the Files
+                                // tab.
+                                .when_some(file_link, |this, link| {
+                                    let foreground = cx.foreground;
+                                    this.cursor_pointer()
+                                        .hover(move |style| {
+                                            style.text_color(foreground).underline()
+                                        })
+                                        .on_click(move |_, window, cx| {
+                                            cx.stop_propagation();
+                                            window.dispatch_action(Box::new(link.clone()), cx);
+                                        })
+                                }),
                         )
                         .when(labelled, |this| {
                             this.child(

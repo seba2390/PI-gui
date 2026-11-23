@@ -563,6 +563,23 @@ impl MainWindow {
 
     /// The visible conversation has a project folder (here or on an SSH host), so the
     /// terminal and the diff / files panels apply.
+    /// A file an answer or a tool row names: the Files tab shows it (at its line).
+    fn open_file_link(
+        &mut self,
+        link: &crate::chat::OpenFileLink,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.folder_tools(cx) {
+            return;
+        }
+        self.show_files(&ShowFiles, window, cx);
+        let path = PathBuf::from(&link.path);
+        let line = link.line;
+        self.right_panel
+            .update(cx, |panel, cx| panel.open_file_at(path, line, window, cx));
+    }
+
     fn folder_tools(&self, cx: &App) -> bool {
         !self.welcome && self.chat.read(cx).session().read(cx).has_folder_tools()
     }
@@ -2723,6 +2740,7 @@ impl Render for MainWindow {
             .on_action(cx.listener(Self::toggle_terminal))
             .on_action(cx.listener(Self::show_diff))
             .on_action(cx.listener(Self::show_files))
+            .on_action(cx.listener(Self::open_file_link))
             .on_action(cx.listener(Self::focus_composer))
             .on_action(cx.listener(Self::find_in_chat))
             .on_action(cx.listener(Self::show_chat_mode))

@@ -10,7 +10,7 @@
 use std::path::{Path, PathBuf};
 
 use gpui_kit::component::button::Button;
-use gpui_kit::component::input::{Editor, EditorState};
+use gpui_kit::component::input::{self, Editor, EditorState};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -47,6 +47,8 @@ pub struct FileViewer {
     /// The file changed on disk; it is read again when next rendered (so a viewer in a
     /// hidden tab does no work).
     stale: bool,
+    /// The line (1-based) to show once the file is read.
+    line: Option<u32>,
     _load: Task<()>,
 }
 
@@ -80,10 +82,17 @@ impl FileViewer {
             phase: Phase::Loading,
             editor,
             stale: false,
+            line: None,
             _load: Task::ready(()),
         };
         this.reload(window, cx);
         this
+    }
+
+    /// Shows `line` (1-based) once the file is read: the cursor goes there.
+    pub fn at_line(mut self, line: Option<u32>) -> Self {
+        self.line = line.filter(|line| *line > 0);
+        self
     }
 
     pub fn path(&self) -> &Path {
@@ -111,8 +120,14 @@ impl FileViewer {
             let _ = this.update_in(cx, |this, window, cx| {
                 this.phase = match result {
                     Ok((size, FileContent::Text { text, truncated })) => {
-                        this.editor
-                            .update(cx, |editor, cx| editor.set_value(text, window, cx));
+                        let line = this.line.take();
+                        this.editor.update(cx, |editor, cx| {
+                            editor.set_value(text, window, cx);
+                            if let Some(line) = line {
+                                let position = input::Position::new(line - 1, 0);
+                                editor.set_cursor_position(position, window, cx);
+                            }
+                        });
                         Phase::Text { truncated, size }
                     }
                     Ok((size, FileContent::Binary)) => Phase::Binary { size },

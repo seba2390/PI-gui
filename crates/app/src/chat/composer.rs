@@ -605,6 +605,19 @@ impl Composer {
         cx.notify();
     }
 
+    /// The attach picker, whose index lists the folder's files.
+    pub(crate) fn file_picker(&self) -> Entity<ListState<FilePicker>> {
+        self.picker.clone()
+    }
+
+    /// Lists the folder's files again (e.g. after a turn that may have made some).
+    pub fn refresh_file_index(&mut self, cx: &mut Context<Self>) {
+        let session = self.session.read(cx);
+        if session.has_folder_tools() && !session.is_idle() {
+            file_picker::refresh_index(&self.picker, cx);
+        }
+    }
+
     pub fn open_attach_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.set_picker_open(true, window, cx);
     }
