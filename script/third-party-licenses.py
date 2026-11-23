@@ -36,8 +36,8 @@ def main() -> None:
     groups: dict[str, list[str]] = {}
     for pkg_id in sorted(seen, key=lambda i: (packages[i]["name"], packages[i]["version"])):
         pkg = packages[pkg_id]
-        if pkg["source"] is None:
-            continue  # this project's own crates
+        if pkg_id in meta["workspace_members"]:
+            continue  # this project's own crates (vendored third-party crates are listed)
         directory = os.path.dirname(pkg["manifest_path"])
         files = sorted(
             f for f in os.listdir(directory)
