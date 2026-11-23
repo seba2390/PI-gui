@@ -19,6 +19,7 @@ All notable changes to PI-gui are listed here. The format follows
 
 ### Fixed
 
+- The "Working…" label no longer shifts sideways while its shimmer passes over it.
 - Hover highlights, clicks and scrolling show up sooner on macOS: about 35 ms from moving the
   mouse to the change on screen, down from about 63 ms on a 75 Hz display. GPUI waited for the
   next display refresh before drawing pointer input and then queued the frame three refreshes

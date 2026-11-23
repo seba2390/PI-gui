@@ -292,31 +292,118 @@ fn indicator_at(style: IndicatorStyle, seconds: f32, size: Pixels, color: Hsla) 
 }
 
 /// The "Working…" label: plain `color`, or with the style's shimmer passing over it.
-pub fn working_label(style: IndicatorStyle, text: SharedString, color: Hsla) -> StyledText {
+pub fn working_label(style: IndicatorStyle, text: SharedString, color: Hsla) -> ShimmerLabel {
     label_at(style, clock(), text, color)
 }
 
-fn label_at(style: IndicatorStyle, seconds: f32, text: SharedString, color: Hsla) -> StyledText {
-    let Some(band) = frame(style, seconds).shimmer else {
-        let all = 0..text.len();
-        return StyledText::new(text).with_highlights([(
-            all,
-            HighlightStyle {
-                color: Some(color),
-                ..Default::default()
-            },
-        )]);
+fn label_at(style: IndicatorStyle, seconds: f32, text: SharedString, color: Hsla) -> ShimmerLabel {
+    let colors = match frame(style, seconds).shimmer {
+        Some(band) => shimmer_colors(&text, band, color),
+        None => vec![(0..text.len(), color)],
     };
-    let highlights = shimmer_colors(&text, band, color);
-    StyledText::new(text).with_highlights(highlights)
+    ShimmerLabel { text, colors }
+}
+
+/// One line of text whose colours change without moving it: shaped as a single run and
+/// coloured only when painted. (A `StyledText` shapes every colour run apart, so each colour
+/// change the shimmer made dropped the kerning there and the letters after it shifted.)
+pub struct ShimmerLabel {
+    text: SharedString,
+    /// Colours over byte ranges covering the whole text, in order.
+    colors: Vec<(std::ops::Range<usize>, Hsla)>,
+}
+
+impl ShimmerLabel {
+    fn layout(&self, window: &Window) -> (std::sync::Arc<LineLayout>, Pixels) {
+        let style = window.text_style();
+        let rem = window.rem_size();
+        let run = style.to_run(self.text.len());
+        let line = window.text_system().layout_line(
+            &self.text,
+            style.font_size.to_pixels(rem),
+            &[run],
+            None,
+        );
+        (line, style.line_height_in_pixels(rem))
+    }
+}
+
+impl Element for ShimmerLabel {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, ()) {
+        let (line, line_height) = self.layout(window);
+        let style = Style {
+            size: size(line.width.into(), line_height.into()),
+            flex_shrink: 0.,
+            ..Style::default()
+        };
+        (window.request_layout(style, [], cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        _: Bounds<Pixels>,
+        (): &mut (),
+        _: &mut Window,
+        _: &mut App,
+    ) {
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        (): &mut (),
+        (): &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let (line, line_height) = self.layout(window);
+        let runs: Vec<DecorationRun> = self
+            .colors
+            .iter()
+            .map(|(range, color)| DecorationRun {
+                #[allow(clippy::cast_possible_truncation)]
+                len: range.len() as u32,
+                color: *color,
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            })
+            .collect();
+        let _ = line.paint(
+            bounds.origin,
+            line_height,
+            TextAlign::Left,
+            None,
+            &runs,
+            window,
+            cx,
+        );
+    }
 }
 
 /// Per-character colours for a shimmer band at `band` (see [`Frame::shimmer`]) over `text`.
-fn shimmer_colors(
-    text: &str,
-    band: f32,
-    color: Hsla,
-) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
+fn shimmer_colors(text: &str, band: f32, color: Hsla) -> Vec<(std::ops::Range<usize>, Hsla)> {
     let bright = Hsla {
         l: (color.l + 0.38).min(0.9),
         s: color.s * 0.8,
@@ -339,13 +426,7 @@ fn shimmer_colors(
                 l: mix(color.l, bright.l),
                 a: color.a,
             };
-            (
-                start..start + c.len_utf8(),
-                HighlightStyle {
-                    color: Some(tint),
-                    ..Default::default()
-                },
-            )
+            (start..start + c.len_utf8(), tint)
         })
         .collect()
 }
@@ -423,7 +504,7 @@ mod tests {
         assert_eq!(colors.len(), "Working…".chars().count());
         let lightness: Vec<f32> = colors
             .iter()
-            .map(|(_, style)| style.color.map_or(0., |c| c.l))
+            .map(|(_, color)| color.l)
             .collect();
         let brightest = lightness
             .iter()
@@ -433,7 +514,7 @@ mod tests {
         assert!((3..=5).contains(&brightest), "middle is lit: {lightness:?}");
         // Before the sweep starts nothing is lit.
         let idle = shimmer_colors("Working…", 0., green);
-        assert!(idle.iter().all(|(_, s)| s.color == Some(green)));
+        assert!(idle.iter().all(|(_, color)| *color == green));
         // Byte ranges follow multi-byte characters (the ellipsis).
         assert_eq!(colors.last().map(|(r, _)| r.len()), Some('…'.len_utf8()));
     }
