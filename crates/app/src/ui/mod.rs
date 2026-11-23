@@ -4,6 +4,7 @@ mod button;
 mod copy_button;
 mod drag;
 mod icons;
+pub(crate) mod list;
 mod message_scroller;
 mod pi_field;
 pub mod spinner;

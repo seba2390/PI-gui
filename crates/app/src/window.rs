@@ -77,9 +77,23 @@ pub fn open_main_window(cx: &mut App) {
         app_id: Some("pistachio".into()),
         ..TitleBar::window_options()
     };
+    // GPUI caps a window that is not focused at 30 fps, so hovering it while another app
+    // is in front (a common case) answered up to 33 ms late. Frames are still drawn only
+    // when something changes; 60 fps keeps hover snappy. A benchmark run, which macOS may
+    // keep in the background, measures what an active window does.
+    let options = WindowOptions {
+        inactive_frame_interval: (!crate::perf::bench::requested())
+            .then_some(std::time::Duration::from_micros(16_667)),
+        ..options
+    };
     let opened = open_window(options, cx, |window, cx| {
         crate::theme::sync_with_window(window, cx);
         keep_alive_on_close(window, cx);
+        crate::perf::frame("startup: first frame", window);
+        window.on_next_frame(|_, cx| {
+            cx.spawn(async |cx| cx.update(crate::actions::install_menus))
+                .detach();
+        });
         cx.new(|cx| MainWindow::new(window, cx))
     });
     if let Err(error) = opened {
@@ -171,6 +185,8 @@ pub struct MainWindow {
     chat_subscription: Subscription,
     /// Demo mode: the cursor overlay and the storyboard being played.
     demo: Option<(Entity<crate::demo::DemoCursor>, Task<()>)>,
+    /// `PISTACHIO_BENCH`: the navigation benchmark being run.
+    bench: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -251,12 +267,18 @@ impl MainWindow {
                 },
             ),
         ];
+        // The window starts on the welcome screen, which has no message box: focus the window
+        // itself, so its actions (Settings…, Check for Updates…, ⌘N…) are available in the
+        // menu bar and from the keyboard right away. Whenever focus is lost later (a focused
+        // control went away), it comes back here for the same reason.
         let focus_handle = cx.focus_handle();
-        let chat_for_focus = chat.clone();
+        let mut subscriptions = subscriptions;
+        subscriptions.push(cx.on_focus_lost(window, |this, window, cx| {
+            this.focus_handle.focus(window, cx);
+        }));
         let open_at_startup = cx.global::<AppConfig>().open_at_startup.clone();
-        window.defer(cx, move |window, cx| {
-            focus_chat(&chat_for_focus, window, cx);
-        });
+        let start_focus = focus_handle.clone();
+        window.defer(cx, move |window, cx| start_focus.focus(window, cx));
         let this = cx.weak_entity();
         let (reopen, check_updates) = {
             let settings = cx.default_global::<AppSettings>();
@@ -330,8 +352,13 @@ impl MainWindow {
             focus_handle,
             chat_subscription,
             demo,
+            bench: None,
             _subscriptions: subscriptions,
         }
+    }
+
+    pub(crate) fn sidebar_entity(&self) -> &Entity<Sidebar> {
+        &self.sidebar
     }
 
     /// The conversation in the chat column (demo mode drives it).
@@ -519,6 +546,7 @@ impl MainWindow {
                     let composer = self.chat.read(cx).composer().clone();
                     composer.update(cx, |composer, cx| composer.open_attach_picker(window, cx));
                 }
+                "bench" => self.bench = Some(crate::perf::bench::start(window, cx)),
                 other => log::warn!("PISTACHIO_OPEN: unknown panel {other:?}"),
             }
         }
@@ -535,6 +563,23 @@ impl MainWindow {
 
     /// The visible conversation has a project folder (here or on an SSH host), so the
     /// terminal and the diff / files panels apply.
+    /// A file an answer or a tool row names: the Files tab shows it (at its line).
+    fn open_file_link(
+        &mut self,
+        link: &crate::chat::OpenFileLink,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.folder_tools(cx) {
+            return;
+        }
+        self.show_files(&ShowFiles, window, cx);
+        let path = PathBuf::from(&link.path);
+        let line = link.line;
+        self.right_panel
+            .update(cx, |panel, cx| panel.open_file_at(path, line, window, cx));
+    }
+
     fn folder_tools(&self, cx: &App) -> bool {
         !self.welcome && self.chat.read(cx).session().read(cx).has_folder_tools()
     }
@@ -1198,8 +1243,9 @@ impl MainWindow {
         });
     }
 
-    /// "Add model" / "Edit models.json" for the pi the visible session runs (here or on its
-    /// SSH host). After saving, pi restarts on the same session to load the file.
+    /// "Add model" / "Edit models.json" for the pi the visible session runs (here, or on its
+    /// SSH host when pi there uses the host's own models). After saving, pi restarts on the
+    /// same session to load the file.
     fn open_models_dialog(
         &mut self,
         edit_json: bool,
@@ -1207,7 +1253,10 @@ impl MainWindow {
         cx: &mut Context<Self>,
     ) -> Entity<crate::chat::models_dialog::ModelsDialog> {
         use crate::chat::models_dialog::{ModelsDialog, ModelsDialogEvent, ModelsTab};
-        let host = self.host(cx);
+        // pi on a host that uses this computer's models gets them from here: edit these.
+        let host = self
+            .host(cx)
+            .filter(|host| !crate::hosts::hosts(cx).read(cx).uses_local_models(host));
         let title = match &host {
             Some(host) => format!("Models on {}", crate::hosts::hosts(cx).read(cx).label(host)),
             None => "Models".to_owned(),
@@ -1600,7 +1649,7 @@ impl MainWindow {
         self.show_chat(chat, window, cx);
     }
 
-    fn confirm_delete(
+    pub(crate) fn confirm_delete(
         &mut self,
         host: Option<HostId>,
         summary: SessionSummary,
@@ -1740,19 +1789,27 @@ impl MainWindow {
                 .detach();
             }
             None => {
-                if let Err(error) = trash::delete_all(&paths) {
-                    log::warn!("could not trash sessions of {}: {error}", folder.display());
-                    window.push_notification(
-                        format!("Some sessions could not be moved to the trash: {error}"),
-                        cx,
-                    );
-                }
-                self.sidebar.update(cx, |sidebar, cx| sidebar.refresh(cx));
+                let task = self
+                    .sidebar
+                    .update(cx, |sidebar, cx| sidebar.trash_sessions(paths, cx));
+                let folder = folder.to_path_buf();
+                cx.spawn_in(window, async move |_, cx| {
+                    if let Err(error) = task.await {
+                        log::warn!("could not trash sessions of {}: {error}", folder.display());
+                        let _ = cx.update(|window, cx| {
+                            window.push_notification(
+                                format!("Some sessions could not be moved to the trash: {error}"),
+                                cx,
+                            );
+                        });
+                    }
+                })
+                .detach();
             }
         }
     }
 
-    fn delete_session(
+    pub(crate) fn delete_session(
         &mut self,
         host: Option<HostId>,
         summary: &SessionSummary,
@@ -1791,14 +1848,22 @@ impl MainWindow {
             .detach();
             return;
         }
-        if let Err(error) = trash::delete(&summary.path) {
-            log::warn!("could not trash {}: {error}", summary.path.display());
-            window.push_notification(
-                format!("Could not move the session to the trash: {error}"),
-                cx,
-            );
-        }
-        self.sidebar.update(cx, |sidebar, cx| sidebar.refresh(cx));
+        let path = summary.path.clone();
+        let task = self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.trash_sessions(vec![path.clone()], cx)
+        });
+        cx.spawn_in(window, async move |_, cx| {
+            if let Err(error) = task.await {
+                log::warn!("could not trash {}: {error}", path.display());
+                let _ = cx.update(|window, cx| {
+                    window.push_notification(
+                        format!("Could not move the session to the trash: {error}"),
+                        cx,
+                    );
+                });
+            }
+        })
+        .detach();
     }
 
     fn prompt_rename(
@@ -2605,6 +2670,7 @@ impl Focusable for MainWindow {
 
 impl Render for MainWindow {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _timer = crate::perf::render("window");
         let (background, foreground, font_family) = (
             cx.theme().background,
             cx.theme().foreground,
@@ -2674,6 +2740,7 @@ impl Render for MainWindow {
             .on_action(cx.listener(Self::toggle_terminal))
             .on_action(cx.listener(Self::show_diff))
             .on_action(cx.listener(Self::show_files))
+            .on_action(cx.listener(Self::open_file_link))
             .on_action(cx.listener(Self::focus_composer))
             .on_action(cx.listener(Self::find_in_chat))
             .on_action(cx.listener(Self::show_chat_mode))

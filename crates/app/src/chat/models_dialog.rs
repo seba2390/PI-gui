@@ -1,9 +1,10 @@
 //! "Add model": adds a custom model to pi's `models.json`, with a form (provider presets,
 //! fetching the server's model list) or by editing the file itself.
 //!
-//! The file is the one the session's pi reads: in pi's agent folder on this computer, or on
-//! the SSH host for a remote session. pi only reads it when it starts, so after saving the
-//! window restarts pi on the same session and selects the new model.
+//! The file is the one the session's pi reads: in pi's agent folder on this computer (also for
+//! a remote session, whose pi uses this computer's models; see [`crate::relay`]), or on the
+//! SSH host when pi there uses the host's own models. pi only reads it when it starts, so
+//! after saving the window restarts pi on the same session and selects the new model.
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::checkbox::Checkbox;

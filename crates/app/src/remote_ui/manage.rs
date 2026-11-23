@@ -1,14 +1,11 @@
-//! "Manage SSH connections": rename saved hosts, change the command that starts pi, copy model
-//! settings to a host, and remove hosts.
+//! "Manage SSH connections": rename saved hosts, change the command that starts pi, and remove
+//! hosts.
 
 use std::collections::HashMap;
 
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
-use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputState};
-use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, IconName, Sizable as _, h_flex, v_flex,
-};
+use gpui_kit::component::{ActiveTheme as _, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use remote::HostId;
@@ -25,7 +22,6 @@ pub enum ManageHostsEvent {
 struct HostForm {
     name: Entity<InputState>,
     pi_command: Entity<InputState>,
-    include_credentials: bool,
     confirm_remove: bool,
     note: Option<(bool, SharedString)>,
 }
@@ -34,7 +30,6 @@ pub struct ManageHosts {
     hosts: Entity<Hosts>,
     forms: HashMap<HostId, HostForm>,
     _subscription: Subscription,
-    _copy: Task<()>,
 }
 
 impl EventEmitter<ManageHostsEvent> for ManageHosts {}
@@ -52,7 +47,6 @@ impl ManageHosts {
             hosts,
             forms: HashMap::new(),
             _subscription: subscription,
-            _copy: Task::ready(()),
         };
         this.sync_forms(window, cx);
         this
@@ -83,7 +77,6 @@ impl ManageHosts {
                         .placeholder("pi (installed automatically when missing)")
                         .default_value(pi_command)
                 }),
-                include_credentials: false,
                 confirm_remove: false,
                 note: None,
             });
@@ -110,39 +103,11 @@ impl ManageHosts {
         cx.notify();
     }
 
-    fn copy_models(&mut self, id: &HostId, cx: &mut Context<Self>) {
-        let include = self
-            .forms
-            .get(id)
-            .is_some_and(|form| form.include_credentials);
-        if let Some(form) = self.forms.get_mut(id) {
-            form.note = Some((true, "Copying…".into()));
-        }
-        let task = self
-            .hosts
-            .update(cx, |hosts, cx| hosts.copy_model_settings(id, include, cx));
-        let id = id.clone();
-        self._copy = cx.spawn(async move |this, cx| {
-            let result = task.await;
-            let _ = this.update(cx, |this, cx| {
-                if let Some(form) = this.forms.get_mut(&id) {
-                    form.note = Some(match result {
-                        Ok(()) => (true, "Copied your model settings.".into()),
-                        Err(error) => (false, error.into()),
-                    });
-                }
-                cx.notify();
-            });
-        });
-        cx.notify();
-    }
-
     fn render_host(&self, id: &HostId, cx: &mut Context<Self>) -> Option<AnyElement> {
         let form = self.forms.get(id)?;
         let hosts = self.hosts.read(cx);
         let host = hosts.get(id)?;
         let status = hosts.status(id);
-        let connected = status.is_connected();
         let theme = cx.theme();
         let (muted, border) = (theme.muted_foreground, theme.border);
         let colors = crate::theme::palette(cx);
@@ -155,8 +120,6 @@ impl ManageHosts {
                 .child(Input::new(input).small())
         };
         let (save_id, remove_id, confirm_id) = (id.clone(), id.clone(), id.clone());
-        let (copy_id, check_id) = (id.clone(), id.clone());
-        let include = form.include_credentials;
         Some(
             v_flex()
                 .gap_2()
@@ -197,38 +160,6 @@ impl ManageHosts {
                 .child(
                     h_flex()
                         .gap_2()
-                        .child(
-                            Checkbox::new(ElementId::Name(format!("creds:{key}").into()))
-                                .small()
-                                .checked(include)
-                                .label("Include credentials (auth.json)")
-                                .on_click(cx.listener(move |this, checked: &bool, _, cx| {
-                                    if let Some(form) = this.forms.get_mut(&check_id) {
-                                        form.include_credentials = *checked;
-                                    }
-                                    cx.notify();
-                                })),
-                        )
-                        .child(div().flex_1())
-                        .child(
-                            Button::new(ElementId::Name(format!("copy-models:{key}").into()))
-                                .quiet(cx)
-                                .small()
-                                .label("Copy model settings")
-                                .tooltip(if connected {
-                                    "Copy this computer's models.json to the host (an existing one is kept as a backup)"
-                                } else {
-                                    "Connect to the host first"
-                                })
-                                .disabled(!connected)
-                                .on_click(
-                                    cx.listener(move |this, _, _, cx| this.copy_models(&copy_id, cx)),
-                                ),
-                        ),
-                )
-                .child(
-                    h_flex()
-                        .gap_2()
                         .when_some(form.note.clone(), |this, (ok, note)| {
                             this.child(
                                 div()
@@ -244,13 +175,17 @@ impl ManageHosts {
                                     "Remove this connection? Sessions on the host are kept.",
                                 ))
                                 .child(
-                                    Button::new(ElementId::Name(format!("remove-yes:{key}").into()))
-                                        .small()
-                                        .with_variant(ButtonVariant::Danger)
-                                        .label("Remove")
-                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                    Button::new(ElementId::Name(
+                                        format!("remove-yes:{key}").into(),
+                                    ))
+                                    .small()
+                                    .with_variant(ButtonVariant::Danger)
+                                    .label("Remove")
+                                    .on_click(cx.listener(
+                                        move |this, _, _, cx| {
                                             this.remove(&remove_id, cx);
-                                        })),
+                                        },
+                                    )),
                                 )
                             } else {
                                 this.child(
@@ -273,7 +208,9 @@ impl ManageHosts {
                                 .small()
                                 .primary()
                                 .label("Save")
-                                .on_click(cx.listener(move |this, _, _, cx| this.save(&save_id, cx))),
+                                .on_click(
+                                    cx.listener(move |this, _, _, cx| this.save(&save_id, cx)),
+                                ),
                         ),
                 )
                 .into_any_element(),

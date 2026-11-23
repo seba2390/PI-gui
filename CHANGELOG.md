@@ -6,6 +6,58 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-11-23
+
+### Added
+
+- SSH sessions use this computer's models on any host, with no setup: the same model list,
+  default model and thinking level. Model requests come back over the SSH connection and go
+  out from this computer, so models on `localhost`, the LAN or a VPN work from any host, and
+  keys and logins never leave this computer (each host gets a token that works only through
+  its own connection). pi on the host uses a settings folder Pistachio manages,
+  `~/.pistachio/agent`; the host's own `~/.pi` is left alone and its extensions and skills
+  still load. ChatGPT/Codex, GitHub Copilot and Gemini CLI logins, Vertex and Bedrock are not
+  relayed yet. The "Copy model settings" offer in the connect dialog and Manage SSH
+  connections is gone.
+- File names in answers are links (Code sessions): a file of the session's folder that an
+  answer mentions (`fib.rs`, src/main.rs:12) opens in the Files tab, at its line, and so does
+  the file of a Read, Edited or Wrote row. Only the chat's display changes: what pi and the
+  model see, copying and the session file keep the answer as it was. A name is linked only
+  when it points at exactly one file.
+
+### Changed
+
+- The default text size is larger (the old Large); the picker gains a Larger step and your
+  current size is kept.
+- Faster: the window appears sooner (about 235 ms instead of 450 ms in the benchmark; it no
+  longer waits for the login shell's environment), and long conversations no longer lay out
+  every message in one frame when opened or when the chat column changes width, so opening a
+  conversation and toggling the sidebar or side panel take about half as long.
+- A window that is not focused redraws at up to 60 fps instead of 30, so hovering it reacts
+  sooner.
+
+### Fixed
+
+- The "Working…" label no longer shifts sideways while its shimmer passes over it.
+- Hover highlights, clicks and scrolling show up sooner on macOS: about 35 ms from moving the
+  mouse to the change on screen, down from about 63 ms on a 75 Hz display. GPUI waited for the
+  next display refresh before drawing pointer input and then queued the frame three refreshes
+  ahead; Pistachio now carries a patched copy of GPUI's macOS backend (see vendor/README.md).
+- Deleting a session no longer freezes the window while Finder moves the file to the Trash:
+  the row goes at once.
+- Settings… and Check for Updates… in the app menu (and shortcuts like ⌘N) work right after
+  launch instead of staying greyed out until something in the window was clicked.
+- A turn's copy and branch buttons show while the pointer is anywhere in its answer, not only
+  over the "Worked for" row.
+- Hovering the open session in the sidebar no longer shows its rename and trash buttons on a
+  darker patch: they take the hovered row's colour.
+- Dictation keeps everything you said: the greyed-out live text no longer disappears when a
+  re-decode comes back empty, and a phrase whose last decode is empty keeps the text that was
+  shown instead of dropping it. Soft speech (a laptop's microphone at arm's length) is no
+  longer cut into fragments, lost between phrases or ended by the silence timeout while you
+  talk: pauses are found by a voice detector built into the app (Silero VAD) instead of by
+  loudness.
+
 ## [0.4.3] - 2026-11-23
 
 ### Added
@@ -237,7 +289,8 @@ chats, skills and model management. Changes since the last private build:
 - A corrupt `hosts.json` is kept as a backup.
 - A remembered terminal height can no longer squeeze out the chat.
 
-[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.4.4...HEAD
+[0.4.4]: https://github.com/seba2390/pistachio/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/seba2390/pistachio/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/seba2390/pistachio/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/seba2390/pistachio/compare/v0.4.0...v0.4.1

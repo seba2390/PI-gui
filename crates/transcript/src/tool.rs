@@ -48,6 +48,24 @@ fn path_arg(args: &Value) -> Option<&str> {
     arg(args, "file_path").or_else(|| arg(args, "path"))
 }
 
+/// The file a finished `read`, `edit` or `write` call is about (as the model gave it), and
+/// the line a `read` started at.
+pub fn file_target(tool: &ToolBlock) -> Option<(&str, Option<u32>)> {
+    if !matches!(tool.name.as_str(), "read" | "edit" | "write") || tool.args.is_null() {
+        return None;
+    }
+    let path = path_arg(&tool.args).filter(|path| !path.is_empty())?;
+    let line = if tool.name == "read" {
+        tool.args
+            .get("offset")
+            .and_then(Value::as_u64)
+            .and_then(|line| u32::try_from(line).ok())
+    } else {
+        None
+    };
+    Some((path, line))
+}
+
 pub fn header(tool: &ToolBlock, paths: PathContext<'_>) -> ToolHeader {
     let args = if tool.args.is_null() {
         // While arguments stream, try the partial JSON; it is often parseable.

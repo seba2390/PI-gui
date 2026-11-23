@@ -2,16 +2,78 @@
 
 use std::ffi::OsString;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use gpui_kit::Global;
+
+/// Extra environment for child processes: the login shell's (see [`crate::shell_env`]),
+/// probed in the background at startup and waited for only by the first child process
+/// that starts before the probe has finished.
+#[derive(Clone, Default)]
+pub struct ChildEnv(Arc<ChildEnvInner>);
+
+type Vars = Vec<(OsString, OsString)>;
+
+#[derive(Default)]
+struct ChildEnvInner {
+    probe: Mutex<Option<std::thread::JoinHandle<Vars>>>,
+    vars: OnceLock<Vars>,
+}
+
+impl ChildEnv {
+    /// Starts probing the login shell on a background thread.
+    pub fn probe() -> Self {
+        let probe = std::thread::Builder::new()
+            .name("login-shell-env".into())
+            .spawn(crate::shell_env::login_shell_env)
+            .map_err(|error| log::warn!("could not probe the login shell: {error}"))
+            .ok();
+        Self(Arc::new(ChildEnvInner {
+            probe: Mutex::new(probe),
+            vars: OnceLock::new(),
+        }))
+    }
+
+    /// The variables, waiting for the probe if it is still running.
+    pub fn vars(&self) -> &[(OsString, OsString)] {
+        self.0.vars.get_or_init(|| {
+            let probe = self
+                .0
+                .probe
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take();
+            probe
+                .and_then(|probe| probe.join().ok())
+                .unwrap_or_default()
+        })
+    }
+}
+
+impl From<Vars> for ChildEnv {
+    fn from(vars: Vars) -> Self {
+        Self(Arc::new(ChildEnvInner {
+            probe: Mutex::new(None),
+            vars: OnceLock::from(vars),
+        }))
+    }
+}
+
+impl std::fmt::Debug for ChildEnv {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0.vars.get() {
+            Some(vars) => f.debug_tuple("ChildEnv").field(vars).finish(),
+            None => f.write_str("ChildEnv(probing)"),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     /// The `pi` executable. Override with `PISTACHIO_PI_BIN`.
     pub pi_program: PathBuf,
     /// Extra environment for child processes (login-shell `PATH`, …).
-    pub child_env: Vec<(OsString, OsString)>,
+    pub child_env: ChildEnv,
     /// pi's session directory, if it could be determined.
     pub sessions_dir: Option<PathBuf>,
     pub home: Option<PathBuf>,
@@ -51,7 +113,7 @@ impl AppConfig {
     pub fn for_tests(pi_program: PathBuf) -> Self {
         Self {
             pi_program,
-            child_env: Vec::new(),
+            child_env: ChildEnv::default(),
             sessions_dir: None,
             home: None,
             chat_dir: std::env::temp_dir().join("pistachio-test-chat"),
@@ -62,8 +124,8 @@ impl AppConfig {
         }
     }
 
-    /// `child_env` is the result of [`crate::shell_env::login_shell_env`].
-    pub fn detect(child_env: Vec<(OsString, OsString)>) -> Self {
+    /// `child_env` comes from [`ChildEnv::probe`].
+    pub fn detect(child_env: ChildEnv) -> Self {
         let home = dirs_home();
         Self {
             pi_program: std::env::var_os("PISTACHIO_PI_BIN")
@@ -88,6 +150,16 @@ impl AppConfig {
                 .unwrap_or_default(),
             demo: demo_storyboard(),
         }
+        .with_bench()
+    }
+
+    /// The navigation benchmark needs marked controls and no reopened session.
+    fn with_bench(mut self) -> Self {
+        if crate::perf::bench::requested() {
+            crate::demo::enable();
+            self.open_at_startup.push("bench".to_owned());
+        }
+        self
     }
 
     /// Whether the app runs scripted (`PISTACHIO_OPEN` or a demo): no session reopened at

@@ -605,6 +605,19 @@ impl Composer {
         cx.notify();
     }
 
+    /// The attach picker, whose index lists the folder's files.
+    pub(crate) fn file_picker(&self) -> Entity<ListState<FilePicker>> {
+        self.picker.clone()
+    }
+
+    /// Lists the folder's files again (e.g. after a turn that may have made some).
+    pub fn refresh_file_index(&mut self, cx: &mut Context<Self>) {
+        let session = self.session.read(cx);
+        if session.has_folder_tools() && !session.is_idle() {
+            file_picker::refresh_index(&self.picker, cx);
+        }
+    }
+
     pub fn open_attach_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.set_picker_open(true, window, cx);
     }
@@ -1014,6 +1027,16 @@ impl Composer {
             || "Model".to_owned(),
             |model| model.display_name().to_owned(),
         );
+        // On a host whose pi could not use this computer's models, say why.
+        let empty = session
+            .host()
+            .and_then(|host| {
+                let error = crate::hosts::hosts(cx).read(cx).link_error(host)?;
+                Some(SharedString::from(format!(
+                    "No models on the host. This computer's models can't be used there: {error}"
+                )))
+            })
+            .unwrap_or_else(|| "No models available yet".into());
         let handle = self.session.clone();
         let composer = cx.weak_entity();
         let picker = Button::new(menu_id("model-picker", &(&current, models.len())))
@@ -1023,7 +1046,7 @@ impl Composer {
             .dropdown_caret(true)
             .dropdown_menu_with_anchor(Anchor::BottomRight, move |mut menu, _, _| {
                 if models.is_empty() {
-                    menu = menu.label("No models available yet");
+                    menu = menu.label(empty.clone());
                 }
                 for model in &models {
                     let (handle, model) = (handle.clone(), model.clone());
@@ -1549,6 +1572,7 @@ impl Composer {
 
 impl Render for Composer {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _timer = crate::perf::render("composer");
         let colors = palette(cx);
         let queue = self.render_queue(cx);
         let suggestions = self.render_suggestions(cx);

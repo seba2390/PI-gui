@@ -80,6 +80,12 @@ pub fn session_row(
         .when(active, |this| this.bg(active_bg))
         .hover(|style| style.bg(hover_bg))
         .on_click(cx.listener(move |_, _, _, cx| cx.emit(open.clone())))
+        .when(host.is_none(), |this| {
+            this.children(crate::demo::probe(format!(
+                "session:{}",
+                session.path.display()
+            )))
+        })
         // A working agent: its indicator, before the name.
         .when(activity == Some(Activity::Working), |this| {
             this.child(crate::ui::spinner::working_indicator(
@@ -161,7 +167,9 @@ pub fn session_row(
                 .right_1()
                 .items_center()
                 .pl_2()
-                .bg(if active { active_bg } else { hover_bg })
+                // Only shown while the row is hovered, and a hovered row is `hover_bg` even
+                // when it is the open one.
+                .bg(hover_bg)
                 .invisible()
                 .group_hover("session-row", |style| style.visible())
                 .child(

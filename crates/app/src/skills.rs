@@ -1003,6 +1003,7 @@ impl SkillsView {
 
 impl Render for SkillsView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _timer = crate::perf::render("skills");
         let detail = match self.selection.clone() {
             Selection::None => self.render_intro(cx),
             Selection::New => self.render_new(cx),
@@ -1219,7 +1220,7 @@ mod tests {
                 .success()
         );
         let mut config = AppConfig::for_tests("pi".into());
-        config.child_env = vec![("PI_CODING_AGENT_DIR".into(), agent.path().into())];
+        config.child_env = vec![("PI_CODING_AGENT_DIR".into(), agent.path().into())].into();
         cx.update(|cx| cx.set_global(config));
         let place = PiPlace::Local {
             agent_dir: agent.path().into(),

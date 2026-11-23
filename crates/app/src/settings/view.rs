@@ -165,7 +165,7 @@ impl SettingsView {
                 .spawn(async move {
                     std::process::Command::new(&program)
                         .arg("--version")
-                        .envs(env)
+                        .envs(env.vars().iter().cloned())
                         .stdin(std::process::Stdio::null())
                         .output()
                         .ok()
@@ -255,28 +255,13 @@ impl SettingsView {
                         SettingItem::new(
                             "Text size",
                             SettingField::dropdown(
-                                options(&[
-                                    ("small", "Small"),
-                                    ("default", "Default"),
-                                    ("large", "Large"),
-                                    ("larger", "Larger"),
-                                ]),
-                                |cx| {
-                                    match cx.global::<AppSettings>().text_size {
-                                        TextSize::Small => "small",
-                                        TextSize::Default => "default",
-                                        TextSize::Large => "large",
-                                        TextSize::Larger => "larger",
-                                    }
-                                    .into()
-                                },
+                                options(&TextSize::ALL.map(|size| (size.id(), size.label()))),
+                                |cx| cx.global::<AppSettings>().text_size.id().into(),
                                 |value, cx| {
-                                    let size = match value.as_ref() {
-                                        "small" => TextSize::Small,
-                                        "large" => TextSize::Large,
-                                        "larger" => TextSize::Larger,
-                                        _ => TextSize::Default,
-                                    };
+                                    let size = TextSize::ALL
+                                        .into_iter()
+                                        .find(|size| size.id() == value.as_ref())
+                                        .unwrap_or_default();
                                     AppSettings::update(cx, |s| s.text_size = size);
                                 },
                             ),
@@ -901,6 +886,7 @@ impl SettingsView {
 
 impl Render for SettingsView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _timer = crate::perf::render("settings");
         let weak = cx.weak_entity();
         div().size_full().bg(cx.theme().background).child(
             Settings::new("app-settings")

@@ -17,8 +17,10 @@ mod hosts;
 mod model_store;
 mod naming;
 mod panels;
+mod perf;
 mod persist;
 mod pi_place;
+mod relay;
 mod remote_ui;
 mod settings;
 mod shell_env;
@@ -44,6 +46,9 @@ fn main() {
     if let Some(code) = remote::askpass::run_client_if_requested() {
         std::process::exit(code);
     }
+    // After the helper modes above: those runs are child processes of the app and must not
+    // touch its PISTACHIO_PERF file.
+    perf::init();
     env_logger::Builder::from_env(
         env_logger::Env::default().default_filter_or("warn,pistachio=info"),
     )
@@ -55,15 +60,18 @@ fn main() {
         log::warn!("could not move settings from the PI-gui folder: {error}");
     }
 
-    // Probing the login shell takes ~100–200 ms; overlap it with GPU/platform startup.
-    let shell_env = std::thread::spawn(shell_env::login_shell_env);
+    // Probing the login shell takes ~50–500 ms depending on the user's shell setup. Nothing
+    // needs it until the first pi or terminal starts, so it runs in the background and
+    // startup never waits for it.
+    let child_env = config::ChildEnv::probe();
 
     let app = application().with_assets(assets::AppAssets);
     app.on_reopen(window::reopen);
     app.run(move |cx| {
-        let child_env = shell_env.join().unwrap_or_default();
+        perf::phase("app_run");
         let config = config::AppConfig::detect(child_env);
         init(cx);
+        perf::phase("gpui_kit_init");
         cx.set_global(settings::AppSettings::load(
             settings::AppSettings::path().as_deref(),
         ));
@@ -79,7 +87,9 @@ fn main() {
             ui_state::UiState::path().as_deref(),
         ));
         window::init(cx);
+        perf::phase("app_init");
         window::open_main_window(cx);
+        perf::phase("window_opened");
         cx.activate(true);
     });
 }

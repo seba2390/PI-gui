@@ -31,6 +31,8 @@ when idle.
 - **Side panels and a terminal** in the session's folder: git changes, a file tree, and an
   integrated terminal.
 - **SSH remotes.** Run pi on another machine, and Pistachio installs pi there if it's missing.
+  Your models work there too: requests come back through the SSH connection, so keys stay on
+  your computer.
 - **Web search** for chats: quick lookups or multi-step deep research.
 - **Speech to text.** Dictate with the microphone button. A model you download once (Parakeet,
   Whisper or Moonshine) transcribes on your computer, so nothing you say leaves it.
@@ -78,20 +80,20 @@ npm i -g @earendil-works/pi-coding-agent
   - Debian, Ubuntu:
 
     ```bash
-    curl -fLO https://github.com/seba2390/pistachio/releases/download/v0.4.3/pistachio_0.4.3-1_$(dpkg --print-architecture).deb && sudo apt install ./pistachio_0.4.3-1_$(dpkg --print-architecture).deb
+    curl -fLO https://github.com/seba2390/pistachio/releases/download/v0.4.4/pistachio_0.4.4-1_$(dpkg --print-architecture).deb && sudo apt install ./pistachio_0.4.4-1_$(dpkg --print-architecture).deb
     ```
 
   - Fedora and other RPM-based systems:
 
     ```bash
-    sudo dnf install https://github.com/seba2390/pistachio/releases/download/v0.4.3/pistachio-0.4.3-1.$(uname -m).rpm
+    sudo dnf install https://github.com/seba2390/pistachio/releases/download/v0.4.4/pistachio-0.4.4-1.$(uname -m).rpm
     ```
 
   - Any other distribution (installs for your user only, no root, and adds "Pistachio" to your
     app launcher):
 
     ```bash
-    curl -fL https://github.com/seba2390/pistachio/releases/download/v0.4.3/pistachio-v0.4.3-linux-$(uname -m).tar.gz | tar xz && pistachio-v0.4.3-linux-$(uname -m)/install.sh
+    curl -fL https://github.com/seba2390/pistachio/releases/download/v0.4.4/pistachio-v0.4.4-linux-$(uname -m).tar.gz | tar xz && pistachio-v0.4.4-linux-$(uname -m)/install.sh
     ```
 
   Or download the files yourself from [Releases](https://github.com/seba2390/pistachio/releases).

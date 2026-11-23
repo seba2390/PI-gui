@@ -4,6 +4,7 @@ mod commands;
 pub mod composer;
 mod context_panel;
 pub mod dialogs;
+mod file_links;
 mod file_picker;
 mod find;
 mod images;
@@ -31,6 +32,9 @@ use crate::ui::{MessageScroller, MessageScrollerState};
 actions!(chat, [ToggleThinking, ToggleToolOutput]);
 
 const CHAT_CONTEXT: &str = "Chat";
+/// Answers up to this size are searched for file names right away; more (a long session
+/// opening) in the background.
+const PARSE_INLINE_BYTES: usize = 64 * 1024;
 /// Readable line length, like other agent UIs.
 pub const CONTENT_MAX_WIDTH: Pixels = px(780.);
 
@@ -54,6 +58,11 @@ pub struct BlockKey {
 struct Markdown {
     state: Entity<TextViewState>,
     source_len: usize,
+    /// What may name a file in this text (parsed once it is finished).
+    file_candidates: Option<Vec<file_links::Candidate>>,
+    /// The file links drawn now (their URLs), so a block is only re-parsed for display when
+    /// they change.
+    file_links: Vec<String>,
     /// Remeasures the block's row when a parse lands (see [`ChatView::new_markdown`]).
     _parsed: Subscription,
 }
@@ -117,7 +126,28 @@ pub struct ChatView {
     highlights: std::cell::RefCell<crate::code_highlight::HighlightCache>,
     /// The find bar (⌘F), while open.
     find: Option<find::Find>,
+    /// The transcript row under the pointer.
+    hovered_row: Option<usize>,
+    /// The "Worked for" item of the turn the pointer is in: its hover actions show while the
+    /// pointer is anywhere in that turn's answer, not only over the "Worked for" row.
+    hovered_turn: Option<ItemId>,
+    /// The session folder's files, to link the files answers mention (see [`file_links`]).
+    files: file_links::FileIndex,
+    /// Answer blocks whose file links are not drawn yet (they still stream, or changed).
+    unlinked: HashSet<BlockKey>,
+    /// Parses a long session's answers for file names in the background.
+    _parse_files: Task<()>,
     _subscriptions: Vec<Subscription>,
+}
+
+/// Opens a file of the session's folder in the Files tab, at a line (a file link in an
+/// answer, or a tool row's file).
+#[derive(Action, Clone, PartialEq)]
+#[action(namespace = chat, no_json)]
+pub struct OpenFileLink {
+    /// Relative to the session's folder, or absolute.
+    pub path: String,
+    pub line: Option<u32>,
 }
 
 impl EventEmitter<ChatEvent> for ChatView {}
@@ -178,6 +208,14 @@ impl ChatView {
                 this.fade_pi_field_once_started(cx);
                 cx.notify();
             }),
+            // The folder's file list (the attach picker's index): link the files answers name.
+            cx.observe(&composer.read(cx).file_picker(), |this, picker, cx| {
+                let files = picker.read(cx).delegate().files();
+                if !this.files.is_for(&files) {
+                    this.files = file_links::FileIndex::new(files);
+                    this.link_files(true, cx);
+                }
+            }),
         ];
 
         let mut this = Self {
@@ -201,6 +239,11 @@ impl ChatView {
             pi_field: None,
             highlights: std::cell::RefCell::default(),
             find: None,
+            hovered_row: None,
+            hovered_turn: None,
+            files: file_links::FileIndex::default(),
+            unlinked: HashSet::new(),
+            _parse_files: Task::ready(()),
             _subscriptions: subscriptions,
         };
         this.sync(cx);
@@ -250,11 +293,14 @@ impl ChatView {
     /// Rebuilds every row: the transcript was replaced (a fork or clone), not appended to.
     fn reset_rows(&mut self, cx: &mut Context<Self>) {
         self.markdown.clear();
+        self.unlinked.clear();
         self.roles.clear();
         self.exploration.clear();
         self.toggled.clear();
         self.row_versions.clear();
         self.working_row = false;
+        // Row numbers now point at other items; the row under the pointer reports itself again.
+        self.hovered_row = None;
         self.scroller
             .update(cx, |scroller, cx| scroller.reset(0, cx));
         self.sync(cx);
@@ -461,18 +507,22 @@ impl ChatView {
 
         // 2. Update retained markdown, streaming appends incrementally.
         for (key, appended_at, text) in sources {
+            self.unlinked.insert(key);
             match (self.markdown.get_mut(&key), appended_at) {
                 (Some(markdown), Some(len)) => {
                     markdown
                         .state
                         .update(cx, |state, cx| state.push_str(&text, cx));
                     markdown.source_len = len + text.len();
+                    markdown.file_candidates = None;
                 }
                 (Some(markdown), None) => {
                     markdown
                         .state
                         .update(cx, |state, cx| state.set_text(&text, cx));
                     markdown.source_len = text.len();
+                    markdown.file_candidates = None;
+                    markdown.file_links.clear();
                 }
                 (None, _) => {
                     let markdown = Self::new_markdown(key, &text, text.len(), cx);
@@ -497,6 +547,14 @@ impl ChatView {
             }
         }
 
+        // 2b. Link the files finished answers mention. When a turn ends, list the folder again
+        //     first: it may have made the files it talks about.
+        if self.working_row && !running {
+            self.composer
+                .update(cx, |composer, cx| composer.refresh_file_index(cx));
+        }
+        self.link_files(false, cx);
+
         // 3. Splice the virtual list: new items go before the trailing working row.
         let old_items = self.row_versions.len();
         let old_rows = old_items + usize::from(self.working_row);
@@ -518,8 +576,13 @@ impl ChatView {
                 scroller.remeasure_items(index..index + 1, cx);
             }
         });
+        if new_items < old_items {
+            self.hovered_row = None;
+        }
         self.row_versions = new_versions;
         self.working_row = running;
+        // A turn under the pointer may just have ended (or the transcript was replaced).
+        self.update_hovered_turn(cx);
 
         // 4. While working, repaint at the working π's frame rate so it pulses smoothly and
         //    the timers advance; nothing ticks while idle.
@@ -577,7 +640,126 @@ impl ChatView {
         Markdown {
             state,
             source_len,
+            file_candidates: None,
+            file_links: Vec::new(),
             _parsed: observer,
+        }
+    }
+
+    /// Draws links on the files that finished answer blocks name: those in
+    /// [`Self::unlinked`], or every block with `all` (the file list changed). Only blocks
+    /// whose links changed are drawn again.
+    fn link_files(&mut self, all: bool, cx: &mut Context<Self>) {
+        if !all && self.unlinked.is_empty() {
+            return;
+        }
+        let session = self.session.read(cx);
+        if !session.has_folder_tools() {
+            self.unlinked.clear();
+            return;
+        }
+        let running = session.is_running();
+        let root = session.cwd().to_path_buf();
+        let items = session.transcript().items();
+        // Parsing runs at roughly 10 MB/s: a long session's answers are parsed in the
+        // background, then linked.
+        let unparsed: Vec<(BlockKey, String)> = items
+            .iter()
+            .filter_map(|item| match &item.kind {
+                ItemKind::Assistant(assistant) => Some((item.id, assistant)),
+                _ => None,
+            })
+            .flat_map(|(id, assistant)| {
+                assistant
+                    .blocks
+                    .iter()
+                    .enumerate()
+                    .filter_map(move |(block, kind)| match &kind.kind {
+                        BlockKind::Text(text) => Some((BlockKey { item: id, block }, text)),
+                        _ => None,
+                    })
+            })
+            .filter(|(key, text)| {
+                (all || self.unlinked.contains(key))
+                    && self.markdown.get(key).is_some_and(|markdown| {
+                        markdown.file_candidates.is_none() && markdown.source_len == text.text.len()
+                    })
+            })
+            .map(|(key, text)| (key, text.text.clone()))
+            .collect();
+        if unparsed.iter().map(|(_, text)| text.len()).sum::<usize>() > PARSE_INLINE_BYTES {
+            self._parse_files = cx.spawn(async move |this, cx| {
+                let parsed = cx
+                    .background_executor()
+                    .spawn(async move {
+                        unparsed
+                            .into_iter()
+                            .map(|(key, text)| (key, text.len(), file_links::candidates(&text)))
+                            .collect::<Vec<_>>()
+                    })
+                    .await;
+                let _ = this.update(cx, |this, cx| {
+                    for (key, len, candidates) in parsed {
+                        if let Some(markdown) = this.markdown.get_mut(&key)
+                            && markdown.source_len == len
+                        {
+                            markdown.file_candidates = Some(candidates);
+                        }
+                    }
+                    this.link_files(all, cx);
+                });
+            });
+            return;
+        }
+        let mut redraw = Vec::new();
+        for (index, item) in items.iter().enumerate() {
+            let ItemKind::Assistant(assistant) = &item.kind else {
+                continue;
+            };
+            for (block_index, block) in assistant.blocks.iter().enumerate() {
+                let BlockKind::Text(text) = &block.kind else {
+                    continue;
+                };
+                let key = BlockKey {
+                    item: item.id,
+                    block: block_index,
+                };
+                if !all && !self.unlinked.contains(&key) {
+                    continue;
+                }
+                // The text still streaming in.
+                if running && index + 1 == items.len() && block_index + 1 == assistant.blocks.len()
+                {
+                    continue;
+                }
+                let Some(markdown) = self.markdown.get_mut(&key) else {
+                    continue;
+                };
+                if markdown.source_len != text.text.len() {
+                    continue;
+                }
+                self.unlinked.remove(&key);
+                let candidates = markdown
+                    .file_candidates
+                    .get_or_insert_with(|| file_links::candidates(&text.text));
+                let links: Vec<(&file_links::Candidate, &str)> = candidates
+                    .iter()
+                    .filter_map(|candidate| {
+                        Some((candidate, self.files.resolve(&candidate.path, &root)?))
+                    })
+                    .collect();
+                let urls: Vec<String> = links
+                    .iter()
+                    .map(|(candidate, file)| file_links::url(file, candidate.line))
+                    .collect();
+                if urls != markdown.file_links {
+                    redraw.push((markdown.state.clone(), file_links::link(&text.text, &links)));
+                    markdown.file_links = urls;
+                }
+            }
+        }
+        for (state, text) in redraw {
+            state.update(cx, |state, cx| state.set_text(&text, cx));
         }
     }
 
@@ -594,6 +776,39 @@ impl ChatView {
             self.scroller.update(cx, |scroller, cx| {
                 scroller.remeasure_items(row..row + 1, cx);
             });
+        }
+    }
+
+    /// The "Worked for" item of the turn under the pointer (see [`Self::set_row_hovered`]).
+    pub(crate) fn hovered_turn(&self) -> Option<ItemId> {
+        self.hovered_turn
+    }
+
+    /// The pointer entered (or left) transcript row `row`. Rows report enter and leave in
+    /// either order when the pointer crosses between them, so a leave only counts for the
+    /// row last entered.
+    pub(crate) fn set_row_hovered(&mut self, row: usize, hovered: bool, cx: &mut Context<Self>) {
+        if hovered {
+            self.hovered_row = Some(row);
+        } else if self.hovered_row == Some(row) {
+            self.hovered_row = None;
+        } else {
+            return;
+        }
+        self.update_hovered_turn(cx);
+    }
+
+    /// Recomputes the turn under the pointer, re-rendering only when it changed (not as the
+    /// pointer crosses rows of the same turn).
+    fn update_hovered_turn(&mut self, cx: &mut Context<Self>) {
+        let items = self.session.read(cx).transcript().items();
+        let turn = self
+            .hovered_row
+            .and_then(|row| rows::turn_end(items, row))
+            .map(|end| items[end].id);
+        if turn != self.hovered_turn {
+            self.hovered_turn = turn;
+            cx.notify();
         }
     }
 
@@ -807,6 +1022,7 @@ impl Focusable for ChatView {
 
 impl Render for ChatView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _timer = crate::perf::render("chat");
         let is_empty = self.session.read(cx).is_empty() && !self.session.read(cx).is_running();
         let weak = cx.weak_entity();
         let background = cx.theme().background;
@@ -853,7 +1069,10 @@ impl Render for ChatView {
                         MessageScroller::new(
                             "transcript",
                             self.scroller.clone(),
-                            move |index, window, cx| rows::render_row(&weak, index, window, cx),
+                            move |index, window, cx| {
+                                let _timer = crate::perf::render("chat_row");
+                                rows::render_row(&weak, index, window, cx)
+                            },
                         )
                         // Rows own their spacing (see rows.rs); drop the default 32px gap.
                         .with_row_style(StyleRefinement::default().pb(px(0.)))
@@ -914,6 +1133,11 @@ fn literal_markdown(text: &str) -> String {
 pub(crate) fn markdown_view(state: &Entity<TextViewState>) -> TextView {
     TextView::new(state)
         .selectable(true)
+        .markdown_extensions(file_links::markdown_extensions())
+        .on_link_click(|url, _, window, cx| match file_links::parse_url(url) {
+            Some((path, line)) => window.dispatch_action(Box::new(OpenFileLink { path, line }), cx),
+            None => cx.open_url(url),
+        })
         .code_block_actions(|block, _, cx| {
             let muted = cx.theme().muted_foreground;
             h_flex()

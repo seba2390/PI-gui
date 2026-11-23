@@ -23,6 +23,7 @@ use transcript::{BlockKind, ItemKind};
 
 use super::{BlockKey, ChatView};
 use crate::theme::palette;
+use crate::ui::list::ListOffset;
 
 actions!(chat, [FindNext, FindPrevious]);
 

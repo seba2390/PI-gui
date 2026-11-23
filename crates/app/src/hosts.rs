@@ -18,6 +18,8 @@ use remote::{
     Target,
 };
 
+use crate::relay;
+
 /// How often live connections are re-checked (a dropped one turns its dot grey) and their
 /// session lists refreshed.
 const CHECK_EVERY: Duration = Duration::from_secs(30);
@@ -95,7 +97,21 @@ pub struct Hosts {
     refreshing: HashSet<HostId>,
     askpass: Option<AskpassServer>,
     prompts: VecDeque<Prompt>,
+    /// Whether pi on each host uses this computer's models (see [`crate::relay`]).
+    links: HashMap<HostId, LinkState>,
     _tasks: Vec<Task<()>>,
+}
+
+/// A host's model link.
+#[derive(Debug, Clone)]
+enum LinkState {
+    Linked(relay::Link),
+    /// pi there uses the host's own models; tried again when this computer's settings change
+    /// or the host is connected again.
+    Failed {
+        error: SharedString,
+        stamp: relay::Stamp,
+    },
 }
 
 impl EventEmitter<HostsEvent> for Hosts {}
@@ -129,6 +145,7 @@ impl Hosts {
                 .filter_map(|host| this.ssh.get(&host.id).cloned())
                 .collect();
             async move {
+                relay::stop();
                 for ssh in ssh {
                     ssh.disconnect();
                 }
@@ -165,11 +182,19 @@ impl Hosts {
                     break;
                 };
                 for (id, ssh) in targets {
-                    let alive = cx
+                    let master = cx
                         .background_executor()
-                        .spawn(async move { ssh.is_connected() })
+                        .spawn(async move { ssh.master_pid() })
                         .await;
+                    let alive = master.is_some();
                     let _ = this.update(cx, |this, cx| {
+                        // A new connection lost the port forward: write the host's settings
+                        // again before the next session there.
+                        if let Some(LinkState::Linked(link)) = this.links.get_mut(&id)
+                            && link.master_pid != master
+                        {
+                            link.master_pid = None;
+                        }
                         if alive {
                             this.refresh_sessions(&id, cx);
                         } else if this.status(&id).is_connected() {
@@ -189,6 +214,7 @@ impl Hosts {
             refreshing: HashSet::new(),
             askpass,
             prompts: VecDeque::new(),
+            links: HashMap::new(),
             _tasks: vec![prompts, checker],
         };
         // With "Connect saved SSH connections at start" (Settings), connect them quietly in
@@ -429,12 +455,9 @@ impl Hosts {
         }
         let id = id.clone();
         let task = cx.spawn(async move |this, cx| {
-            let ok = Self::install_and_probe(this.clone(), id.clone(), ssh, cx).await;
-            let _ = this.update(cx, |this, cx| {
-                if ok {
-                    this.refresh_sessions(&id, cx);
-                }
-            });
+            if Self::install_and_probe(this.clone(), id.clone(), ssh, cx).await {
+                Self::link_then_ready(this, id, cx).await;
+            }
         });
         self._tasks.push(task);
     }
@@ -448,6 +471,9 @@ impl Hosts {
             return;
         }
         self.set_status(id, HostStatus::Connecting, cx);
+        if matches!(self.links.get(id), Some(LinkState::Failed { .. })) {
+            self.links.remove(id);
+        }
         let askpass_env = match (&self.askpass, std::env::current_exe()) {
             (Some(server), Ok(exe)) if mode != ConnectMode::Quiet => Some(server.env(&exe)),
             _ => None,
@@ -477,7 +503,7 @@ impl Hosts {
                         }
                     })
                     .await;
-            let install = this
+            let (install, link) = this
                 .update(cx, |this, cx| {
                     let (status, install) = match result {
                         Ok(Connected::Probe(probe)) => {
@@ -512,15 +538,17 @@ impl Hosts {
                         Ok(Connected::KeyChanged) => (HostStatus::KeyChanged, false),
                         Err(error) => (HostStatus::Failed(error.to_string().into()), false),
                     };
-                    this.set_status(&id, status.clone(), cx);
-                    if status.is_ready() {
-                        this.refresh_sessions(&id, cx);
+                    // Ready once pi there can use this computer's models.
+                    let link = status.is_ready();
+                    if !link {
+                        this.set_status(&id, status, cx);
                     }
-                    install
+                    (install, link)
                 })
-                .unwrap_or(false);
-            if install && Self::install_and_probe(this.clone(), id.clone(), ssh, cx).await {
-                let _ = this.update(cx, |this, cx| this.refresh_sessions(&id, cx));
+                .unwrap_or((false, false));
+            if link || (install && Self::install_and_probe(this.clone(), id.clone(), ssh, cx).await)
+            {
+                Self::link_then_ready(this, id, cx).await;
             }
         });
         self._tasks.retain(|task| !task.is_ready());
@@ -528,7 +556,8 @@ impl Hosts {
     }
 
     /// Installs pi into `~/.pistachio/server` on the host, showing progress in the status, then
-    /// probes again. Returns whether pi is now available.
+    /// probes again. Returns whether pi is now available; the caller then makes the host
+    /// ready with [`Self::link_then_ready`].
     async fn install_and_probe(
         this: WeakEntity<Self>,
         id: HostId,
@@ -593,10 +622,121 @@ impl Hosts {
                 },
             };
             let ready = status.is_ready();
-            this.set_status(&id, status, cx);
+            if !ready {
+                this.set_status(&id, status, cx);
+            }
             ready
         })
         .unwrap_or(false)
+    }
+
+    /// Points pi on the connected host at this computer's models, then marks it ready and
+    /// lists its sessions. If that fails, pi there uses the host's own models.
+    async fn link_then_ready(this: WeakEntity<Self>, id: HostId, cx: &mut AsyncApp) {
+        let step = HostStatus::Installing {
+            step: "Setting up this computer's models".into(),
+        };
+        let Ok(link) = this.update(cx, |this, cx| {
+            this.set_status(&id, step, cx);
+            this.link_models(&id, cx)
+        }) else {
+            return;
+        };
+        link.await;
+        let _ = this.update(cx, |this, cx| {
+            this.set_status(&id, HostStatus::Connected, cx);
+            this.refresh_sessions(&id, cx);
+        });
+    }
+
+    // ---- this computer's models on the host ------------------------------------
+
+    /// Environment for a new pi on `id` so it uses this computer's models: a task that first
+    /// checks the connection still has its port forward (quick when nothing changed) and
+    /// writes the host's settings if needed. `Ok(empty)`: pi uses the host's own models.
+    pub fn session_env(
+        &mut self,
+        id: &HostId,
+        cx: &mut Context<Self>,
+    ) -> Result<relay::RemoteEnv, Task<relay::RemoteEnv>> {
+        match self.links.get(id) {
+            Some(LinkState::Failed { stamp, .. }) if *stamp == relay::local_stamp() => {
+                Ok(Vec::new())
+            }
+            None if !self.status(id).is_connected() => Ok(Vec::new()),
+            _ => Err(self.link_models(id, cx)),
+        }
+    }
+
+    /// Whether pi on `id` uses this computer's models (so the models dialog edits them).
+    pub fn uses_local_models(&self, id: &HostId) -> bool {
+        matches!(self.links.get(id), Some(LinkState::Linked(_)))
+    }
+
+    /// Why pi on `id` uses the host's own models instead of this computer's.
+    pub fn link_error(&self, id: &HostId) -> Option<SharedString> {
+        match self.links.get(id) {
+            Some(LinkState::Failed { error, .. }) => Some(error.clone()),
+            _ => None,
+        }
+    }
+
+    /// Writes the host's pi settings for this computer's models (see [`relay::link`]) in the
+    /// background; the task yields the environment for pi there.
+    fn link_models(&mut self, id: &HostId, cx: &mut Context<Self>) -> Task<relay::RemoteEnv> {
+        let (Some(ssh), Some(probe)) = (self.ssh_mut(id), self.probe(id).cloned()) else {
+            return Task::ready(Vec::new());
+        };
+        let Some(config) = cx.try_global::<crate::config::AppConfig>() else {
+            return Task::ready(Vec::new());
+        };
+        let launch = relay::Launch {
+            program: config.pi_program.clone(),
+            env: config.child_env.clone(),
+            dir: pi_sessions::app_dir()
+                .unwrap_or_else(std::env::temp_dir)
+                .join("relay"),
+        };
+        let previous = match self.links.get(id) {
+            Some(LinkState::Linked(link)) => Some(link.clone()),
+            _ => None,
+        };
+        let id = id.clone();
+        cx.spawn(async move |this, cx| {
+            let host = id.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move { relay::link(&ssh, &host, &probe, previous.as_ref(), &launch) })
+                .await;
+            this.update(cx, |this, cx| {
+                let env = match result {
+                    Ok(link) => {
+                        log::info!(
+                            "pi on {} uses this computer's models (port {})",
+                            id.0,
+                            link.port
+                        );
+                        let env = link.env.clone();
+                        this.links.insert(id.clone(), LinkState::Linked(link));
+                        env
+                    }
+                    Err(error) => {
+                        log::warn!("pi on {} uses its own models: {error}", id.0);
+                        this.links.insert(
+                            id.clone(),
+                            LinkState::Failed {
+                                error: error.into(),
+                                stamp: relay::local_stamp(),
+                            },
+                        );
+                        Vec::new()
+                    }
+                };
+                cx.emit(HostsEvent::Changed);
+                env
+            })
+            .unwrap_or_default()
+        })
     }
 
     /// Removes the old key of a host whose key changed (after the user confirmed the change
@@ -730,59 +870,6 @@ impl Hosts {
                 })
                 .await;
             let _ = this.update(cx, |this, cx| this.refresh_sessions(&id, cx));
-            result
-        })
-    }
-
-    // ---- model settings ------------------------------------------------------
-
-    /// Copies this computer's pi model settings (`models.json`, and `auth.json` only with
-    /// `include_credentials`) to the host's agent folder. Existing files there are kept as
-    /// `*.bak-pistachio`.
-    pub fn copy_model_settings(
-        &mut self,
-        id: &HostId,
-        include_credentials: bool,
-        cx: &mut Context<Self>,
-    ) -> Task<Result<(), String>> {
-        let (Some(ssh), Some(remote_agent)) = (
-            self.ssh_mut(id),
-            self.probe(id).map(|probe| probe.agent_dir.clone()),
-        ) else {
-            return Task::ready(Err("Connect to the host first.".to_owned()));
-        };
-        let Some(local_agent) = pi_sessions::agent_dir() else {
-            return Task::ready(Err("pi's settings folder was not found here.".to_owned()));
-        };
-        let id = id.clone();
-        cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move {
-                    let mut files = vec!["models.json"];
-                    if include_credentials {
-                        files.push("auth.json");
-                    }
-                    for name in files {
-                        let local = local_agent.join(name);
-                        let bytes = std::fs::read(&local).map_err(|error| {
-                            format!("Could not read {}: {error}", local.display())
-                        })?;
-                        ssh.upload(&format!("{remote_agent}/{name}"), bytes)
-                            .map_err(|error| error.to_string())?;
-                    }
-                    Ok(())
-                })
-                .await;
-            let _ = this.update(cx, |this, cx| {
-                if result.is_ok()
-                    && let Some(probe) = this.probes.get_mut(&id)
-                {
-                    probe.has_models = true;
-                    cx.emit(HostsEvent::Changed);
-                    cx.notify();
-                }
-            });
             result
         })
     }

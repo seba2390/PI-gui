@@ -1,7 +1,8 @@
 //! The local recognizer: runs a downloaded model with sherpa-onnx on a worker thread.
 //!
-//! Audio arrives as 16 kHz mono. An energy-based voice detector splits it into phrases at
-//! short pauses. While a phrase is being spoken, its audio is decoded again and again and
+//! Audio arrives as 16 kHz mono. A voice detector (Silero VAD, built into the app) splits it
+//! into phrases at short pauses. It tells speech from silence and noise by how it sounds, not
+//! how loud it is, so soft speech on a laptop microphone counts as speech and a fan does not. While a phrase is being spoken, its audio is decoded again and again and
 //! reported as a hypothesis (the composer shows it greyed out); at the pause it is decoded
 //! once more and committed. After a longer silence the session ends by itself, as if the
 //! user had pressed stop.
@@ -19,6 +20,7 @@
     clippy::cast_possible_wrap
 )]
 
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -27,26 +29,34 @@ use gpui_kit::component::speech::{RecognitionSession, SpeechError, SpeechRecogni
 use gpui_kit::{App, AppContext as _};
 use sherpa_onnx::{
     OfflineMoonshineModelConfig, OfflineRecognizer, OfflineRecognizerConfig,
-    OfflineTransducerModelConfig, OfflineWhisperModelConfig,
+    OfflineTransducerModelConfig, OfflineWhisperModelConfig, SileroVadModelConfig, VadModelConfig,
+    VoiceActivityDetector,
 };
 
 use super::catalog::{Kind, Model};
 
 pub const SAMPLE_RATE: usize = 16_000;
-/// Voice detection works on 20 ms frames.
-const FRAME: usize = SAMPLE_RATE / 50;
+/// Voice detection works on Silero's 32 ms windows.
+const FRAME: usize = 512;
 /// A pause this long after speech ends a phrase.
 const PHRASE_PAUSE: usize = SAMPLE_RATE * 7 / 10;
 /// Decode a hypothesis once at least this much new audio arrived.
 const HYPOTHESIS_STEP: usize = SAMPLE_RATE * 2 / 5;
 /// A phrase is committed at this length even without a pause, so decodes stay short.
 const MAX_PHRASE: usize = SAMPLE_RATE * 25;
-/// Audio kept before the first voiced frame of a phrase, so its first sound is not cut.
-const LEAD_IN: usize = SAMPLE_RATE / 4;
+/// Audio kept before the first voiced frame of a phrase, so its first sound is not cut (the
+/// detector reports speech a few windows after it began).
+const LEAD_IN: usize = SAMPLE_RATE / 2;
 /// With nothing said at all, give up after this long.
 const NOTHING_SAID_STOP: usize = SAMPLE_RATE * 10;
 /// A loaded model is freed after this long without a session.
 const UNLOAD_AFTER: Duration = Duration::from_secs(10 * 60);
+/// Silero VAD v5 (MIT, see `assets/silero-vad`), from the pinned
+/// `csukuangfj/vad@fba88cd2e921609e7675c3aaf51e0b9b295da4bc`. Built in, unlike the
+/// recognizers, so dictation never runs without it.
+static SILERO_VAD: &[u8] = include_bytes!("../../assets/silero-vad/silero_vad_v5.onnx");
+/// Held while the detector's file is checked or written.
+static SILERO_VAD_FILE: Mutex<()> = Mutex::new(());
 
 /// What a session needs to know, read from the settings when it starts.
 #[derive(Clone)]
@@ -127,6 +137,40 @@ fn recognizer_config(config: &SessionConfig) -> OfflineRecognizerConfig {
         }
     }
     c
+}
+
+/// A fresh voice detector. sherpa-onnx loads models from files, so the built-in one is written
+/// to `dir` first (again if the copy there differs).
+fn voice_detector(dir: &Path) -> Result<VoiceActivityDetector, String> {
+    let path = dir.join("silero_vad_v5.onnx");
+    {
+        let _guard = SILERO_VAD_FILE
+            .lock()
+            .map_err(|_| "voice detector lock poisoned")?;
+        if std::fs::read(&path).ok().as_deref() != Some(SILERO_VAD) {
+            let partial = path.with_extension("onnx.partial");
+            std::fs::create_dir_all(dir)
+                .and_then(|()| std::fs::write(&partial, SILERO_VAD))
+                .and_then(|()| std::fs::rename(&partial, &path))
+                .map_err(|error| format!("could not write the voice detector: {error}"))?;
+        }
+    }
+    let config = VadModelConfig {
+        silero_vad: SileroVadModelConfig {
+            model: Some(path.to_string_lossy().into_owned()),
+            threshold: 0.5,
+            min_silence_duration: 0.1,
+            min_speech_duration: 0.1,
+            window_size: FRAME as i32,
+            // Splits a very long stretch of speech, which keeps the detector's buffer small.
+            max_speech_duration: 20.,
+        },
+        sample_rate: SAMPLE_RATE as i32,
+        num_threads: 1,
+        ..Default::default()
+    };
+    VoiceActivityDetector::create(&config, 30.)
+        .ok_or_else(|| "could not load the voice detector".to_owned())
 }
 
 /// Frees the loaded model if no session started for [`UNLOAD_AFTER`].
@@ -237,12 +281,22 @@ fn run(
     output: async_channel::Sender<Output>,
 ) {
     let send = |message| output.send_blocking(message).is_ok();
-    let recognizer = match load(&config) {
-        Ok(recognizer) => recognizer,
+    let loaded = load(&config).and_then(|recognizer| {
+        let dir = config.dir.parent().unwrap_or(&config.dir);
+        Ok((recognizer, voice_detector(dir)?))
+    });
+    let (recognizer, vad) = match loaded {
+        Ok(loaded) => loaded,
         Err(error) => {
             send(Output::Failed(error));
             return;
         }
+    };
+    let mut is_speech = |window: &[f32]| {
+        vad.accept_waveform(window);
+        // Only its live state is used, not the speech segments it collects.
+        vad.clear();
+        vad.detected()
     };
     if !send(Output::Ready) {
         return;
@@ -257,14 +311,14 @@ fn run(
         // Take all audio that arrived, then act once on it.
         let mut finish = false;
         match input.recv_timeout(Duration::from_millis(50)) {
-            Ok(Input::Audio(samples)) => phrases.push(&samples),
+            Ok(Input::Audio(samples)) => phrases.push(&samples, &mut is_speech),
             Ok(Input::Finish) => finish = true,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
         }
         while let Ok(message) = input.try_recv() {
             match message {
-                Input::Audio(samples) => phrases.push(&samples),
+                Input::Audio(samples) => phrases.push(&samples, &mut is_speech),
                 Input::Finish => finish = true,
             }
         }
@@ -274,22 +328,16 @@ fn run(
             && let Some(audio) = phrases.take_phrase()
         {
             let text = decode(&audio);
-            if !text.is_empty() {
-                let text = phrases.join(text);
-                if !send(Output::Phrase(text)) {
-                    return;
-                }
-            } else if !send(Output::Hypothesis(String::new())) {
+            if let Some(text) = phrases.commit(text)
+                && !send(Output::Phrase(text))
+            {
                 return;
             }
         } else if !stop && let Some(audio) = phrases.hypothesis_audio() {
             let text = decode(audio);
-            let text = if text.is_empty() {
-                text
-            } else {
-                phrases.preview(text)
-            };
-            if !send(Output::Hypothesis(text)) {
+            if let Some(text) = phrases.hypothesis(text)
+                && !send(Output::Hypothesis(text))
+            {
                 return;
             }
         }
@@ -324,7 +372,7 @@ fn clean(text: &str) -> String {
     text.to_owned()
 }
 
-/// Splits incoming audio into phrases with a simple energy voice detector.
+/// Splits incoming audio into phrases at the pauses a voice detector finds.
 struct Phrases {
     /// Audio of the phrase being spoken (from shortly before its first voiced frame).
     current: Vec<f32>,
@@ -342,7 +390,9 @@ struct Phrases {
     nothing_said: Option<usize>,
     /// `current.len()` at the last hypothesis decode.
     decoded_at: usize,
-    noise_floor: f32,
+    /// The current phrase's last non-empty hypothesis. A re-decode can come back empty (a
+    /// clipped or quiet moment); that must neither clear the text on screen nor lose it.
+    shown: String,
     auto_stop: Option<usize>,
     committed_any: bool,
 }
@@ -358,30 +408,25 @@ impl Phrases {
             idle: 0,
             nothing_said: Some(0),
             decoded_at: 0,
-            noise_floor: 0.003,
+            shown: String::new(),
             auto_stop,
             committed_any: false,
         }
     }
 
-    fn push(&mut self, samples: &[i16]) {
+    /// Adds audio; `is_speech` judges each [`FRAME`] in order.
+    fn push(&mut self, samples: &[i16], is_speech: &mut impl FnMut(&[f32]) -> bool) {
         self.pending
             .extend(samples.iter().map(|&s| f32::from(s) / 32_768.));
         let whole = self.pending.len() / FRAME * FRAME;
         let frames: Vec<f32> = self.pending.drain(..whole).collect();
         for frame in frames.chunks(FRAME) {
-            self.push_frame(frame);
+            let voiced = is_speech(frame);
+            self.push_frame(frame, voiced);
         }
     }
 
-    fn push_frame(&mut self, frame: &[f32]) {
-        let rms = (frame.iter().map(|s| s * s).sum::<f32>() / frame.len() as f32).sqrt();
-        let voiced = rms > (self.noise_floor * 3.).max(0.008);
-        if !voiced {
-            // Follow the room's noise slowly, and quickly when it gets quieter.
-            let rate = if rms < self.noise_floor { 0.2 } else { 0.02 };
-            self.noise_floor += (rms - self.noise_floor) * rate;
-        }
+    fn push_frame(&mut self, frame: &[f32], voiced: bool) {
         if voiced {
             if !self.voiced {
                 self.current = std::mem::take(&mut self.lead_in);
@@ -442,11 +487,27 @@ impl Phrases {
         Some(&self.current)
     }
 
-    /// A committed phrase, with the space that separates it from the one before.
-    fn join(&mut self, text: String) -> String {
+    /// A hypothesis decode of the current phrase: the text to show, or `None` to keep showing
+    /// the last one.
+    fn hypothesis(&mut self, text: String) -> Option<String> {
+        if text.is_empty() {
+            return None;
+        }
+        self.shown.clone_from(&text);
+        Some(self.preview(text))
+    }
+
+    /// The final decode of the phrase just taken: the text to commit, with the space that
+    /// separates it from the phrase before. An empty decode commits what was shown instead.
+    fn commit(&mut self, text: String) -> Option<String> {
+        let shown = std::mem::take(&mut self.shown);
+        let text = if text.is_empty() { shown } else { text };
+        if text.is_empty() {
+            return None;
+        }
         let text = self.preview(text);
         self.committed_any = true;
-        text
+        Some(text)
     }
 
     /// Text shown after the committed phrases, with its separating space.
@@ -490,7 +551,7 @@ impl gpui_kit::component::speech::AudioInput for WavInput {
     ) -> Result<gpui_kit::Subscription, SpeechError> {
         let samples = self.samples.clone();
         let task = cx.spawn(async move |cx| {
-            for chunk in samples.chunks(FRAME) {
+            for chunk in samples.chunks(SAMPLE_RATE / 50) {
                 cx.background_executor()
                     .timer(Duration::from_millis(20))
                     .await;
@@ -515,45 +576,113 @@ mod tests {
             .collect()
     }
 
+    /// Stands in for the voice detector: anything louder than quiet room noise is speech.
+    fn loud(window: &[f32]) -> bool {
+        window.iter().map(|s| s * s).sum::<f32>() / window.len() as f32 > 0.01 * 0.01
+    }
+
     #[test]
     fn a_pause_commits_a_phrase() {
         let mut phrases = Phrases::new(Some(SAMPLE_RATE * 3));
-        phrases.push(&tone(0.5, 0.0005));
+        phrases.push(&tone(0.5, 0.0005), &mut loud);
         assert!(!phrases.voiced, "room noise is not speech");
-        phrases.push(&tone(1.0, 0.3));
+        phrases.push(&tone(1.0, 0.3), &mut loud);
         assert!(phrases.voiced);
         assert!(phrases.hypothesis_audio().is_some());
         assert!(!phrases.should_commit());
-        phrases.push(&tone(0.8, 0.0005));
+        phrases.push(&tone(0.8, 0.0005), &mut loud);
         assert!(phrases.should_commit(), "0.8 s of silence ends the phrase");
         let audio = phrases.take_phrase().unwrap();
         // The lead-in plus the speech plus the pause.
-        assert!(audio.len() > SAMPLE_RATE * 18 / 10, "{}", audio.len());
+        assert!(audio.len() > SAMPLE_RATE * 2, "{}", audio.len());
         assert!(!phrases.should_stop());
-        phrases.push(&tone(2.5, 0.0005));
+        phrases.push(&tone(2.5, 0.0005), &mut loud);
         assert!(phrases.should_stop(), "3 s after the last speech");
     }
 
     #[test]
     fn stops_when_nothing_is_said() {
         let mut phrases = Phrases::new(None);
-        phrases.push(&tone(9.0, 0.0005));
+        phrases.push(&tone(9.0, 0.0005), &mut loud);
         assert!(!phrases.should_stop());
-        phrases.push(&tone(1.5, 0.0005));
+        phrases.push(&tone(1.5, 0.0005), &mut loud);
         assert!(phrases.should_stop());
     }
 
     #[test]
     fn phrases_are_joined_with_spaces() {
         let mut phrases = Phrases::new(None);
-        assert_eq!(phrases.join("Hello there.".into()), "Hello there.");
-        assert_eq!(phrases.preview("How are".into()), " How are");
-        assert_eq!(phrases.join("How are you?".into()), " How are you?");
+        assert_eq!(
+            phrases.commit("Hello there.".into()).unwrap(),
+            "Hello there."
+        );
+        assert_eq!(phrases.hypothesis("How are".into()).unwrap(), " How are");
+        assert_eq!(
+            phrases.commit("How are you?".into()).unwrap(),
+            " How are you?"
+        );
+    }
+
+    #[test]
+    fn an_empty_decode_keeps_the_text_shown() {
+        let mut phrases = Phrases::new(None);
+        assert_eq!(
+            phrases.commit(String::new()),
+            None,
+            "nothing said, nothing committed"
+        );
+        assert_eq!(phrases.hypothesis("I want".into()).unwrap(), "I want");
+        assert_eq!(
+            phrases.hypothesis(String::new()),
+            None,
+            "the grey text stays"
+        );
+        assert_eq!(
+            phrases.commit(String::new()).unwrap(),
+            "I want",
+            "and is committed"
+        );
+        assert_eq!(phrases.hypothesis("Then".into()).unwrap(), " Then");
+        assert_eq!(
+            phrases.commit("Then add it.".into()).unwrap(),
+            " Then add it."
+        );
+        assert_eq!(
+            phrases.commit(String::new()),
+            None,
+            "the last phrase is not reused"
+        );
+    }
+
+    #[test]
+    fn built_in_voice_detector_ignores_tones_and_noise() {
+        let dir = tempfile::tempdir().unwrap();
+        let vad = voice_detector(dir.path()).unwrap();
+        // A stale copy is replaced.
+        std::fs::write(dir.path().join("silero_vad_v5.onnx"), b"old").unwrap();
+        voice_detector(dir.path()).unwrap();
+        let mut seed = 1_u32;
+        let noise: Vec<f32> = (0..SAMPLE_RATE * 3)
+            .map(|_| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (seed >> 16) as f32 / 65_536. * 0.1 - 0.05
+            })
+            .collect();
+        let tone: Vec<f32> = tone(3.0, 0.3)
+            .iter()
+            .map(|&s| f32::from(s) / 32_768.)
+            .collect();
+        for window in noise.chunks(FRAME).chain(tone.chunks(FRAME)) {
+            vad.accept_waveform(window);
+            assert!(!vad.detected());
+        }
     }
 
     /// End to end with a real model: `PISTACHIO_STT_TEST=<model dir>:<model id>:<16 kHz wav>
     /// cargo test -p pistachio real_model -- --ignored --nocapture`. Streams the clip in 20 ms
     /// chunks as the microphone would, then silence, and prints what the worker reports.
+    /// `PISTACHIO_STT_TEST_GAIN=0.04` plays it softly over quiet room noise instead, like
+    /// normal speech at arm's length from a laptop's microphone.
     #[test]
     #[ignore = "needs a downloaded model"]
     fn real_model() {
@@ -565,11 +694,23 @@ mod tests {
             parts.next().unwrap(),
         );
         let wave = sherpa_onnx::Wave::read(wav).expect("wav");
+        let gain: f32 = std::env::var("PISTACHIO_STT_TEST_GAIN")
+            .map_or(1., |gain| gain.parse().expect("PISTACHIO_STT_TEST_GAIN"));
+        let mut seed = 1_u32;
+        let mut room = move || {
+            if gain >= 1. {
+                return 0.;
+            }
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            // About -58 dBFS.
+            ((seed >> 16) as f32 / 65_536. - 0.5) * 0.004
+        };
         let samples: Vec<i16> = wave
             .samples()
             .iter()
-            .map(|s| (s * 32_767.) as i16)
-            .chain(std::iter::repeat_n(0, SAMPLE_RATE * 4))
+            .map(|s| s * gain)
+            .chain(std::iter::repeat_n(0., SAMPLE_RATE * 4))
+            .map(|s| ((s + room()) * 32_767.) as i16)
             .collect();
         let config = SessionConfig {
             model: crate::stt::catalog::model(id).unwrap(),
@@ -581,7 +722,7 @@ mod tests {
         let (output_tx, output_rx) = async_channel::unbounded();
         let worker = std::thread::spawn(move || run(config, input_rx, output_tx));
         let started = std::time::Instant::now();
-        for chunk in samples.chunks(FRAME) {
+        for chunk in samples.chunks(SAMPLE_RATE / 50) {
             if input_tx.send(Input::Audio(chunk.to_vec())).is_err() {
                 break;
             }

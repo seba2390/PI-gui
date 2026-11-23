@@ -74,8 +74,8 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   light) runs pi on another machine. "Add SSH connection…" lists the hosts in your
   `~/.ssh/config` (following `Include`), or takes a custom host, user, port, key and jump host;
   connections are saved in `~/.pi/agent/pistachio/hosts.json` and "Manage SSH connections…"
-  renames them, changes the command that starts pi, copies your model settings and removes
-  them. pi runs **on the remote** (its tools, `AGENTS.md`, skills and sessions all live there)
+  renames them, changes the command that starts pi and removes them. pi runs **on the
+  remote** (its tools, `AGENTS.md`, skills and sessions all live there)
   through the system `ssh`, so your config, keys, ssh-agent and `known_hosts` apply.
   - One shared connection per host (ControlMaster) makes later commands ~30 ms. With
     "Connect saved connections at start" (Settings → SSH connections, off by default) saved
@@ -84,9 +84,19 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   - **pi is installed automatically** when a host does not have it, like an editor's remote
     server: into `~/.pistachio/server` on the host, with no root access, using the host's
     Node.js 22.19+ or a downloaded, checksum-verified standalone Node.js. Remove that folder
-    to undo it. If the host has no model settings, the connect dialog offers to copy your
-    `models.json` (credentials in `auth.json` only if you tick the box; an existing file is
-    kept as `*.bak-pistachio`).
+    to undo it.
+  - **This computer's models work on every host**, with nothing to set up: the model list,
+    default model and thinking level are the ones you have here, and model requests come back
+    over the SSH connection and go out from this computer. So models on `localhost`, your LAN
+    or a VPN work from any host, and keys and logins never leave this computer. A hidden pi
+    here (started on first use) adds them to each request; the host reaches it through a
+    port forward on its own loopback, and each request needs a token that only works for
+    that host. pi on the host reads a settings folder Pistachio writes there,
+    `~/.pistachio/agent` (written again when your models, logins or settings here change);
+    the host's own `~/.pi` is not changed, and its extensions, skills, prompts and themes are
+    linked in. Not yet relayed: ChatGPT/Codex, GitHub Copilot and Gemini CLI logins, Vertex
+    and Bedrock. If a host does not allow port forwarding, pi there uses its own models and
+    the model menu says why. "Add model" in a remote session edits this computer's models.
   - Passwords, key passphrases and one-time codes are asked for in the app (ssh's
     `SSH_ASKPASS`); nothing is stored. Unknown host keys are shown for confirmation; a changed
     host key is explained, and you can remove the old key and confirm the new one.
@@ -137,6 +147,13 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   **Mention** in its header, the **+** on a row, or ⌥-click in the tree puts an `@path`
   mention in the message box instead. Binary files show a short notice, and files over
   512 KB open with their first 512 KB. Files on an SSH host are read over the connection.
+- **File links** (Code mode): a file of the session's folder that an answer names, in
+  backticks (`fib.rs`) or as a path in the text (src/main.rs:12), is a link that opens it in
+  the panel, at the line when one is given; the path of a Read, Edited or Wrote row does the
+  same. A bare name is linked only when exactly one file in the folder has it. Links are
+  added when an answer is finished (the folder is listed again when a turn ends, so files
+  the turn made are found) and only in what the chat draws: pi, the session file and
+  copying keep the answer as the model wrote it.
 - Syntax colors for code by file extension: chat code blocks, the agent's edits (its diffs
   in the chat), the files it reads, and the Changes panel's diffs. Diffs keep their red and
   green backgrounds with the code colors on top; the old and new text are rebuilt from each
@@ -165,8 +182,10 @@ The download runs in the background with a progress bar at the top of the chat, 
 Hugging Face revision, and every file is checked against its SHA-256 before the model is used.
 While you speak, the text appears greyed out and keeps improving; when you stop talking (after
 the silence set in Settings, 2.5 s by default), press Enter or press stop, it becomes normal
-text in the message box, ready to edit or send. Esc discards it. Models live in
-`~/.pi/agent/pistachio/speech/`.
+text in the message box, ready to edit or send. Esc discards it. Pauses and the end of speech
+are found by a small voice detector built into the app (Silero VAD), which goes by how speech
+sounds rather than how loud it is, so soft speech counts and a fan or typing does not. Models
+live in `~/.pi/agent/pistachio/speech/`.
 
 ## Conversation names
 
