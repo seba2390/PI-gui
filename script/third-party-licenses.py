@@ -82,9 +82,17 @@ def main() -> None:
         "THE SOFTWARE.\n\n"
     )
 
+    # Models built into the binary.
+    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root_dir, "crates/app/assets/silero-vad/LICENSE"), encoding="utf-8") as handle:
+        silero = handle.read()
+    out.write("=" * 78 + "\n")
+    out.write("Silero VAD v5 (MIT) https://github.com/snakers4/silero-vad\n")
+    out.write("voice activity detector built into the app (speech to text)\n\n")
+    out.write(silero.strip() + "\n\n")
+
     # Packages that ship no license file are covered by these standard texts (each of them
     # is MIT, Apache-2.0, or offers one of the two).
-    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     with open(os.path.join(root_dir, "LICENSE-MIT"), encoding="utf-8") as handle:
         mit = handle.read().split("\n", 2)[2]  # without this project's copyright line
     with open(os.path.join(root_dir, "LICENSE-APACHE"), encoding="utf-8") as handle:

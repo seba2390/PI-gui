@@ -32,6 +32,12 @@ All notable changes to PI-gui are listed here. The format follows
   over the "Worked for" row.
 - Hovering the open session in the sidebar no longer shows its rename and trash buttons on a
   darker patch: they take the hovered row's colour.
+- Dictation keeps everything you said: the greyed-out live text no longer disappears when a
+  re-decode comes back empty, and a phrase whose last decode is empty keeps the text that was
+  shown instead of dropping it. Soft speech (a laptop's microphone at arm's length) is no
+  longer cut into fragments, lost between phrases or ended by the silence timeout while you
+  talk: pauses are found by a voice detector built into the app (Silero VAD) instead of by
+  loudness.
 
 ## [0.4.3] - 2026-11-23
 

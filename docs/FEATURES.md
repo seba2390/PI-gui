@@ -165,8 +165,10 @@ The download runs in the background with a progress bar at the top of the chat, 
 Hugging Face revision, and every file is checked against its SHA-256 before the model is used.
 While you speak, the text appears greyed out and keeps improving; when you stop talking (after
 the silence set in Settings, 2.5 s by default), press Enter or press stop, it becomes normal
-text in the message box, ready to edit or send. Esc discards it. Models live in
-`~/.pi/agent/pistachio/speech/`.
+text in the message box, ready to edit or send. Esc discards it. Pauses and the end of speech
+are found by a small voice detector built into the app (Silero VAD), which goes by how speech
+sounds rather than how loud it is, so soft speech counts and a fan or typing does not. Models
+live in `~/.pi/agent/pistachio/speech/`.
 
 ## Conversation names
 
