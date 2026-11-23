@@ -76,6 +76,31 @@ fn is_trailing(c: char) -> bool {
     is_wrapping(c) || matches!(c, '.' | '!' | '?' | ',' | ';' | ':' | '…' | '-' | '–' | '—')
 }
 
+/// Whether a fenced answer holds a title rather than code: one short line of words
+/// ("```\nFibonacci in Rust\n```"), as some models wrap everything in a fence.
+fn fence_holds_a_title(text: &str) -> bool {
+    let inner: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with("```"))
+        .collect();
+    matches!(inner.as_slice(), [line] if !looks_like_code(line))
+}
+
+/// Whether `line` reads as source code rather than a title.
+fn looks_like_code(line: &str) -> bool {
+    let line = line.trim();
+    line.ends_with(['{', ';', '}', '(', ')'])
+        || line.contains("::")
+        || line.contains("=>")
+        || line.contains(" = ")
+        || [
+            "fn ", "def ", "import ", "#include", "use ", "let ", "const ", "class ", "SELECT ",
+        ]
+        .iter()
+        .any(|start| line.starts_with(start))
+}
+
 /// Words a title cut short should not end on ("Debugging the login flow of the").
 const DANGLING: &[&str] = &[
     "a", "an", "and", "as", "at", "by", "for", "from", "in", "into", "of", "on", "or", "the", "to",
@@ -114,11 +139,20 @@ fn balance_quotes(words: &[&str]) -> Vec<String> {
 /// [`MAX_WORDS`] words and [`MAX_CHARS`] characters. `None` when nothing is left.
 pub fn clean(raw: &str) -> Option<String> {
     let text = strip_thinking(raw);
+    // A small model sometimes answers the request instead of naming it, with a code block:
+    // "```rust" must not become the title "rust", and code is no title at all.
+    if text.trim_start().starts_with("```") && !fence_holds_a_title(&text) {
+        return None;
+    }
     let line = text
         .lines()
         .map(str::trim)
+        .filter(|line| !line.starts_with("```"))
         .filter(|line| !line.trim_matches(is_trailing).is_empty())
         .find(|line| !line.ends_with(':'))?;
+    if looks_like_code(line) {
+        return None;
+    }
     let line = strip_label(line);
     let line = line
         .trim_start_matches(is_wrapping)
@@ -190,6 +224,30 @@ fn strip_label(line: &str) -> &str {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn code_answers_are_not_titles() {
+        // What Qwen2.5 0.5B answered "write a rust program that prints the fibonacci sequence"
+        // with before the prompt told it not to: the fence's language became the title.
+        let code = "```rust\nfn main() {\n    let mut a = 0;\n}\n```";
+        assert_eq!(clean(code), None);
+        assert_eq!(clean("fn main() {"), None);
+        assert_eq!(clean("SELECT name FROM customers;"), None);
+        // A title a model wrapped in a fence is still a title.
+        assert_eq!(
+            clean("```\nFibonacci sequence in Rust\n```").as_deref(),
+            Some("Fibonacci sequence in Rust")
+        );
+        // Ordinary titles that mention code words are fine.
+        assert_eq!(
+            clean("Fibonacci sequence in Rust").as_deref(),
+            Some("Fibonacci sequence in Rust")
+        );
+        assert_eq!(
+            clean("Using const generics").as_deref(),
+            Some("Using const generics")
+        );
+    }
 
     #[test]
     fn titles_cut_short_end_cleanly() {
