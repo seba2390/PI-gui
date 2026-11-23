@@ -35,4 +35,6 @@ pub use error::{RemoteError, classify};
 pub use host::{HostId, HostStore, SavedHost, Target};
 pub use link::MANAGED_AGENT_DIR;
 pub use sessions::SessionIndex;
-pub use ssh::{DirListing, LEGACY_MANAGED_DIR, MANAGED_DIR, Probe, Ssh, remote_word, sh_quote};
+pub use ssh::{
+    DirListing, LEGACY_MANAGED_DIR, MANAGED_DIR, Probe, RELAY_PORT_ENV, Ssh, remote_word, sh_quote,
+};

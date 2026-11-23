@@ -6,6 +6,21 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- This computer's models on SSH hosts (#26):
+  - The relay sends a request to the address in this computer's model settings, never to
+    one taken from the request (only the path comes from it). The address was already
+    checked against those settings; this also clears a code-scanning alert.
+  - An answer that is not a stream (an error, a list of models) no longer carries this
+    computer's key or provider headers back to the host, even from a server that writes the
+    credentials it got into its answer.
+  - When the SSH connection is made again in the moment before a session starts, pi on the
+    host no longer starts without a way to reach this computer's models: the session stops
+    with a message and offers to reconnect.
+  - Relative paths in the host's own pi settings (`"extensions": ["./my-ext"]`, local
+    packages) still point into the host's agent folder.
+
 ## [0.4.4] - 2026-11-23
 
 ### Added

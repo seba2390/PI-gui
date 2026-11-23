@@ -152,6 +152,7 @@ pub fn link(
         .and_then(|dir| std::fs::read(dir.join("settings.json")).ok())
         .and_then(|bytes| serde_json::from_slice(&bytes).ok());
     let settings = remote_settings(
+        &probe.agent_dir,
         host_settings.as_ref(),
         local_settings.as_ref(),
         &remote_models,
@@ -170,6 +171,8 @@ pub fn link(
                 "PI_CODING_AGENT_SESSION_DIR".to_owned(),
                 probe.sessions_dir.clone(),
             ),
+            // pi starts only while the forward is there (see `remote::RELAY_PORT_ENV`).
+            (remote::RELAY_PORT_ENV.to_owned(), port.to_string()),
         ],
         stamp,
     })
@@ -253,11 +256,19 @@ fn relayed_base(model: &Value, port: u16) -> Option<(&str, String)> {
     ))
 }
 
-/// The host's `settings.json` for the managed folder: the host's own, with this computer's
-/// default model and thinking level and without settings that point at the host's models or
-/// sessions folder (pi gets that from the environment).
-pub fn remote_settings(host: Option<&Value>, local: Option<&Value>, models: &Value) -> Value {
+/// The host's `settings.json` for the managed folder: the host's own (read from its agent
+/// folder `host_agent_dir`), with this computer's default model and thinking level and
+/// without settings that point at the host's models or sessions folder (pi gets that from the
+/// environment). Its relative resource paths are made absolute: pi reads them from the folder
+/// the settings are in, and that is no longer `host_agent_dir`.
+pub fn remote_settings(
+    host_agent_dir: &str,
+    host: Option<&Value>,
+    local: Option<&Value>,
+    models: &Value,
+) -> Value {
     let mut settings = host.and_then(Value::as_object).cloned().unwrap_or_default();
+    absolute_resource_paths(&mut settings, host_agent_dir);
     for key in [
         "sessionDir",
         "enabledModels",
@@ -286,6 +297,71 @@ pub fn remote_settings(host: Option<&Value>, local: Option<&Value>, models: &Val
         }
     }
     Value::Object(settings)
+}
+
+/// Rewrites the relative paths in pi's resource settings against `base` (see pi's
+/// `docs/settings.md`, Resources). Plain entries are files or folders, made absolute. Patterns
+/// (`!glob`, `+path`, `-path`, or with `*`/`?`) are matched against paths relative to the
+/// settings folder too, which still holds what pi finds through the managed folder's links, so
+/// they stay and an absolute copy is added for what a rewritten entry finds. A local package
+/// source starts with `.`; npm, git and URL sources stay.
+fn absolute_resource_paths(settings: &mut Map<String, Value>, base: &str) {
+    let base = base.trim_end_matches('/');
+    let join = |path: &str| {
+        let path = path.strip_prefix("./").unwrap_or(path);
+        if path.is_empty() || path == "." {
+            base.to_owned()
+        } else {
+            format!("{base}/{path}")
+        }
+    };
+    // Absolute, under `~`, or something other than a path (`builtin:mcp`, `npm:…`).
+    let relative =
+        |path: &str| !path.is_empty() && !path.starts_with(['/', '~']) && !path.contains(':');
+    for key in ["extensions", "skills", "prompts", "themes"] {
+        let Some(entries) = settings.get_mut(key).and_then(Value::as_array_mut) else {
+            continue;
+        };
+        let mut out = Vec::with_capacity(entries.len());
+        for entry in entries.drain(..) {
+            let Some(text) = entry.as_str() else {
+                out.push(entry);
+                continue;
+            };
+            let (prefix, path) = match text.chars().next() {
+                Some(c @ ('!' | '+' | '-')) => (Some(c), &text[1..]),
+                _ => (None, text),
+            };
+            if !relative(path) {
+                out.push(entry);
+            } else if prefix.is_none() && !path.contains(['*', '?']) {
+                out.push(Value::String(join(path)));
+            } else {
+                let absolute = format!(
+                    "{}{}",
+                    prefix.map(String::from).unwrap_or_default(),
+                    join(path)
+                );
+                out.push(entry);
+                out.push(Value::String(absolute));
+            }
+        }
+        *entries = out;
+    }
+    let Some(packages) = settings.get_mut("packages").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for package in packages {
+        let source = match package {
+            Value::Object(object) => object.get_mut("source"),
+            other => Some(other),
+        };
+        if let Some(Value::String(source)) = source
+            && source.starts_with('.')
+        {
+            *source = join(source);
+        }
+    }
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -600,12 +676,43 @@ mod tests {
         let local = json!({ "defaultProvider": "spark", "defaultModel": "qwen",
                             "defaultThinkingLevel": "high", "theme": "light" });
         assert_eq!(
-            remote_settings(Some(&host), Some(&local), &models),
+            remote_settings("/home/me/.pi/agent", Some(&host), Some(&local), &models),
             json!({ "theme": "dark", "defaultProvider": "spark", "defaultModel": "qwen",
                     "defaultThinkingLevel": "high" })
         );
         // A local default the host can't use is left to pi.
         let local = json!({ "defaultProvider": "openai-codex", "defaultModel": "gpt" });
-        assert_eq!(remote_settings(None, Some(&local), &models), json!({}));
+        assert_eq!(
+            remote_settings("/home/me/.pi/agent", None, Some(&local), &models),
+            json!({})
+        );
+    }
+
+    #[test]
+    fn remote_settings_make_resource_paths_absolute() {
+        let host = json!({
+            "extensions": ["./my-ext", "../shared/ext.ts", "/opt/ext", "~/ext", "builtin:mcp",
+                           "-builtin:codemode", "!old/*", "+extensions/keep.ts"],
+            "skills": ["skills-extra", "*.md"],
+            "themes": [],
+            "packages": ["npm:@example/tools@1.0.0", "./pkg", "git:github.com/x/y",
+                         { "source": "../local-pkg", "extensions": ["./a.ts"] }],
+            "theme": "./not-a-resource",
+        });
+        assert_eq!(
+            remote_settings("/home/me/.pi/agent/", Some(&host), None, &json!({})),
+            json!({
+                "extensions": ["/home/me/.pi/agent/my-ext", "/home/me/.pi/agent/../shared/ext.ts",
+                               "/opt/ext", "~/ext", "builtin:mcp", "-builtin:codemode",
+                               "!old/*", "!/home/me/.pi/agent/old/*",
+                               "+extensions/keep.ts", "+/home/me/.pi/agent/extensions/keep.ts"],
+                "skills": ["/home/me/.pi/agent/skills-extra", "*.md", "/home/me/.pi/agent/*.md"],
+                "themes": [],
+                "packages": ["npm:@example/tools@1.0.0", "/home/me/.pi/agent/pkg",
+                             "git:github.com/x/y",
+                             { "source": "/home/me/.pi/agent/../local-pkg", "extensions": ["./a.ts"] }],
+                "theme": "./not-a-resource",
+            })
+        );
     }
 }

@@ -42,6 +42,8 @@ const RESPONSE_DROP = new Set(["connection", "keep-alive", "transfer-encoding", 
 // value the server might echo back) it could carry the real key to the host.
 const KEY_HEADERS = new Set(["authorization", "x-api-key", "api-key", "x-goog-api-key"]);
 const KEY_PARAMS = new Set(["key"]);
+// Answers that arrive as a stream of events (server-sent events, newline-delimited JSON).
+const STREAM_TYPES = /^\s*(text\/event-stream|application\/(x-)?ndjson|application\/jsonl)\b/i;
 
 function same(a: string, b: string): boolean {
 	const x = Buffer.from(a);
@@ -55,6 +57,27 @@ function validPlaceholder(text: string): boolean {
 		if (same(mac, match[2])) return true;
 	}
 	return false;
+}
+
+/** `bytes` with every secret of 8 or more characters replaced by `[redacted]`. */
+function redactBytes(bytes: Buffer, secrets: string[]): Buffer {
+	const mark = Buffer.from("[redacted]");
+	let out = bytes;
+	for (const secret of secrets) {
+		if (secret.length < 8) continue;
+		const needle = Buffer.from(secret);
+		const parts: Buffer[] = [];
+		let start = 0;
+		for (let at = out.indexOf(needle); at !== -1; at = out.indexOf(needle, start)) {
+			parts.push(out.subarray(start, at), mark);
+			start = at + needle.length;
+		}
+		if (parts.length) {
+			parts.push(out.subarray(start));
+			out = Buffer.concat(parts);
+		}
+	}
+	return out;
 }
 
 function reply(res: ServerResponse, status: number, message: string) {
@@ -108,11 +131,14 @@ async function handle(ctx: any, req: IncomingMessage, res: ServerResponse) {
 
 	// biome-ignore lint/suspicious/noExplicitAny: pi models
 	const models = ctx.modelRegistry.getAvailable().filter((model: any) => model.provider === provider);
-	const target = origin(`${scheme}://${authority}`);
+	const requested = origin(`${scheme}://${authority}`);
 	// biome-ignore lint/suspicious/noExplicitAny: pi models
-	if (!target || !models.some((model: any) => origin(model.baseUrl) === target)) {
-		return reply(res, 403, `${target} is not an endpoint of ${provider} on the computer running Pistachio.`);
+	const endpoint = requested && models.find((model: any) => origin(model.baseUrl) === requested);
+	if (!endpoint) {
+		return reply(res, 403, `${requested} is not an endpoint of ${provider} on the computer running Pistachio.`);
 	}
+	// The origin requests go to comes from this computer's settings, never from the request.
+	const target = origin(endpoint.baseUrl) as string;
 
 	const body = req.method === "GET" || req.method === "HEAD" ? undefined : await readBody(req);
 	// The request names its model (OpenAI and Anthropic APIs); its own headers then apply too.
@@ -158,7 +184,9 @@ async function handle(ctx: any, req: IncomingMessage, res: ServerResponse) {
 		}
 	}
 
-	const forward = new URL(`${target}${(rest ?? "/").replace(/\/{2,}/g, "/")}`);
+	// Only the path comes from the request: it can't change where the request goes.
+	const forward = new URL(target);
+	forward.pathname = (rest ?? "/").replace(/\/{2,}/g, "/");
 	for (const [name, value] of url.searchParams) {
 		if (!carries(value)) forward.searchParams.append(name, value);
 		else if (KEY_PARAMS.has(name) && key) forward.searchParams.append(name, swap(value));
@@ -187,11 +215,26 @@ async function handle(ctx: any, req: IncomingMessage, res: ServerResponse) {
 	response.headers.forEach((value, name) => {
 		if (!RESPONSE_DROP.has(name)) out[name] = redact(value);
 	});
-	res.writeHead(response.status, out);
 	if (!response.body) {
+		res.writeHead(response.status, out);
 		res.end();
 		return;
 	}
+	// A body that isn't a stream of events (an error, a model list) is read whole, so a server
+	// that writes the credential it got into its answer can't hand it back either. Streams go
+	// through as they come: holding back their tail would delay every event.
+	if (!STREAM_TYPES.test(response.headers.get("content-type") ?? "")) {
+		let body: Buffer;
+		try {
+			body = Buffer.from(await response.arrayBuffer());
+		} catch (error) {
+			return reply(res, 502, `Could not read the answer of ${target}: ${error}`);
+		}
+		res.writeHead(response.status, out);
+		res.end(redactBytes(body, secrets));
+		return;
+	}
+	res.writeHead(response.status, out);
 	// biome-ignore lint/suspicious/noExplicitAny: web stream to node stream
 	Readable.fromWeb(response.body as any)
 		.on("error", () => res.destroy())

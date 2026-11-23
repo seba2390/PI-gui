@@ -42,7 +42,20 @@ const KEYSCAN_TIMEOUT: Duration = Duration::from_secs(20);
 /// and the rest is the command. A leading `~/` in the
 /// program expands too, and an absolute program's own folder is put in front of `PATH` so a
 /// node script installed next to its `node` (nvm, Homebrew) finds it.
-pub(crate) const LAUNCH_SCRIPT: &str = r#"d=$1; shift; while :; do case $1 in PISTACHIO_ENV:*=*) export "${1#PISTACHIO_ENV:}"; shift ;; *) break ;; esac; done; case $d in "") ;; "~") cd || exit 1 ;; "~/"*) cd -- "$HOME/${d#??}" || exit 1 ;; *) cd -- "$d" || exit 1 ;; esac; case $1 in "~/"*) p=$HOME/${1#??}; shift; set -- "$p" "$@" ;; esac; case $1 in /*) PATH=${1%/*}:$PATH; export PATH ;; esac; exec "$@""#;
+///
+/// With [`RELAY_PORT_ENV`] set, the program only starts when that loopback port answers: the
+/// forward to this computer's model relay is gone when the shared connection was made again
+/// just before (pi's own `ssh` then became the new master, without the forward). curl or bash
+/// check it; a host with neither starts the program anyway.
+pub(crate) const LAUNCH_SCRIPT: &str = concat!(
+    r#"d=$1; shift; while :; do case $1 in PISTACHIO_ENV:*=*) export "${1#PISTACHIO_ENV:}"; shift ;; *) break ;; esac; done; "#,
+    r#"case ${PISTACHIO_RELAY_PORT-} in "") ;; *) r=0; if command -v curl >/dev/null 2>&1; then curl -s -o /dev/null --noproxy '*' -m 5 "http://127.0.0.1:$PISTACHIO_RELAY_PORT/"; [ $? -eq 7 ] && r=1; elif command -v bash >/dev/null 2>&1; then bash -c ': </dev/tcp/127.0.0.1/$0' "$PISTACHIO_RELAY_PORT" 2>/dev/null || r=1; fi; [ $r = 0 ] || { echo "This computer's models can't be reached from the host: the connection was made again. Reconnect to use them." >&2; exit 1; } ;; esac; "#,
+    r#"case $d in "") ;; "~") cd || exit 1 ;; "~/"*) cd -- "$HOME/${d#??}" || exit 1 ;; *) cd -- "$d" || exit 1 ;; esac; case $1 in "~/"*) p=$HOME/${1#??}; shift; set -- "$p" "$@" ;; esac; case $1 in /*) PATH=${1%/*}:$PATH; export PATH ;; esac; exec "$@""#
+);
+
+/// Set for a program on the host to check that the model relay's forwarded port answers
+/// first (see [`LAUNCH_SCRIPT`]).
+pub const RELAY_PORT_ENV: &str = "PISTACHIO_RELAY_PORT";
 
 /// Where pistachio installs its own copy of pi on a host (relative to `$HOME`).
 pub const MANAGED_DIR: &str = ".pistachio/server";
@@ -63,8 +76,7 @@ case $lp in /*) PATH=$lp:$PATH; export PATH ;; esac"#;
 /// user's profile scripts print is ignored. pi is looked up on the login shell's `PATH`, then
 /// an interactive shell's (where `.bashrc` additions such as nvm live), then pistachio's own
 /// install. Also reports pi's agent and sessions folders (honouring `PI_CODING_AGENT_DIR`,
-/// `PI_CODING_AGENT_SESSION_DIR` and an absolute `sessionDir` setting) and whether
-/// `models.json` exists there.
+/// `PI_CODING_AGENT_SESSION_DIR` and an absolute `sessionDir` setting).
 const PROBE_SCRIPT: &str = r#"printf 'PISTACHIO_HOME=%s\n' "$HOME"
 printf 'PISTACHIO_SYSTEM=%s\n' "$(uname -sm)"
 c=$1; case $c in "~/"*) c=$HOME/${c#??} ;; esac
@@ -95,7 +107,6 @@ fi
 [ -n "$d" ] || d=$a/sessions
 printf 'PISTACHIO_AGENT=%s\n' "$a"
 printf 'PISTACHIO_SESSIONS=%s\n' "$d"
-[ -f "$a/models.json" ] && printf 'PISTACHIO_MODELS=1\n'
 exit 0"#;
 
 /// Lists subfolders of `$1` (empty or `~` = home): the canonical path, then every directory
@@ -135,8 +146,6 @@ pub struct Probe {
     pub agent_dir: String,
     /// Where pi keeps session files there.
     pub sessions_dir: String,
-    /// Whether `<agent dir>/models.json` exists there.
-    pub has_models: bool,
     /// Absolute path of the pi executable, if found.
     pub pi_path: Option<String>,
     /// Last line `pi --version` printed, if pi was found and printed anything.
@@ -764,7 +773,6 @@ fn parse_probe(stdout: &str) -> Result<Probe, RemoteError> {
     let mut pi_version = None;
     let mut agent_dir = None;
     let mut sessions_dir = None;
-    let mut has_models = false;
     for line in stdout.lines() {
         let Some((key, value)) = line.split_once('=') else {
             continue;
@@ -777,7 +785,6 @@ fn parse_probe(stdout: &str) -> Result<Probe, RemoteError> {
             "PISTACHIO_VERSION" => pi_version = value,
             "PISTACHIO_AGENT" => agent_dir = value,
             "PISTACHIO_SESSIONS" => sessions_dir = value,
-            "PISTACHIO_MODELS" => has_models = value.is_some(),
             _ => {}
         }
     }
@@ -790,7 +797,6 @@ fn parse_probe(stdout: &str) -> Result<Probe, RemoteError> {
         home,
         agent_dir,
         sessions_dir,
-        has_models,
         pi_path,
         pi_version,
         system: system.unwrap_or_default(),
@@ -1069,6 +1075,35 @@ mod tests {
         assert_eq!(stdout, "[it's $HOME `x`]\n[a=b]\n[PISTACHIO_ENV:X=y]\n");
     }
 
+    #[test]
+    fn command_waits_for_the_relay_port() {
+        let home = tempfile::tempdir().unwrap();
+        let argv = strings(&["/bin/echo", "started"]);
+        let env = |port: u16| [(RELAY_PORT_ENV.to_owned(), port.to_string())];
+
+        // The forward is there: the program starts.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let open = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                drop(stream);
+            }
+        });
+        let (stdout, stderr, ok) = run_remote_with_env(home.path(), None, &env(open), &argv);
+        assert!(ok, "{stderr}");
+        assert_eq!(stdout, "started\n");
+
+        // Nothing listens there (the connection was made again without it): it does not.
+        let closed = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.local_addr().unwrap().port()
+        };
+        let (stdout, stderr, ok) = run_remote_with_env(home.path(), None, &env(closed), &argv);
+        assert!(!ok);
+        assert_eq!(stdout, "");
+        assert!(stderr.contains("Reconnect"), "{stderr}");
+    }
+
     #[cfg(unix)] // Unix shells, file modes or connection sharing
     #[test]
     fn command_expands_tilde_and_prepends_program_dir() {
@@ -1200,14 +1235,12 @@ mod tests {
             missing.sessions_dir,
             format!("{}/.pi/agent/sessions", home.display())
         );
-        assert!(!missing.has_models);
 
         // pistachio's own install is found when `pi` is not on PATH; settings move sessions.
         let managed = home.join(MANAGED_DIR).join("bin");
         fs::create_dir_all(&managed).unwrap();
         fs::copy(&tool, managed.join("pi")).unwrap();
         fs::create_dir_all(home.join(".pi/agent")).unwrap();
-        fs::write(home.join(".pi/agent/models.json"), "{}").unwrap();
         fs::write(
             home.join(".pi/agent/settings.json"),
             "{\n  \"sessionDir\": \"/data/pi sessions\"\n}\n",
@@ -1216,21 +1249,19 @@ mod tests {
         let found = run("pi");
         assert_eq!(found.pi_path.as_deref(), managed.join("pi").to_str());
         assert_eq!(found.sessions_dir, "/data/pi sessions");
-        assert!(found.has_models);
     }
 
     #[test]
     fn parses_probe_output() {
         let stdout = "Welcome to Ubuntu!\nPISTACHIO_HOME=/home/me\nPISTACHIO_SYSTEM=Linux aarch64\n\
                       PISTACHIO_PI=/home/me/.nvm/versions/node/v22/bin/pi\nPISTACHIO_VERSION=0.45.3\n\
-                      PISTACHIO_AGENT=/home/me/.pi/agent\nPISTACHIO_SESSIONS=/data/sessions\nPISTACHIO_MODELS=1\n";
+                      PISTACHIO_AGENT=/home/me/.pi/agent\nPISTACHIO_SESSIONS=/data/sessions\n";
         assert_eq!(
             parse_probe(stdout).unwrap(),
             Probe {
                 home: "/home/me".into(),
                 agent_dir: "/home/me/.pi/agent".into(),
                 sessions_dir: "/data/sessions".into(),
-                has_models: true,
                 pi_path: Some("/home/me/.nvm/versions/node/v22/bin/pi".into()),
                 pi_version: Some("0.45.3".into()),
                 system: "Linux aarch64".into(),
@@ -1240,7 +1271,6 @@ mod tests {
             parse_probe("PISTACHIO_HOME=/Users/me\nPISTACHIO_SYSTEM=Darwin arm64\n").unwrap();
         assert_eq!(no_pi.pi_path, None);
         assert_eq!(no_pi.sessions_dir, "/Users/me/.pi/agent/sessions");
-        assert!(!no_pi.has_models);
         assert_eq!(no_pi.pi_version, None);
         let empty_version =
             parse_probe("PISTACHIO_HOME=/h\nPISTACHIO_PI=/h/pi\nPISTACHIO_VERSION=\n").unwrap();
