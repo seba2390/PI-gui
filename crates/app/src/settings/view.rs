@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use deepsearch::config::{BackendKind, Config as WebConfig, Mode as WebMode};
+use deepsearch::effort::Effort;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
@@ -68,6 +69,8 @@ pub struct SettingsView {
     models: Vec<(SharedString, SharedString)>,
     /// `pi --version` of the configured `pi`, once known.
     pi_version: Option<String>,
+    /// The limits of web search are shown, not only what they are.
+    limits_open: bool,
     /// The page shown first (scripted runs open Speech to text directly).
     start_page: usize,
     /// The Code colors palette under the pointer in the open picker; the preview shows it.
@@ -168,6 +171,7 @@ impl SettingsView {
             tavily_key,
             models,
             pi_version: None,
+            limits_open: false,
             start_page: 0,
             pi_field: cx.new(|_| PiField::plain()),
             code_colors_hover: None,
@@ -617,12 +621,93 @@ impl SettingsView {
             .items(needs)
     }
 
-    fn web_search_page(&self, cx: &App) -> SettingPage {
+    /// The limits, behind a row that says what they are: few people change them.
+    fn limits_group(&self, weak: &WeakEntity<Self>) -> SettingGroup {
         let number = |min: f64, max: f64| NumberFieldOptions {
             min,
             max,
             step: 1.0,
         };
+        let open = self.limits_open;
+        let weak = weak.clone();
+        let toggle = SettingItem::render(move |_, _, cx| {
+            let weak = weak.clone();
+            limits_row(open, cx).on_click(move |_, _, cx| {
+                let _ = weak.update(cx, |this, cx| {
+                    this.limits_open = !this.limits_open;
+                    cx.notify();
+                });
+            })
+        })
+        // Found by the settings search also while closed.
+        .keywords([
+            "Limits per message",
+            "Search: searches",
+            "Search: pages read",
+            "Text per page (characters)",
+        ]);
+        let group = SettingGroup::new().title("Limits per message").item(toggle);
+        if !open {
+            return group;
+        }
+        group
+            .description("The model is told to answer with what it found once a limit is reached. Deep search's effort is chosen in the message box.")
+            .item(SettingItem::new(
+                "Search: searches",
+                SettingField::number_input(
+                    number(1., 50.),
+                    |cx| {
+                        f64::from(
+                            cx.global::<WebSearchState>()
+                                .config
+                                .modes
+                                .search
+                                .max_searches,
+                        )
+                    },
+                    |value, cx| update_web(cx, |c| c.modes.search.max_searches = to_u32(value)),
+                ),
+            ))
+            .item(SettingItem::new(
+                "Search: pages read",
+                SettingField::number_input(
+                    number(0., 50.),
+                    |cx| {
+                        f64::from(
+                            cx.global::<WebSearchState>()
+                                .config
+                                .modes
+                                .search
+                                .max_fetches,
+                        )
+                    },
+                    |value, cx| update_web(cx, |c| c.modes.search.max_fetches = to_u32(value)),
+                ),
+            ))
+            .item(
+                SettingItem::new(
+                    "Text per page (characters)",
+                    SettingField::number_input(
+                        NumberFieldOptions {
+                            min: 1000.,
+                            max: 100_000.,
+                            step: 1000.,
+                        },
+                        |cx| {
+                            #[allow(clippy::cast_precision_loss)]
+                            let chars = cx.global::<WebSearchState>().config.fetch.max_chars as f64;
+                            chars
+                        },
+                        |value, cx| {
+                            update_web(cx, |c| c.fetch.max_chars = to_u32(value) as usize);
+                        },
+                    ),
+                )
+                .description("Lower it for models with a small context window."),
+            )
+    }
+
+    fn web_search_page(&self, weak: &WeakEntity<Self>, cx: &App) -> SettingPage {
         SettingPage::new("Web search")
             .icon(AppIcon::Globe)
             .description("For chats with web search on (the globe next to the paperclip).")
@@ -639,66 +724,23 @@ impl SettingsView {
                             }
                         },
                     ),
+                ))
+                .item(SettingItem::new(
+                    "Deep search effort",
+                    SettingField::dropdown(
+                        Effort::ALL
+                            .map(|effort| (effort.as_str().into(), effort.label().into()))
+                            .into(),
+                        |cx| web_config(cx).default_effort.as_str().into(),
+                        |value, cx| {
+                            if let Some(effort) = Effort::parse(&value) {
+                                update_web(cx, |config| config.default_effort = effort);
+                            }
+                        },
+                    ),
                 )),
             )
-            .group(
-                SettingGroup::new()
-                    .title("Limits per message")
-                    .description("The model is told to answer with what it found once a limit is reached.")
-                    .item(SettingItem::new(
-                        "Search: searches",
-                        SettingField::number_input(
-                            number(1., 50.),
-                            |cx| f64::from(cx.global::<WebSearchState>().config.modes.search.max_searches),
-                            |value, cx| update_web(cx, |c| c.modes.search.max_searches = to_u32(value)),
-                        ),
-                    ))
-                    .item(SettingItem::new(
-                        "Search: pages read",
-                        SettingField::number_input(
-                            number(0., 50.),
-                            |cx| f64::from(cx.global::<WebSearchState>().config.modes.search.max_fetches),
-                            |value, cx| update_web(cx, |c| c.modes.search.max_fetches = to_u32(value)),
-                        ),
-                    ))
-                    .item(SettingItem::new(
-                        "Deep search: searches",
-                        SettingField::number_input(
-                            number(1., 200.),
-                            |cx| f64::from(cx.global::<WebSearchState>().config.modes.deep.max_searches),
-                            |value, cx| update_web(cx, |c| c.modes.deep.max_searches = to_u32(value)),
-                        ),
-                    ))
-                    .item(SettingItem::new(
-                        "Deep search: pages read",
-                        SettingField::number_input(
-                            number(0., 200.),
-                            |cx| f64::from(cx.global::<WebSearchState>().config.modes.deep.max_fetches),
-                            |value, cx| update_web(cx, |c| c.modes.deep.max_fetches = to_u32(value)),
-                        ),
-                    ))
-                    .item(
-                        SettingItem::new(
-                            "Text per page (characters)",
-                            SettingField::number_input(
-                                NumberFieldOptions {
-                                    min: 1000.,
-                                    max: 100_000.,
-                                    step: 1000.,
-                                },
-                                |cx| {
-                                    #[allow(clippy::cast_precision_loss)]
-                                    let chars = cx.global::<WebSearchState>().config.fetch.max_chars as f64;
-                                    chars
-                                },
-                                |value, cx| {
-                                    update_web(cx, |c| c.fetch.max_chars = to_u32(value) as usize);
-                                },
-                            ),
-                        )
-                        .description("Lower it for models with a small context window."),
-                    ),
-            )
+            .group(self.limits_group(weak))
             .group(
                 SettingGroup::new()
                     .title("Network")
@@ -715,7 +757,9 @@ impl SettingsView {
                         ),
                     )
                     .item(SettingItem::render(move |_, _, cx| {
-                        div().when_some(cx.global::<WebSearchState>().error.clone(), |this, error| {
+                        div()
+                            .debug_selector(|| "web-network".into())
+                            .when_some(cx.global::<WebSearchState>().error.clone(), |this, error| {
                             this.text_sm().text_color(cx.theme().danger).child(error)
                         })
                     })),
@@ -864,7 +908,7 @@ impl Render for SettingsView {
                 .pages([
                     self.general_page(&weak),
                     self.pi_page(&weak, cx),
-                    self.web_search_page(cx),
+                    self.web_search_page(&weak, cx),
                     self.ssh_page(&weak),
                     self.speech_page(),
                     naming_page(cx),
@@ -1375,6 +1419,34 @@ fn check_searxng(opened: bool, cx: &mut App) {
     });
 }
 
+/// What the limits of web search are, and whether they are open.
+fn limits_row(open: bool, cx: &App) -> Stateful<Div> {
+    let config = web_config(cx);
+    let theme = cx.theme();
+    let limits = format!(
+        "{} searches, {} pages, {} characters per page",
+        config.modes.search.max_searches, config.modes.search.max_fetches, config.fetch.max_chars
+    );
+    h_flex()
+        .id("web-limits")
+        .debug_selector(|| "web-limits".into())
+        .w_full()
+        .gap_3()
+        .py_1()
+        .cursor_pointer()
+        .text_color(theme.muted_foreground)
+        .hover(|this| this.text_color(theme.foreground))
+        .child(div().flex_1().min_w_0().text_sm().child(limits))
+        .child(
+            Icon::new(if open {
+                IconName::ChevronDown
+            } else {
+                IconName::ChevronRight
+            })
+            .small(),
+        )
+}
+
 fn startup_model(cx: &App) -> String {
     let defaults = &cx.global::<PiStartupState>().defaults;
     match (&defaults.provider, &defaults.model) {
@@ -1545,6 +1617,22 @@ mod tests {
         }
         let key = cx.read(|cx| web_config(cx).brave.api_key.clone());
         assert_eq!(key.as_deref(), Some("key"));
+    }
+
+    /// The limits are closed until their row is clicked.
+    #[gpui_kit::test]
+    fn the_limits_open_and_close(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let cx = open(dir.path(), cx);
+        let network = |cx: &mut VisualTestContext| cx.debug_bounds("web-network").unwrap().top();
+        let closed = network(cx);
+        for open in [true, false] {
+            let row = cx.debug_bounds("web-limits").unwrap();
+            cx.simulate_click(row.center(), gpui_kit::Modifiers::default());
+            dialog::draw(cx);
+            assert_eq!(network(cx) > closed + gpui_kit::px(100.), open);
+        }
+        assert_eq!(network(cx), closed);
     }
 
     /// Addresses where a SearXNG answers, and where nothing does.

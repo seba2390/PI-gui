@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::effort::{Deep, Effort};
+
 pub const CONFIG_FILE: &str = "config.json";
 pub const SEARCH_PROMPT_FILE: &str = "prompt-search.md";
 pub const DEEP_PROMPT_FILE: &str = "prompt-deep.md";
@@ -16,9 +18,12 @@ pub const DEEP_PROMPT_FILE: &str = "prompt-deep.md";
 pub const DIR_ENV: &str = "PISTACHIO_DEEPSEARCH_DIR";
 
 /// The instructions added to the system prompt in each mode. `{{date}}`, `{{max_searches}}`
-/// and `{{max_fetches}}` are filled in.
+/// and `{{max_fetches}}` are filled in, and in deep search `{{depth}}`:
+/// [`Effort::guidance`].
 pub const DEFAULT_SEARCH_PROMPT: &str = include_str!("prompt-search.md");
 pub const DEFAULT_DEEP_PROMPT: &str = include_str!("prompt-deep.md");
+/// Earlier defaults of it: a file that still holds one was not edited, and is brought up to date.
+const OLD_DEEP_PROMPTS: &[&str] = &[include_str!("prompt-deep-1.md")];
 
 /// How a chat uses the web.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -86,6 +91,8 @@ pub struct Config {
     pub backend: BackendKind,
     /// The mode new chats start in: `off`, `search` or `deep` (each chat remembers its own).
     pub default_mode: Mode,
+    /// Deep search's effort in new chats: `light`, `standard`, `thorough` or `max`.
+    pub default_effort: Effort,
     pub duckduckgo: DuckDuckGo,
     pub searxng: Searxng,
     pub brave: ApiKey,
@@ -93,6 +100,8 @@ pub struct Config {
     pub search: Search,
     pub fetch: Fetch,
     pub modes: Modes,
+    /// What each effort level of deep search may do.
+    pub deep: Deep,
 }
 
 impl Default for Config {
@@ -100,6 +109,7 @@ impl Default for Config {
         Self {
             backend: BackendKind::default(),
             default_mode: Mode::Off,
+            default_effort: Effort::default(),
             duckduckgo: DuckDuckGo::default(),
             searxng: Searxng::default(),
             brave: ApiKey {
@@ -110,6 +120,7 @@ impl Default for Config {
             search: Search::default(),
             fetch: Fetch::default(),
             modes: Modes::default(),
+            deep: Deep::default(),
         }
     }
 }
@@ -225,6 +236,8 @@ pub struct Fetch {
     pub timeout_secs: u64,
     /// Pages are cut off after this many bytes.
     pub max_download_bytes: usize,
+    /// The same for PDF files, which cannot be read when they are cut off.
+    pub max_pdf_bytes: usize,
     /// At most this much page text goes back to the model per `web_fetch`. Lower it for small
     /// context windows (roughly 4 characters per token).
     pub max_chars: usize,
@@ -241,6 +254,7 @@ impl Default for Fetch {
         Self {
             timeout_secs: 20,
             max_download_bytes: 4_000_000,
+            max_pdf_bytes: 30_000_000,
             max_chars: 12_000,
             passage_chars: 900,
             allow_private_networks: false,
@@ -251,38 +265,29 @@ impl Default for Fetch {
     }
 }
 
-/// Limits per user message in each mode.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Limits per user message (deep search's are in [`Deep`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
-#[derive(Default)]
 pub struct Modes {
     pub search: SearchBudget,
-    pub deep: DeepBudget,
 }
 
-macro_rules! budget {
-    ($name:ident, $searches:expr, $fetches:expr) => {
-        /// Further calls are refused and the model is told to answer with what it has.
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-        #[serde(default)]
-        pub struct $name {
-            pub max_searches: u32,
-            pub max_fetches: u32,
-        }
-
-        impl Default for $name {
-            fn default() -> Self {
-                Self {
-                    max_searches: $searches,
-                    max_fetches: $fetches,
-                }
-            }
-        }
-    };
+/// Further calls are refused and the model is told to answer with what it has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SearchBudget {
+    pub max_searches: u32,
+    pub max_fetches: u32,
 }
 
-budget!(SearchBudget, 3, 3);
-budget!(DeepBudget, 15, 25);
+impl Default for SearchBudget {
+    fn default() -> Self {
+        Self {
+            max_searches: 3,
+            max_fetches: 3,
+        }
+    }
+}
 
 /// The instructions for each mode, as read from disk.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -331,8 +336,12 @@ pub fn load(dir: &Path) -> Result<(Config, Prompts), ConfigError> {
     };
 
     let prompts = Prompts {
-        search: read_or_write(&dir.join(SEARCH_PROMPT_FILE), DEFAULT_SEARCH_PROMPT)?,
-        deep: read_or_write(&dir.join(DEEP_PROMPT_FILE), DEFAULT_DEEP_PROMPT)?,
+        search: read_or_write(&dir.join(SEARCH_PROMPT_FILE), DEFAULT_SEARCH_PROMPT, &[])?,
+        deep: read_or_write(
+            &dir.join(DEEP_PROMPT_FILE),
+            DEFAULT_DEEP_PROMPT,
+            OLD_DEEP_PROMPTS,
+        )?,
     };
     Ok((config, prompts))
 }
@@ -367,9 +376,13 @@ fn write_config(path: &Path, config: &Config) -> Result<(), ConfigError> {
     fs::rename(&tmp, path).map_err(io_error(path))
 }
 
-fn read_or_write(path: &Path, default: &str) -> Result<String, ConfigError> {
+fn read_or_write(path: &Path, default: &str, old: &[&str]) -> Result<String, ConfigError> {
     match fs::read_to_string(path) {
-        Ok(text) => Ok(text),
+        Ok(text) if !old.contains(&text.as_str()) => Ok(text),
+        Ok(_) => {
+            fs::write(path, default).map_err(io_error(path))?;
+            Ok(default.to_owned())
+        }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             fs::write(path, default).map_err(io_error(path))?;
             Ok(default.to_owned())
@@ -407,18 +420,15 @@ mod tests {
 
         fs::write(
             dir.path().join(CONFIG_FILE),
-            r#"{"backend":"searxng","searxng":{"url":"http://box:8888"},"modes":{"deep":{"max_fetches":3}}}"#,
+            r#"{"backend":"searxng","searxng":{"url":"http://box:8888"},"modes":{"search":{"max_fetches":2}},"deep":{"light":{"max_fetches":3}}}"#,
         )
         .unwrap();
         let (config, _) = load(dir.path()).unwrap();
         assert_eq!(config.backend, BackendKind::Searxng);
         assert_eq!(config.searxng.url, "http://box:8888");
-        assert_eq!(config.modes.deep.max_fetches, 3);
-        assert_eq!(
-            config.modes.deep.max_searches,
-            DeepBudget::default().max_searches
-        );
-        assert_eq!(config.modes.search, Modes::default().search);
+        assert_eq!(config.modes.search.max_fetches, 2);
+        assert_eq!(config.deep.light.max_fetches, 3);
+        assert_eq!(config.deep.max, Deep::default().max);
         // The file now lists every setting, keeping the edits.
         let rewritten = fs::read_to_string(dir.path().join(CONFIG_FILE)).unwrap();
         assert!(rewritten.contains("\"default_mode\": \"off\""));
@@ -426,6 +436,18 @@ mod tests {
 
         fs::write(dir.path().join(CONFIG_FILE), r#"{"backend":"bing"}"#).unwrap();
         assert!(matches!(load(dir.path()), Err(ConfigError::Invalid { .. })));
+    }
+
+    #[test]
+    fn instructions_that_were_not_edited_are_brought_up_to_date() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(DEEP_PROMPT_FILE);
+        fs::write(&file, OLD_DEEP_PROMPTS[0]).unwrap();
+        assert_eq!(load(dir.path()).unwrap().1.deep, DEFAULT_DEEP_PROMPT);
+        assert_eq!(fs::read_to_string(&file).unwrap(), DEFAULT_DEEP_PROMPT);
+        fs::write(&file, "Mine.").unwrap();
+        assert_eq!(load(dir.path()).unwrap().1.deep, "Mine.");
+        assert!(DEFAULT_DEEP_PROMPT.contains("{{depth}}"));
     }
 
     #[test]

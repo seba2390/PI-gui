@@ -5,6 +5,7 @@
 //! methods. Views observe it and render; they never hold protocol state.
 
 pub use deepsearch::config::Mode as WebMode;
+use deepsearch::effort::Effort;
 use pi_sessions::Mode;
 use remote::HostId;
 use std::collections::{BTreeMap, VecDeque};
@@ -602,6 +603,14 @@ impl PiSession {
             .unwrap_or_default()
     }
 
+    /// How much effort this chat's deep search makes.
+    pub fn web_effort(&self) -> Effort {
+        self.extension_status
+            .get(deepsearch::EFFORT_KEY)
+            .and_then(|text| Effort::parse(text))
+            .unwrap_or_default()
+    }
+
     /// Whether this chat's pi loaded web search (it offers the `/websearch` command).
     pub fn web_search_available(&self) -> bool {
         self.mode == Mode::Chat
@@ -650,6 +659,52 @@ impl PiSession {
             });
         })
         .detach();
+    }
+
+    /// Sets the effort of this chat's deep search, from the next message on.
+    pub fn set_web_effort(&mut self, effort: Effort, cx: &mut Context<Self>) {
+        if !self.web_search_available() || self.web_effort() == effort {
+            return;
+        }
+        let Some(client) = self.client.clone() else {
+            return;
+        };
+        // Shown right away, like the mode.
+        let previous = self.web_effort();
+        self.show_web_effort(effort, cx);
+        let command = format!("/{} effort {}", deepsearch::COMMAND, effort.as_str());
+        cx.spawn(async move |this, cx| {
+            let result = client
+                .prompt(command, Vec::new(), Some(StreamingBehavior::FollowUp))
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if let Err(error) = result {
+                    this.show_web_effort(previous, cx);
+                    this.report(&error, cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn show_web_effort(&mut self, effort: Effort, cx: &mut Context<Self>) {
+        self.extension_status
+            .insert(deepsearch::EFFORT_KEY.into(), effort.as_str().into());
+        cx.emit(SessionEvent::MetaChanged);
+        cx.notify();
+    }
+
+    /// As if pi had loaded web search and set this.
+    #[cfg(test)]
+    pub fn set_web_for_tests(&mut self, mode: WebMode, effort: Effort, cx: &mut Context<Self>) {
+        self.commands = vec![
+            serde_json::from_value(serde_json::json!({
+                "name": deepsearch::COMMAND, "source": "extension",
+            }))
+            .unwrap(),
+        ];
+        self.show_web_mode(mode, cx);
+        self.show_web_effort(effort, cx);
     }
 
     pub fn session_file(&self) -> Option<PathBuf> {

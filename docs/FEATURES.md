@@ -41,8 +41,18 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
     - **Search**: a quick lookup when needed (a few searches and pages), then a concise answer
       with links.
     - **Deep search**: a thorough investigation: the model plans sub-questions, searches from
-      several angles, reads many pages, cross-checks key facts and reports back with a
-      structured, sourced report. Takes minutes rather than seconds.
+      several angles, reads many pages (also PDFs), cross-checks key facts and reports back with a
+      structured, sourced report. A slider next to it sets the effort (`/websearch effort
+      light|standard|thorough|max` too): from 10 searches and pages to 160, with more results per
+      search. Once the report is written it is checked: links are tried, and from Standard on the
+      model judges, from the sources' own passages and without the conversation, whether they back
+      its claims (the key ones; all of them from Thorough on; one by one in Max) and what the
+      question still lacks. Quotes it gives as proof are looked up on the page. The report goes back
+      to be corrected with what was found, and a note below it says how it did.
+
+      Long research stays within the context: older pages are cut down to the passages that
+      mattered, results and passages the model has seen are not shown again, and a line below the
+      message box says how far it is.
 
     The model searches (`web_search`) and reads pages (`web_fetch`); the work is done in Rust
     by the app itself, and a small embedded pi extension only connects the tools to pi. Pages
@@ -55,12 +65,13 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
       `searxng.url`, e.g. a self-hosted instance with `json` enabled in its `settings.yml`, or with
       `searxng.local` the one Pistachio runs on this computer;
       `brave` or `tavily` with an API key or `api_key_env`), `default_mode` for new chats,
-      `modes.search` / `modes.deep` limits (`max_searches`, `max_fetches` per message),
+      `default_effort`, `modes.search` limits (`max_searches`, `max_fetches` per message), `deep`
+      (what each effort level may do: searches, pages, results, checked claims, revisions),
       results per search, page text per read (`fetch.max_chars`; lower it for small context
       windows), `fetch.allow_private_networks` and timeouts. Settings added in later versions
       are filled in automatically.
     - `prompt-search.md` and `prompt-deep.md`: each mode's instructions (`{{date}}`,
-      `{{max_searches}}` and `{{max_fetches}}` are filled in). Delete a file to get the
+      `{{max_searches}}`, `{{max_fetches}}` and the effort's `{{depth}}` are filled in). Delete a file to get the
       default back.
     - **SearXNG on this computer** (macOS and Linux, no Docker): choosing SearXNG in Settings
       checks whether one answers at the address. If not, it shows what is missing and asks whether
@@ -265,8 +276,8 @@ mouse.
   and shortcuts to add models or edit `models.json`.
 - **Web search:** the search service (DuckDuckGo, SearXNG, Brave or Tavily) and the address or
   API key the chosen one needs (keys are stored only on this computer) or a SearXNG on this
-  computer, whether new chats search, limits per message, and
-  local network access.
+  computer, whether new chats search and with how much effort, limits
+  per message, and local network access.
 - **SSH connections:** whether saved connections connect when the app opens (off by
   default), and the saved hosts with their status, connecting, adding and managing them.
 - **Speech to text:** the dictation models (download, use, remove), how long a silence ends

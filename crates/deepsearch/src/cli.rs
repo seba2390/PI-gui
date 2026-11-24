@@ -2,7 +2,7 @@
 //! stdin and one JSON reply on stdout (`{"ok":true,…}` or `{"ok":false,"error":…}`).
 //!
 //! Commands: `config` (settings and each mode's instructions), `search` (`{"query",
-//! "max_results"?}`) and `fetch` (`{"url","focus"?}`).
+//! "max_results"?}`), `fetch` (`{"url","focus"?}`), `check` (a report: [`check`]) and `quotes`.
 //!
 //! For trying settings by hand, words after the command become the input and the reply is
 //! printed as the model would see it:
@@ -13,7 +13,9 @@ use std::io::{IsTerminal as _, Read as _};
 
 use serde_json::{Value, json};
 
+use crate::check::{self, CheckInput};
 use crate::config::{self, Config};
+use crate::effort::Effort;
 use crate::tools;
 
 pub const FLAG: &str = "--deepsearch-tool";
@@ -26,6 +28,15 @@ pub fn run_if_requested() -> Option<i32> {
     }
     let command = args.next().unwrap_or_default();
     let words: Vec<String> = args.collect();
+    // A file that breaks its reader is an answer too, and must not look like a crash of the app.
+    std::panic::set_hook(Box::new(|info| {
+        eprintln!("{info}");
+        println!(
+            "\n{}",
+            failure("The page could not be read. Try another source.")
+        );
+        std::process::exit(1);
+    }));
     let by_hand = !words.is_empty();
     let input = if by_hand {
         input_from_words(&command, &words)
@@ -44,7 +55,8 @@ pub fn run_if_requested() -> Option<i32> {
             );
         }
     } else {
-        println!("{reply}");
+        // On a line of its own, whatever a library printed.
+        println!("\n{reply}");
     }
     Some(i32::from(!ok))
 }
@@ -83,10 +95,22 @@ pub fn run(command: &str, input: &Value) -> Value {
             "ok": true,
             "config": config,
             "prompts": prompts,
+            "guidance": Effort::ALL
+                .map(|effort| (effort.as_str(), effort.guidance()))
+                .into_iter()
+                .collect::<std::collections::BTreeMap<_, _>>(),
             "dir": dir,
         }),
         "search" => tool(&config, input, tools::web_search),
         "fetch" => tool(&config, input, tools::web_fetch),
+        "check" => match serde_json::from_value::<CheckInput>(input.clone()) {
+            Ok(input) => json!({ "ok": true, "checked": check::check(&config, &input) }),
+            Err(error) => failure(&format!("Invalid input: {error}")),
+        },
+        "quotes" => match serde_json::from_value(input.clone()) {
+            Ok(input) => json!({ "ok": true, "found": check::quotes(&input) }),
+            Err(error) => failure(&format!("Invalid input: {error}")),
+        },
         other => failure(&format!("Unknown deep search command \"{other}\".")),
     }
 }

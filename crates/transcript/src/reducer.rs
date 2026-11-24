@@ -280,6 +280,14 @@ impl Transcript {
                     self.edit_bash(index, |bash| append_output(&mut bash.output, delta));
                 }
             }
+            Event::EntryAppended { entry } => {
+                // A message of an extension that comes at the end of a turn (others come as
+                // messages).
+                let shown = entry["type"] == "custom_message" && entry["display"] == true;
+                if let Some(text) = entry["content"].as_str().filter(|_| shown) {
+                    self.push_notice(NoticeKind::Info, text);
+                }
+            }
             Event::SessionInfoChanged { name } => self.set_session_name(name.clone()),
             Event::ThinkingLevelChanged { level } => {
                 self.thinking_level = Some(*level);

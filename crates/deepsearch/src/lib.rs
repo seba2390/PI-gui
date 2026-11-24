@@ -6,12 +6,16 @@
 //! `/websearch` command, adds the mode's instructions and limits, and runs this crate's
 //! helper ([`cli`]: the app's own executable started with [`cli::FLAG`]) for the actual work: searching ([`search`]), fetching only public pages
 //! ([`http`]), extracting the readable text ([`extract`]) and keeping the passages that matter
-//! ([`rank`]). Settings live in [`config`].
+//! ([`rank`]), and checking a report's links and claims ([`check`]). Settings live in [`config`].
 
+pub mod check;
 pub mod cli;
 pub mod config;
+pub mod effort;
 pub mod extract;
 pub mod http;
+pub mod pages;
+pub mod pdf;
 pub mod rank;
 pub mod search;
 pub mod tools;
@@ -28,7 +32,10 @@ pub const BIN_ENV: &str = "PISTACHIO_DEEPSEARCH_BIN";
 pub const TOOL_NAMES: [&str; 2] = ["web_search", "web_fetch"];
 /// The extension's `setStatus` key; its text is the chat's [`config::Mode`] (absent: off).
 pub const STATUS_KEY: &str = "pistachio-deepsearch";
-/// The extension's command that sets the mode: `/websearch off|search|deep`.
+/// The key of the status that says deep search's [`effort::Effort`] (absent: not deep).
+pub const EFFORT_KEY: &str = "pistachio-deepsearch-effort";
+/// The extension's command that sets the mode, `/websearch off|search|deep`, and the effort,
+/// `/websearch effort light|standard|thorough|max`.
 pub const COMMAND: &str = "websearch";
 
 /// Writes the extension into `dir` (only when it changed) and returns its path.

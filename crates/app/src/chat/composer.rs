@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
+use deepsearch::effort::Effort;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{
     Escape, IndentInline, InputEvent, MoveDown, MoveUp, Textarea, TextareaState,
@@ -20,7 +21,9 @@ use gpui_kit::component::list::{List, ListState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::progress::ProgressCircle;
+use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
 use gpui_kit::component::speech::{SpeechEvent, SpeechState, SpeechStatus, SpeechWaveform};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, IndexPath, Sizable as _, h_flex, v_flex,
 };
@@ -162,6 +165,10 @@ pub struct Composer {
     dictation_focus: FocusHandle,
     /// The dictation shortcut between its press and release (hold to talk, tap to toggle).
     push_to_talk: crate::stt::shortcut::PushToTalk,
+    /// Deep search's effort, as the index of an [`Effort`].
+    effort: Entity<SliderState>,
+    /// The effort is being changed: what the session says is older.
+    effort_moving: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -181,6 +188,8 @@ struct Mention {
 
 /// Files offered for an `@` mention at once.
 const MENTION_RESULTS: usize = 8;
+/// The distance between two stops of the effort slider.
+const EFFORT_STOP: f32 = 28.;
 /// The `/` list's height: about 8 rows, then it scrolls.
 const SUGGESTIONS_HEIGHT: Rems = rems(16.5);
 
@@ -237,6 +246,25 @@ impl Composer {
         ));
         subscriptions.push(cx.observe(&speech, |_, _, cx| cx.notify()));
         subscriptions.push(cx.observe(&crate::stt::models::models(cx), |_, _, cx| cx.notify()));
+        let effort = effort_value(session.read(cx).web_effort());
+        let effort = cx.new(|_| {
+            SliderState::new()
+                .min(0.)
+                .max(effort_value(Effort::Max))
+                .step(1.)
+                .default_value(effort)
+        });
+        subscriptions.push(cx.subscribe(&effort, Self::on_effort));
+        subscriptions.push(
+            cx.observe_in(&session, window, |this, session, window, cx| {
+                let effort = session.read(cx).web_effort();
+                let value = effort_value(effort);
+                if !this.effort_moving && effort_at(this.effort.read(cx).value().end()) != effort {
+                    this.effort
+                        .update(cx, |effort, cx| effort.set_value(value, window, cx));
+                }
+            }),
+        );
         let weak = cx.weak_entity();
         let root = session.read(cx).cwd().to_path_buf();
         let location = match session.read(cx).host().cloned() {
@@ -270,6 +298,8 @@ impl Composer {
             dictation: None,
             dictation_focus: cx.focus_handle(),
             push_to_talk: crate::stt::shortcut::PushToTalk::default(),
+            effort,
+            effort_moving: false,
             _subscriptions: subscriptions,
         }
     }
@@ -956,6 +986,9 @@ impl Composer {
                 )
                 .when_some(web_mode, |left, mode| {
                     left.child(self.render_web_mode(mode, cx))
+                        .when(mode == WebMode::Deep, |left| {
+                            left.child(self.render_effort(cx))
+                        })
                 });
             return self.toolbar_layout(left, cx).into_any_element();
         }
@@ -1058,6 +1091,78 @@ impl Composer {
                 menu
             }),
         )
+    }
+
+    fn on_effort(&mut self, _: Entity<SliderState>, event: &SliderEvent, cx: &mut Context<Self>) {
+        match event {
+            SliderEvent::Change(_) => self.effort_moving = true,
+            SliderEvent::Release(value) => {
+                self.effort_moving = false;
+                let effort = effort_at(value.end());
+                self.session
+                    .update(cx, |session, cx| session.set_web_effort(effort, cx));
+            }
+        }
+        cx.notify();
+    }
+
+    /// Deep search's effort: a slider with the name of the level it is at.
+    fn render_effort(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let effort = effort_at(self.effort.read(cx).value().end());
+        // The slider gives its first and last stop half as much room as those between: the rest
+        // of theirs is beside it.
+        let beside = |id: &'static str, end: Effort, cx: &mut Context<Self>| {
+            div()
+                .id(id)
+                .debug_selector(move || id.into())
+                .flex_none()
+                .w(px(EFFORT_STOP / 2.))
+                .h_6()
+                .cursor_pointer()
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.effort.update(cx, |effort, cx| {
+                        effort.set_value(effort_value(end), window, cx);
+                    });
+                    this.session
+                        .update(cx, |session, cx| session.set_web_effort(end, cx));
+                }))
+        };
+        let before = beside("web-effort-first", Effort::Light, cx);
+        let after = beside("web-effort-last", Effort::Max, cx);
+        h_flex()
+            .id("web-effort")
+            .debug_selector(|| "web-effort".into())
+            .flex_none()
+            .tooltip(move |window, cx| {
+                let text = format!("Effort: {}. {}", effort.label(), effort.summary());
+                Tooltip::new(text).build(window, cx)
+            })
+            .child(before)
+            .child(
+                div()
+                    .debug_selector(|| "web-effort-track".into())
+                    .flex_none()
+                    .w(px(EFFORT_STOP * effort_value(Effort::Max)))
+                    .child(
+                        Slider::new(&self.effort)
+                            .bg(palette(cx).accent)
+                            .accessibility_label(format!("Deep search effort: {}", effort.label())),
+                    ),
+            )
+            .child(after)
+            .child(
+                // As wide as the longest name, so nothing moves with the slider, and clear of the
+                // knob at its end. The letters' middle, not the line's, is level with the track.
+                div()
+                    .relative()
+                    .top(px(-1.5))
+                    .w(rems(4.5))
+                    .pl_2()
+                    .whitespace_nowrap()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(effort.label()),
+            )
     }
 
     /// The attach button with its searchable list of the working folder's files.
@@ -1753,7 +1858,9 @@ impl Composer {
             .read(cx)
             .extension_status()
             .iter()
-            .filter(|(key, _)| key.as_str() != deepsearch::STATUS_KEY)
+            .filter(|(key, _)| {
+                ![deepsearch::STATUS_KEY, deepsearch::EFFORT_KEY].contains(&key.as_str())
+            })
             .map(|(_, text)| text.clone())
             .collect::<Vec<_>>();
         if statuses.is_empty() {
@@ -2178,6 +2285,22 @@ pub(crate) fn folder_label(
 /// Element id for a dropdown whose items depend on `key`. gpui-kit keeps a built menu per
 /// trigger id and only rebuilds it after certain dismissals, so a stale menu could be shown
 /// (e.g. the previous model's thinking levels); a content-derived id always gets a fresh one.
+#[allow(clippy::cast_precision_loss)] // One of four.
+fn effort_value(effort: Effort) -> f32 {
+    Effort::ALL
+        .iter()
+        .position(|other| *other == effort)
+        .unwrap_or_default() as f32
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // One of four.
+fn effort_at(value: f32) -> Effort {
+    Effort::ALL
+        .get(value.round() as usize)
+        .copied()
+        .unwrap_or_default()
+}
+
 fn web_mode_label(mode: WebMode) -> &'static str {
     match mode {
         WebMode::Off => "Off",
@@ -2281,6 +2404,14 @@ fn folder_menu(
 #[cfg(test)]
 mod inline_tests {
     use super::inline_file_block;
+
+    #[test]
+    fn every_effort_has_its_place_on_the_slider() {
+        use super::{Effort, effort_at, effort_value};
+        for effort in Effort::ALL {
+            assert_eq!(effort_at(effort_value(effort)), effort);
+        }
+    }
 
     #[test]
     fn dictation_shortcut_matches_exactly() {
@@ -2568,6 +2699,87 @@ mod toolbar_tests {
         let [smaller, least] = at(px(300.), cx);
         assert!(smaller.size.width < device.size.width);
         assert!(least.size.width > px(56.), "the name is gone");
+    }
+
+    /// The effort slider is there in deep search only, and follows the session.
+    #[gpui_kit::test]
+    fn deep_search_has_an_effort_slider(cx: &mut TestAppContext) {
+        use super::{Effort, WebMode, effort_at};
+
+        cx.update(|cx| {
+            gpui_kit::component::init(cx);
+            cx.set_global(crate::config::AppConfig::for_tests("pi".into()));
+            cx.set_global(crate::settings::AppSettings::default());
+            let hosts = cx.new(|_| crate::hosts::Hosts::for_tests(Vec::new()));
+            cx.set_global(crate::hosts::HostsHandle(hosts));
+            crate::stt::models::init(cx);
+        });
+        let session = cx.new(|_| PiSession::idle(PathBuf::from("/chat"), Mode::Chat));
+        let shown = session.clone();
+        let mut composer = None;
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|cx| Composer::new(shown, window, cx));
+            composer = Some(view.clone());
+            Root::new(view, window, cx)
+        });
+        let composer = composer.unwrap();
+        let mut show = |mode, effort| {
+            session.update(cx, |session, cx| {
+                session.set_web_for_tests(mode, effort, cx);
+            });
+            cx.run_until_parked();
+            let at = cx.read(|cx| effort_at(composer.read(cx).effort.read(cx).value().end()));
+            (cx.debug_bounds("web-effort").is_some(), at)
+        };
+        assert_eq!(
+            show(WebMode::Search, Effort::Standard),
+            (false, Effort::Standard)
+        );
+        assert_eq!(show(WebMode::Deep, Effort::Max), (true, Effort::Max));
+        assert_eq!(show(WebMode::Deep, Effort::Light), (true, Effort::Light));
+        assert!(!show(WebMode::Off, Effort::Light).0);
+
+        // Moving it is not undone by what the session says meanwhile.
+        show(WebMode::Deep, Effort::Light);
+        let track = cx.debug_bounds("web-effort-track").unwrap();
+        let end = gpui_kit::point(track.right() - px(2.), track.center().y);
+        cx.simulate_mouse_down(
+            end,
+            gpui_kit::MouseButton::Left,
+            gpui_kit::Modifiers::default(),
+        );
+        session.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        let effort = |cx: &VisualTestContext| {
+            effort_at(cx.read(|cx| composer.read(cx).effort.read(cx).value().end()))
+        };
+        assert_eq!(effort(cx), Effort::Max);
+        cx.simulate_mouse_up(
+            end,
+            gpui_kit::MouseButton::Left,
+            gpui_kit::Modifiers::default(),
+        );
+
+        // Every stop has as much room as the next one, the ends' partly beside the track.
+        let bounds = |name, cx: &mut VisualTestContext| cx.debug_bounds(name).unwrap();
+        let (first, last) = (
+            bounds("web-effort-first", cx),
+            bounds("web-effort-last", cx),
+        );
+        assert_eq!((first.right(), last.left()), (track.left(), track.right()));
+        let stop = track.size.width / 3.;
+        for (index, expected) in Effort::ALL.into_iter().enumerate() {
+            #[allow(clippy::cast_precision_loss)] // One of four.
+            let left = first.left() + stop * index as f32;
+            for x in [left + px(3.), left + stop - px(3.)] {
+                cx.simulate_click(
+                    gpui_kit::point(x, track.center().y),
+                    gpui_kit::Modifiers::default(),
+                );
+                cx.run_until_parked();
+                assert_eq!(effort(cx), expected, "{x:?}");
+            }
+        }
     }
 
     /// A short name is as wide as it is, in any window.

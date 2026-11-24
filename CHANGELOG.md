@@ -8,6 +8,16 @@ All notable changes to PI-gui are listed here. The format follows
 
 ### Added
 
+- Deep search has an effort slider next to it in the message box: Light, Standard, Thorough or Max.
+  More effort is more searches, pages and results per search, and a stricter check of the report.
+  Each chat remembers its own; Settings → Web search has the one new chats start with.
+- Deep search checks its reports: whether the links work and were read, what the sources say about
+  the claims (the key ones in Standard, all of them from Thorough on), and whether a part of the
+  question was left out. What it finds goes back to the model once or more, and a note says how
+  the report did.
+- Deep search reads PDF files.
+- Long research no longer fills up the context: older pages are cut down to their key passages, and
+  nothing is shown to the model twice. A line below the message box says how far it is.
 - SearXNG can run on this computer, with one click and without Docker (macOS and Linux). Choosing
   it in Settings → Web search checks whether one answers at the address. If not, it shows what is
   missing and asks: Download and run gets SearXNG, a Python of its own and the packages it needs
@@ -23,6 +33,8 @@ All notable changes to PI-gui are listed here. The format follows
   low and high as xhigh, it has off, low, medium and xhigh. Shift+Tab steps through the same ones.
 - Settings → Web search shows only what the chosen service needs: the SearXNG address, the Brave or
   the Tavily API key. The others keep what was entered. Searching the settings for one finds it.
+- The limits per message in Settings → Web search are behind a row that says what they are. Those
+  of deep search are gone: its effort is chosen in the message box.
 
 ## [0.4.9] - 2026-11-24
 
