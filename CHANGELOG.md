@@ -6,6 +6,15 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- The `/` list works from the keyboard: ↑ / ↓ move through it, Tab or Enter takes the highlighted
+  command and Esc closes it. Every match is listed (it scrolls), and matching looks inside names
+  (`/add` finds `skill:add-skill`). Enter on a half-typed command completes it instead of sending
+  it to the model.
+- `/login` and `/logout` (optionally with a provider) open pi's sign-in in a terminal, `/reload`
+  restarts pi on the conversation, and `/settings` opens Settings.
+
 ### Changed
 
 - Settings → SSH connections: each saved connection has a switch that connects it and turns it
@@ -26,6 +35,32 @@ All notable changes to PI-gui are listed here. The format follows
 
 ### Fixed
 
+- API keys, cloud settings, proxies and other variables exported in your shell's startup files
+  reach pi when Pistachio is started from the Dock or a desktop; only `PATH` and a few others did.
+  A slow shell no longer freezes the window, and one that leaves a background process running no
+  longer hangs it. If the shell can't be read, pi is still looked for in the usual folders.
+- The SSH password prompt is ready to type in, and Enter sends the password; it cancelled instead.
+  Enter in Rename, Add model, the SSH dialogs and an extension's text question does what the
+  button does, instead of closing the dialog and losing what you typed. Extension choices, /resume
+  and /fork work with the arrow keys and Enter.
+- An extension's yes/no question is no longer answered "yes" by an Enter typed for the message box:
+  it takes a click, or Enter on the button itself.
+- A message you have not sent (and its attachments) is kept when you open another session, start
+  a new one, switch between Chat and Code, restart pi, reconnect, or save a model or skill, until
+  the app quits. A new session nothing was sent in comes back too, and choosing another folder or
+  machine takes the message along.
+- A message pi refuses (no API key, say) goes back to the message box with its images, followed by
+  the messages waiting behind it. It was lost.
+- `!commands` show their output as it comes, can be stopped with Esc or the stop button, and keep
+  running when you switch chats.
+- `/compact` shows that it is working, can be cancelled with Esc or the stop button, keeps going
+  when you switch chats, and holds messages sent meanwhile.
+- Esc and Alt+↑ give queued messages back with their images.
+- `/model` takes an exact name over one that merely contains it and lists the candidates when
+  several match; `/thinking` accepts only the levels the model offers.
+- Renaming a session no longer opens it.
+- One value in `settings.json` that can't be read no longer resets every setting: the others are
+  kept, and so is a copy of the file.
 - Reconnect starts pi again in an SSH session whose connection ended; it connected to the host
   but left the stopped session as it was.
 

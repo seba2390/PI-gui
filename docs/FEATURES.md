@@ -17,10 +17,15 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   live step count while running, and every nested call and reply when expanded.
 - Composer: attachments, working-folder picker, model and thinking pickers, context-window wheel,
   `/` command completion, inline `@file` completion (paths with spaces are quoted like pi does),
-  ↑ / ↓ through earlier prompts, and `!cmd` shell commands. Messages typed while pi starts or is
-  busy sending are listed above the input as “Waiting to send”, each with a cancel button.
+  ↑ / ↓ through earlier prompts, and `!cmd` shell commands (with live output; Esc stops them).
+  Messages typed while pi starts, compacts or is busy sending are listed above the input as
+  “Waiting to send”, each with a cancel button. A message you have not sent stays with its
+  session while the app runs, also when you open another one.
 - If pi stops (a crash or a failed start), the chat offers **Restart pi** on the same session;
-  anything not yet sent goes back into the message box.
+  anything not yet sent, or refused by pi, goes back into the message box.
+- pi gets your login shell's environment (API keys, proxies, cloud settings), also when the app is
+  started from the Dock or a desktop. Programs can tell by `PISTACHIO_RESOLVING_ENVIRONMENT=1`
+  that the shell is only asked for it.
 - Left sidebar with a **Chat | Code** switch (⌘1 / ⌘2):
   - **Code**: the coding agent in a project folder; sessions are grouped under their folder
     (collapsible, "+" for a new session there), including ones started from the terminal.
@@ -273,10 +278,10 @@ Composer behaviour mirrors pi's terminal.
 |---|---|
 | Enter / Shift+Enter | Send (steers while the agent works) / newline |
 | Alt+Enter | Queue a follow-up message |
-| Esc | Interrupt (queued messages return to the editor) |
+| Esc | Interrupt (queued messages return to the editor), or stop `!cmd` / `/compact` |
 | Alt+↑ | Restore queued messages to the editor |
 | Shift+Tab | Cycle thinking level |
-| Tab | Complete a `/` command or `@file` |
+| Tab / Enter | Complete the highlighted `/` command or `@file` (↑ / ↓ choose) |
 | ↑ / ↓ | Earlier / later prompts (in an empty message box) |
 | ⌘⇧Space | Dictate: hold to talk, tap to start / stop |
 | Ctrl+T / Ctrl+O | Expand all thinking / tool output |
@@ -296,5 +301,6 @@ the start / end of the line or delete to its start, as in Terminal.app and iTerm
 keeps its own shell, so a dev server keeps running when you switch sessions.
 
 Built-in pi commands that the TUI handles itself are mapped onto RPC: `/new`, `/compact`, `/name`,
-`/model`, `/thinking`, `/session`, `/copy`, `/quit`. Extension commands, prompt templates and
-`/skill:…` go to pi unchanged.
+`/model`, `/thinking`, `/session`, `/copy`, `/settings`, `/quit`, `/reload` (restarts pi on the
+conversation) and `/login` / `/logout` (pi's sign-in in a terminal). Extension commands, prompt
+templates and `/skill:…` go to pi unchanged.
