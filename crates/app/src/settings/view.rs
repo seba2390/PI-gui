@@ -11,7 +11,7 @@ use gpui_kit::component::setting::{
     NumberFieldOptions, RenderOptions, SelectIndex, SettingField, SettingGroup, SettingItem,
     SettingPage, Settings,
 };
-use gpui_kit::component::{ActiveTheme as _, IconName, Sizable as _, h_flex};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use pi_config::settings::{StartupDefaults, THINKING_LEVELS};
@@ -20,8 +20,8 @@ use super::{AppSettings, StartMode, TextSize, ThemeChoice};
 use crate::code_colors::CodeColors;
 use crate::config::AppConfig;
 use crate::remote_ui::SavedHostAction;
-use crate::ui::AppIcon;
 use crate::ui::spinner::IndicatorStyle;
+use crate::ui::{AppIcon, QuietButton as _, buttons};
 
 /// What the window does for the page (dialogs and connections live there).
 #[derive(Debug, Clone)]
@@ -502,13 +502,14 @@ impl SettingsView {
                 SettingGroup::new()
                     .title("Models")
                     .description("Custom models and providers in pi's models.json.")
-                    .item(SettingItem::render(move |_, _, _| {
+                    .item(SettingItem::render(move |_, _, cx| {
                         let (weak_add, weak_edit) = (weak_add.clone(), weak_edit.clone());
-                        h_flex()
-                            .gap_2()
+                        let accent = crate::theme::palette(cx).accent_icon;
+                        buttons()
                             .child(
                                 Button::new("settings-add-model")
-                                    .small()
+                                    .form_other(cx)
+                                    .icon(Icon::from(IconName::Plus).text_color(accent))
                                     .label("Add model…")
                                     .on_click(move |_, _, cx| {
                                         let _ = weak_add
@@ -517,7 +518,8 @@ impl SettingsView {
                             )
                             .child(
                                 Button::new("settings-edit-models")
-                                    .small()
+                                    .form_other(cx)
+                                    .icon(Icon::from(AppIcon::SquarePen).text_color(accent))
                                     .label("Edit models.json…")
                                     .on_click(move |_, _, cx| {
                                         let _ = weak_edit

@@ -1,8 +1,13 @@
 //! The app's standard button styles.
 
 use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
-use gpui_kit::component::{ActiveTheme as _, Icon};
-use gpui_kit::{App, Styled as _, black, px, white};
+use gpui_kit::component::{ActiveTheme as _, Icon, h_flex};
+use gpui_kit::{App, Div, Styled as _, black, px, white};
+
+/// The buttons of a form or a group of settings, centered below it.
+pub fn buttons() -> Div {
+    h_flex().w_full().justify_center().flex_wrap().gap_2()
+}
 
 /// Transparent at rest with a clearly visible hover fill, matching the hover of sidebar rows.
 ///

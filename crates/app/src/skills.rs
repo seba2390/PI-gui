@@ -29,7 +29,7 @@ use crate::builtin_skills;
 use crate::chat::session::{Lifecycle, PiSession};
 use crate::config::{AppConfig, RecentFolders};
 use crate::pi_place::PiPlace;
-use crate::ui::{AppIcon, PiField, QuietButton as _};
+use crate::ui::{AppIcon, PiField, QuietButton as _, buttons};
 
 /// How wide the list is beside an open skill.
 const LIST_WIDTH: Pixels = px(288.);
@@ -1873,11 +1873,6 @@ fn footer(status: Option<(SharedString, Hsla)>) -> Div {
                     .child(text),
             )
         })
-}
-
-/// The buttons of a form, centered below it.
-fn buttons() -> Div {
-    h_flex().w_full().justify_center().flex_wrap().gap_2()
 }
 
 /// The projects a new skill can be for.

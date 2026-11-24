@@ -14,7 +14,7 @@ mod pi_field;
 pub mod spinner;
 mod text;
 
-pub use button::QuietButton;
+pub use button::{QuietButton, buttons};
 pub use copy_button::CopyButton;
 pub use drag::WindowDrag;
 pub use fading_text::FadingText;

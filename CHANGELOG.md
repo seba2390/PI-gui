@@ -20,6 +20,9 @@ All notable changes to PI-gui are listed here. The format follows
   outline (dark in the light theme) instead of a green glow.
 - Switches in Settings have an outline and a light knob, and a brighter green when on. In the dark
   theme one that was off looked like it could not be clicked.
+- Settings → pi & models has Add model… and Edit models.json… centered below the text, as tall as
+  the fields and with icons. Add connection in the SSH dialog is centered too, with an icon and
+  the brighter green.
 - A folder name too long for the message box's toolbar fades out instead of being cut off, then
   the machine's does. Pointing at the folder shows its path.
 
