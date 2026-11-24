@@ -635,11 +635,10 @@ impl PiSession {
             && !self.is_idle()
             && !self.is_busy()
             && self.outbox.is_empty()
-            && !self
-                .transcript
-                .items()
-                .iter()
-                .any(|item| matches!(item.kind, transcript::ItemKind::User(_)))
+            && self.transcript.items().iter().all(|item| {
+                use transcript::ItemKind::{Bash, Notice};
+                matches!(item.kind, Bash { .. } | Notice(_))
+            })
     }
 
     /// Context-window usage as `(used tokens, window)`, live while streaming.

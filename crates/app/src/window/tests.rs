@@ -146,6 +146,14 @@ fn a_new_session_comes_back_with_its_draft(cx: &mut TestAppContext) {
     });
     type_text(&window, "draft in a ", cx);
     wait_ready(&window, cx);
+    // Something shown in it (not sent) does not make it an old one.
+    act(&window, cx, |this, _, cx| {
+        let session = this.chat.read(cx).session().clone();
+        session.update(cx, |session, cx| {
+            session.push_notice(transcript::NoticeKind::Info, "a notice", cx);
+            assert!(session.is_new() && !session.is_empty());
+        });
+    });
     act(&window, cx, |this, window, cx| {
         this.switch_to_mode(Mode::Chat, window, cx);
     });
@@ -229,6 +237,38 @@ fn sessions_keep_their_drafts(cx: &mut TestAppContext) {
     assert_eq!(typed(&window, cx), "");
     show(&two, cx);
     assert_eq!(typed(&window, cx), "for two");
+}
+
+/// What is typed in a chat that then works in the background comes back with its session,
+/// after the chat was let go.
+#[gpui_kit::test]
+fn a_finished_background_chat_keeps_its_draft(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let one = summary(dir.path(), &dir.path().join("1.jsonl"));
+    let (window, cx) = open(fake_pi(), Vec::new(), cx);
+    act(&window, cx, |this, window, cx| {
+        let chat = this.open_session(None, &one, window, cx);
+        let session = chat.read(cx).session().clone();
+        session.update(cx, |session, cx| {
+            session.submit("go".into(), Vec::new(), false, cx);
+        });
+    });
+    let chat = cx.read(|cx| window.read(cx).chat.entity_id());
+    cx.update(|w, cx| {
+        window.update(cx, |this, cx| {
+            let composer = this.chat.read(cx).composer().clone();
+            composer.update(cx, |composer, cx| composer.set_text("next", w, cx));
+            this.new_chat_in(dir.path().into(), w, cx);
+            assert_eq!(this.background.len(), 1);
+        });
+    });
+    wait(cx, |cx| window.read(cx).background.is_empty());
+    assert_eq!(typed(&window, cx), "");
+    act(&window, cx, |this, window, cx| {
+        drop(this.open_session(None, &one, window, cx));
+    });
+    assert_ne!(cx.read(|cx| window.read(cx).chat.entity_id()), chat);
+    assert_eq!(typed(&window, cx), "next");
 }
 
 /// Restarting pi keeps what is typed, also what the old pi gave back when it stopped.
@@ -341,6 +381,20 @@ fn renaming_shows_nothing_else(cx: &mut TestAppContext) {
     assert_eq!(log_text().matches("args:").count(), started);
     let title = cx.read(|cx| window.read(cx).chat.read(cx).session().read(cx).title());
     assert_eq!(title.as_deref(), Some("Once more"));
+
+    // Opened while its rename is under way, it gets the name too.
+    let third = summary(dir.path(), &dir.path().join("third.jsonl"));
+    cx.update(|w, cx| {
+        window.update(cx, |this, cx| {
+            this.rename_session(None, &third, "Third".into(), w, cx);
+            drop(this.open_session(None, &third, w, cx));
+        });
+    });
+    wait(cx, |cx| window.read(cx).renames.is_empty());
+    wait_ready(&window, cx);
+    let title = cx.read(|cx| window.read(cx).chat.read(cx).session().read(cx).title());
+    assert_eq!(title.as_deref(), Some("Third"));
+    assert_eq!(notifications(cx), 0);
 
     // A pi that cannot start is reported.
     cx.update(|_, cx| cx.global_mut::<AppConfig>().pi_program = dir.path().join("missing"));
