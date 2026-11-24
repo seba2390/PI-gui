@@ -5,12 +5,13 @@
 //! RPC calls. Extension commands, prompt templates and skills (`/skill:name`) are
 //! sent to pi unchanged, exactly as the terminal does.
 
+use gpui_kit::component::WindowExt as _;
 use gpui_kit::{App, ClipboardItem, Entity, Window};
 use pi_rpc::protocol::ThinkingLevel;
 use transcript::{BlockKind, ItemKind, NoticeKind};
 
 use super::dialogs::{PickerItem, open_picker};
-use super::session::{AfterFork, PiSession};
+use super::session::{AfterFork, Lifecycle, PiSession};
 use crate::actions::{NewChat, ResumeSession};
 
 pub enum CommandOutcome {
@@ -171,6 +172,16 @@ pub fn handle(
                     .to_owned(),
                 cx,
             );
+            CommandOutcome::Keep
+        }
+        Parsed::Shell { .. } if *session.read(cx).lifecycle() != Lifecycle::Ready => {
+            let message = match session.read(cx).lifecycle() {
+                Lifecycle::Exited { .. } => {
+                    "pi is not running, so the command was kept. Reconnect or start a new session."
+                }
+                _ => "pi is still starting, so the command was kept. Run it again in a moment.",
+            };
+            window.push_notification(message, cx);
             CommandOutcome::Keep
         }
         Parsed::Shell {

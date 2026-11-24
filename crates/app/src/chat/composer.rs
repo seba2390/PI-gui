@@ -965,6 +965,13 @@ impl Composer {
     fn toolbar_layout(&self, left: Div, cx: &mut Context<Self>) -> Div {
         let session = self.session.read(cx);
         let running = session.is_running();
+        let stop_label = session.can_stop().then(|| {
+            if running {
+                "Interrupt (esc)"
+            } else {
+                "Stop the command (esc)"
+            }
+        });
         let ready = matches!(session.lifecycle(), Lifecycle::Ready | Lifecycle::Starting);
         let has_input =
             !self.input.read(cx).value().trim().is_empty() || !self.attachments.is_empty();
@@ -975,14 +982,14 @@ impl Composer {
             .child(self.render_context_ring(cx))
             .child(crate::demo::mark(
                 "send",
-                if running && !has_input {
+                if let Some(label) = stop_label.filter(|_| !has_input) {
                     Button::new("stop")
                         .primary()
                         .small()
                         .icon(IconName::Square)
                         .rounded(cx.theme().radius_full())
-                        .accessibility_label("Interrupt (esc)")
-                        .tooltip("Interrupt (esc)")
+                        .accessibility_label(label)
+                        .tooltip(label)
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.interrupt(&Interrupt, window, cx);
                         }))

@@ -117,7 +117,7 @@ fn describe(transcript: &Transcript, with_timing: bool) -> String {
                     }
                 }
             }
-            ItemKind::Bash { command, .. } => writeln!(out, "BASH: {command}").unwrap(),
+            ItemKind::Bash(bash) => writeln!(out, "BASH: {}", bash.command).unwrap(),
             ItemKind::Notice(notice) => {
                 writeln!(out, "NOTICE {:?}: {}", notice.kind, notice.text).unwrap();
             }

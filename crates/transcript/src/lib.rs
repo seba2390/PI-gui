@@ -18,8 +18,8 @@ pub mod tool;
 pub use context::ContextEstimate;
 pub use format::{format_duration, format_tokens};
 pub use model::{
-    AssistantItem, Block, BlockKind, Image, ItemId, ItemKind, NestedEntry, Notice, NoticeKind,
-    Queue, RunStatus, TextBlock, ThinkingBlock, ToolBlock, ToolStatus, TranscriptItem, TurnSummary,
-    UserItem,
+    AssistantItem, BashItem, BashStatus, Block, BlockKind, Image, ItemId, ItemKind, NestedEntry,
+    Notice, NoticeKind, Queue, RunStatus, TextBlock, ThinkingBlock, ToolBlock, ToolStatus,
+    TranscriptItem, TurnSummary, UserItem,
 };
 pub use reducer::Transcript;

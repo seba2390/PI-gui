@@ -425,6 +425,7 @@ impl ChatView {
         let session = self.session.read(cx);
         let transcript = session.transcript();
         let running = session.is_running();
+        let ticking = session.can_stop();
         let items = transcript.items();
 
         // 1. Collect changed rows and the markdown sources inside them.
@@ -589,7 +590,7 @@ impl ChatView {
 
         // 4. While working, repaint at the working π's frame rate so it pulses smoothly and
         //    the timers advance; nothing ticks while idle.
-        if running && self.ticker.is_none() {
+        if ticking && self.ticker.is_none() {
             self.ticker = Some(cx.spawn(async move |this, cx| {
                 loop {
                     cx.background_executor()
@@ -597,13 +598,13 @@ impl ChatView {
                         .await;
                     let keep = this
                         .update(cx, |this, cx| {
-                            let running = this.session.read(cx).is_running();
-                            if running {
+                            let ticking = this.session.read(cx).can_stop();
+                            if ticking {
                                 cx.notify();
                             } else {
                                 this.ticker = None;
                             }
-                            running
+                            ticking
                         })
                         .unwrap_or(false);
                     if !keep {

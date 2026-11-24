@@ -18,7 +18,7 @@ use pi_rpc::protocol::{
     SessionStats, SlashCommand, StreamingBehavior, ThinkingLevel,
 };
 use pi_rpc::{ClientEvent, PiClient, PiProcess, RpcError, SpawnOptions};
-use transcript::{NoticeKind, Transcript};
+use transcript::{BashStatus, NoticeKind, Transcript};
 
 use crate::config::AppConfig;
 
@@ -448,15 +448,30 @@ impl PiSession {
         self.transcript.is_running()
     }
 
-    /// Whether this session has work in flight: a run, prompts waiting to be sent, or a
-    /// prompt pi accepted but has not started showing yet. A busy chat must stay alive when
-    /// the user switches away, or its messages are lost.
+    /// Whether a shell command (`!cmd`) is running.
+    pub fn is_bash_running(&self) -> bool {
+        self.transcript.is_bash_running()
+    }
+
+    /// Whether something visible goes on that Esc and the stop button end.
+    pub fn can_stop(&self) -> bool {
+        self.is_running() || self.is_bash_running()
+    }
+
+    /// Whether this session has work in flight: a run, a shell command, prompts waiting to
+    /// be sent, or a prompt pi accepted but has not started showing yet. A busy chat must stay
+    /// alive when the user switches away, or its messages are lost.
     pub fn is_busy(&self) -> bool {
         matches!(self.lifecycle, Lifecycle::Starting | Lifecycle::Ready)
-            && (self.is_running()
-                || self.sending.is_some()
-                || self.awaiting_start
-                || !self.outbox.is_empty())
+            && (self.agent_busy() || self.is_bash_running())
+    }
+
+    /// [`Self::is_busy`] without shell commands.
+    fn agent_busy(&self) -> bool {
+        self.is_running()
+            || self.sending.is_some()
+            || self.awaiting_start
+            || !self.outbox.is_empty()
     }
 
     pub fn model(&self) -> Option<&Model> {
@@ -857,8 +872,13 @@ impl PiSession {
     }
 
     /// Esc: restore queued messages (pi's queue and prompts not sent yet) to the editor,
-    /// then abort the run.
+    /// then abort the run. While the agent rests, stop the shell commands instead (pi's
+    /// terminal has the same order).
     pub fn interrupt(&mut self, cx: &mut Context<Self>) {
+        if !self.agent_busy() && self.is_bash_running() {
+            self.run(cx, async move |client| client.abort_bash().await);
+            return;
+        }
         // Prompts still waiting here would otherwise be sent right after the abort.
         let (local_text, local_images) = self.take_outbox(cx);
         let Some(client) = self.client.clone() else {
@@ -1011,7 +1031,8 @@ impl PiSession {
         self.run(cx, async move |client| client.set_session_name(name).await);
     }
 
-    /// `!cmd` / `!!cmd`: run a shell command through pi (added to context unless `!!`).
+    /// `!cmd` / `!!cmd`: run a shell command through pi (added to context unless `!!`). Its
+    /// row shows its output as it comes.
     pub fn run_bash(
         &mut self,
         command: String,
@@ -1019,31 +1040,37 @@ impl PiSession {
         cx: &mut Context<Self>,
     ) {
         let Some(client) = self.client.clone() else {
+            self.push_notice(NoticeKind::Error, "pi is not running.", cx);
             return;
         };
+        let id = client.next_id();
+        self.transcript
+            .start_bash(&id, command.clone(), Instant::now());
         cx.spawn(async move |this, cx| {
-            let result = client
-                .request(pi_rpc::protocol::Command::Bash {
-                    command: command.clone(),
-                    exclude_from_context,
-                })
-                .await;
+            let result = client.bash(id.clone(), command, exclude_from_context).await;
             let _ = this.update(cx, |this, cx| {
                 match result {
-                    Ok(response) => {
-                        let data: pi_rpc::protocol::BashResult =
-                            serde_json::from_value(response.data.unwrap_or_default())
-                                .unwrap_or_default();
-                        this.transcript
-                            .push_bash(command, data.output, data.exit_code);
+                    Ok(result) => this.transcript.finish_bash(&id, result),
+                    // The disconnect says why.
+                    Err(RpcError::Disconnected) => {
+                        this.transcript.stop_bash(&id, BashStatus::Cancelled);
                     }
-                    Err(error) => this.report(&error, cx),
+                    Err(error) => {
+                        this.transcript.stop_bash(&id, BashStatus::Failed);
+                        this.report(&error, cx);
+                    }
                 }
-                cx.emit(SessionEvent::TranscriptChanged);
-                cx.notify();
+                this.transcript_changed(cx);
             });
         })
         .detach();
+        self.transcript_changed(cx);
+    }
+
+    fn transcript_changed(&mut self, cx: &mut Context<Self>) {
+        self.report_busy(cx);
+        cx.emit(SessionEvent::TranscriptChanged);
+        cx.notify();
     }
 
     pub fn answer_dialog(&mut self, id: &str, answer: &ExtensionUiAnswer) {
@@ -1906,13 +1933,12 @@ mod tests {
         let (process, events) = pi_rpc::PiProcess::spawn(&options).expect("spawn pi over ssh");
         let client = process.client().clone();
         block_on(client.get_state()).expect("get_state");
-        let response = block_on(client.request(pi_rpc::protocol::Command::Bash {
-            command: "printf e2e > made-by-pi.txt && pwd -P".into(),
-            exclude_from_context: false,
-        }))
+        let result = block_on(client.bash(
+            client.next_id(),
+            "printf e2e > made-by-pi.txt && pwd -P".into(),
+            false,
+        ))
         .expect("bash through pi");
-        let result: pi_rpc::protocol::BashResult =
-            serde_json::from_value(response.data.unwrap_or_default()).unwrap_or_default();
         eprintln!("bash: {:?} exit {:?}", result.output, result.exit_code);
         assert_eq!(result.output.trim(), folder);
         assert!(ssh.exists(&format!("{folder}/made-by-pi.txt")).unwrap());

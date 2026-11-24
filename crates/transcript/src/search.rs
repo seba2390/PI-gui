@@ -113,7 +113,9 @@ pub fn plain_fields(item: &TranscriptItem) -> Vec<(usize, Field, Cow<'_, str>)> 
                 }
             }
         }
-        ItemKind::Bash { output, .. } => fields.push((0, Field::Output, shown_output(output))),
+        ItemKind::Bash(bash) => {
+            fields.push((0, Field::Output, shown_output(bash.shown_output())));
+        }
         _ => {}
     }
     fields
