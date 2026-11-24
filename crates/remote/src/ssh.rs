@@ -1083,6 +1083,7 @@ mod tests {
         assert_eq!(ssh.unshared_args(), os(&[]));
     }
 
+    #[cfg(unix)] // Unix shells, file modes or connection sharing
     #[test]
     fn command_args() {
         let dir = tempfile::tempdir().unwrap();
