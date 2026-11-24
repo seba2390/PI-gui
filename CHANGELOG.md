@@ -6,6 +6,11 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Clicking a switch in Settings no longer leaves a green outline on it. The outline shows when the
+  keyboard is used.
+
 ## [0.4.7] - 2026-11-24
 
 ### Added
