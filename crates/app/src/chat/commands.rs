@@ -13,7 +13,7 @@ use transcript::{BlockKind, ItemKind, NoticeKind};
 
 use super::dialogs::{PickerItem, open_picker};
 use super::session::{AfterFork, PiSession};
-use crate::actions::{NewChat, ResumeSession};
+use crate::actions::{NewChat, OpenLogin, OpenSettings, ReloadSession, ResumeSession};
 
 pub enum CommandOutcome {
     /// Executed; clear the composer.
@@ -47,12 +47,27 @@ pub const SUPPORTED: &[(&str, &str)] = &[
         "share",
         "Share the conversation as a secret GitHub gist (gh)",
     ),
+    ("settings", "Open Settings"),
+    (
+        "login",
+        "Sign in to a provider in pi's terminal (optional provider)",
+    ),
+    (
+        "logout",
+        "Sign out of a provider in pi's terminal (optional provider)",
+    ),
+    (
+        "reload",
+        "Restart pi on this conversation (new sign-ins, extensions, skills)",
+    ),
     ("quit", "Quit"),
 ];
 
 /// Built-ins without arguments: Enter on their row runs them right away, as in pi's terminal.
 /// `/share` (it uploads) and `/quit` are left out, so a half-typed name never runs them.
-const RUN_AT_ONCE: &[&str] = &["new", "session", "copy", "fork", "clone", "resume"];
+const RUN_AT_ONCE: &[&str] = &[
+    "new", "session", "copy", "fork", "clone", "resume", "settings", "reload",
+];
 
 /// One completion candidate for `/` input.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -406,6 +421,9 @@ fn builtin(
         "fork" => pick_fork(session, window, cx),
         "clone" => session.update(cx, |session, cx| session.clone_session(cx)),
         "resume" => window.dispatch_action(Box::new(ResumeSession), cx),
+        "settings" => window.dispatch_action(Box::new(OpenSettings), cx),
+        "reload" => window.dispatch_action(Box::new(ReloadSession), cx),
+        "login" | "logout" => return login(name == "logout", args, session, window, cx),
         "export" => {
             let path = (!args.is_empty()).then(|| args.to_owned());
             session.update(cx, |session, cx| session.export_html(path, cx));
@@ -441,6 +459,40 @@ fn builtin(
     }
     CommandOutcome::Handled
 }
+
+/// `/login` and `/logout`, with or without a provider: in a terminal next to a Code session; a
+/// chat has none, so it says where to do it.
+fn login(
+    logout: bool,
+    args: &str,
+    session: &Entity<PiSession>,
+    window: &mut Window,
+    cx: &mut App,
+) -> CommandOutcome {
+    let valid = |c: char| c.is_ascii_alphanumeric() || "._-".contains(c);
+    if args.starts_with('-') || !args.chars().all(valid) {
+        let name = if logout { "logout" } else { "login" };
+        notice(
+            session,
+            NoticeKind::Warning,
+            format!("Usage: /{name}, or /{name} <provider> (for example /{name} anthropic)"),
+            cx,
+        );
+        return CommandOutcome::Keep;
+    }
+    if session.read(cx).has_folder_tools() {
+        let provider = (!args.is_empty()).then(|| args.to_owned());
+        window.dispatch_action(Box::new(OpenLogin { logout, provider }), cx);
+    } else {
+        notice(session, NoticeKind::Info, CHAT_LOGIN.to_owned(), cx);
+    }
+    CommandOutcome::Handled
+}
+
+const CHAT_LOGIN: &str = "Signing in (and out) happens in pi's terminal, which chats don't have. \
+    Switch to Code and use /login in a session there, or run `pi` in a terminal and type /login. \
+    For an API key or a model server of your own, choose “Add model…” in the model menu. \
+    Afterwards, /reload makes this chat use it.";
 
 /// `/thinking <level>`: one of the levels the model offers (any of pi's while those are not
 /// known yet).
