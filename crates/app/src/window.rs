@@ -2270,7 +2270,7 @@ impl MainWindow {
             session.rename_when_ready(name.clone(), cx)
         });
         let renamed = renamed.with_timeout(RENAME_TIMEOUT, cx.background_executor());
-        let session_key = key.clone();
+        let running = key.clone();
         let task = cx.spawn_in(window, async move |this, cx| {
             let result = renamed
                 .await
@@ -2297,7 +2297,7 @@ impl MainWindow {
                 this.renames.remove(&key);
             });
         });
-        self.renames.insert(session_key, task);
+        self.renames.insert(running, task);
     }
 
     // ---- actions -------------------------------------------------------------
