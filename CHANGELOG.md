@@ -15,6 +15,8 @@ All notable changes to PI-gui are listed here. The format follows
 
 ### Fixed
 
+- Clicking a file in a conversation while the Files tab is open shows the file. It closed the
+  panel.
 - The Skills page lists the skills that come with Pistachio also when no session is open. It said
   "No skills yet".
 

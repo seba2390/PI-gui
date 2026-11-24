@@ -487,9 +487,9 @@ impl MainWindow {
                 // `view-file:<path>`: the Files tab's viewer on that file (relative to the folder).
                 other if other.starts_with("view-file:") => {
                     let path = PathBuf::from(&other["view-file:".len()..]);
-                    self.show_files(&ShowFiles, window, cx);
-                    self.right_panel
-                        .update(cx, |panel, cx| panel.open_file(path, window, cx));
+                    if self.folder_tools(cx) {
+                        self.open_in_files(path, None, window, cx);
+                    }
                 }
                 other if other.starts_with("image-viewer:") => {
                     let start = other["image-viewer:".len()..].parse().unwrap_or(0);
@@ -632,11 +632,21 @@ impl MainWindow {
         if !self.folder_tools(cx) {
             return;
         }
-        self.show_files(&ShowFiles, window, cx);
-        let path = PathBuf::from(&link.path);
-        let line = link.line;
+        self.open_in_files(PathBuf::from(&link.path), link.line, window, cx);
+    }
+
+    /// Shows a file in the Files tab, opening the panel or the tab if needed. (Not through
+    /// [`Self::show_files`], which closes the panel when that tab is already shown.)
+    fn open_in_files(
+        &mut self,
+        path: PathBuf,
+        line: Option<u32>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.right_panel
             .update(cx, |panel, cx| panel.open_file_at(path, line, window, cx));
+        self.set_right_open(true, cx);
     }
 
     fn folder_tools(&self, cx: &App) -> bool {

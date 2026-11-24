@@ -13,6 +13,7 @@ use crate::chat::ComposerEvent;
 use crate::chat::session::Lifecycle;
 use crate::config::AppConfig;
 use crate::hosts::{HostStatus, Hosts, HostsHandle};
+use crate::panels::RightTab;
 use crate::settings::AppSettings;
 use crate::ui_state::UiState;
 use crate::updates::Release;
@@ -424,6 +425,48 @@ fn renaming_on_a_host_needs_its_connection(cx: &mut TestAppContext) {
         assert_eq!(status, HostStatus::Idle);
     });
     assert_eq!(cx.update(|w, cx| w.notifications(cx).len()), 1);
+}
+
+/// A file link shows its file whatever the right panel shows: closed, the diff, or another file.
+#[gpui_kit::test]
+fn file_links_open_one_after_another(cx: &mut TestAppContext) {
+    let folder = tempfile::tempdir().unwrap();
+    for name in ["fib.rs", "fib.py"] {
+        std::fs::write(folder.path().join(name), "text\n").unwrap();
+    }
+    let (window, cx) = open(fake_pi(), Vec::new(), cx);
+    act(&window, cx, |this, window, cx| {
+        this.new_chat_in(folder.path().into(), window, cx);
+    });
+    wait_ready(&window, cx);
+    let click = |name: &str, cx: &mut VisualTestContext| {
+        let link = crate::chat::OpenFileLink {
+            path: name.to_owned(),
+            line: None,
+        };
+        act(&window, cx, |this, window, cx| {
+            this.open_file_link(&link, window, cx);
+        });
+        cx.read(|cx| {
+            let this = window.read(cx);
+            assert!(this.right_open, "{name} closed the panel");
+            let panel = this.right_panel.read(cx);
+            assert_eq!(panel.tab(), RightTab::Files);
+            assert_eq!(panel.open_path(cx), Some(folder.path().join(name)));
+        });
+    };
+    act(&window, cx, |this, _, cx| this.set_right_open(false, cx));
+    click("fib.rs", cx);
+    click("fib.py", cx);
+    click("fib.py", cx);
+    act(&window, cx, |this, _, cx| this.show_tab(RightTab::Diff, cx));
+    click("fib.rs", cx);
+
+    // The Files button still closes the panel.
+    act(&window, cx, |this, _, cx| {
+        this.show_tab(RightTab::Files, cx);
+    });
+    assert!(!cx.read(|cx| window.read(cx).right_open));
 }
 
 /// "Check for updates" shows one notification: that it checks, then the result in its place.
