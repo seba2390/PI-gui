@@ -13,6 +13,8 @@ pub(crate) mod mention;
 pub mod models_dialog;
 mod rows;
 pub mod session;
+#[cfg(all(test, unix))]
+mod session_tests;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
