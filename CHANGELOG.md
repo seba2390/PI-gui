@@ -8,6 +8,15 @@ All notable changes to PI-gui are listed here. The format follows
 
 ### Changed
 
+- The Skills page is an overview of all your skills, also without a session open: the ones that come
+  with Pistachio, your own library, and each project's, beside each other, with "+" below them to
+  add one. Skills are cards with an icon and color of their own; ones pi only loads when you call
+  them say so. Opening or adding one expands beside the list.
+- A new skill is for all projects or for one, chosen from a menu of your projects (also without a
+  session open). Its instructions start with a template.
+- An open skill has Move to trash, Discard and Save centered below it. Save is there when something
+  was changed, and opening another skill no longer drops changes that are not saved.
+- Text fields are as tall as the search field everywhere.
 - Switches in Settings have an outline and a light knob, and a brighter green when on. In the dark
   theme one that was off looked like it could not be clicked.
 - A folder name too long for the message box's toolbar fades out instead of being cut off, then
@@ -15,10 +24,10 @@ All notable changes to PI-gui are listed here. The format follows
 
 ### Fixed
 
+- A skill opened while another window was active came up empty, and Save would have emptied it.
 - Clicking a file in a conversation while the Files tab is open shows the file. It closed the
   panel.
-- The Skills page lists the skills that come with Pistachio also when no session is open. It said
-  "No skills yet".
+- The Skills page lists skills also when no session is open. It said "No skills yet".
 
 ## [0.4.8] - 2026-11-24
 

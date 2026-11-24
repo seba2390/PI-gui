@@ -121,13 +121,14 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   - Limits: csh/tcsh login shells are not supported (bash, zsh, dash, ksh and fish are; fish
     is untested on a real host). Windows clients are untested: Windows' OpenSSH cannot share
     connections, so every command opens its own connection there.
-- **Skills** (Code mode): a Skills button under the Chat | Code switch shows the skills pi loaded
-  for the session (personal ones from `~/.pi/agent/skills` and `~/.agents/skills`, project ones
-  from `.pi/skills` and `.agents/skills`), as pi itself reports them, here or on the SSH host.
-  "New skill" writes a `SKILL.md` (name checked against pi's rules, description, instructions,
-  optionally "only when I call it" via `disable-model-invocation`) into your personal skills or
-  the project's `.pi/skills`; existing skills open in an editor, with the toggle and move to
-  trash. pi loads project resources only for trusted folders, and in RPC mode it cannot ask, so
+- **Skills** (Code mode): a Skills button under the Chat | Code switch shows all skills: the
+  ones that come with Pistachio, your own library (`~/.pi/agent/skills` and `~/.agents/skills`)
+  and those of your projects (`.pi/skills` and `.agents/skills`), here or on the SSH host. With a
+  session open, what pi itself reports for it counts.
+  "+" below them writes a `SKILL.md` (name checked against pi's rules, description, instructions
+  from a template, optionally "only when I call it" via `disable-model-invocation`) into your
+  personal skills or the `.pi/skills` of a project you choose; existing skills open in an editor,
+  with the toggle and move to trash. pi loads project resources only for trusted folders, and in RPC mode it cannot ask, so
   the page shows whether the project is trusted and can trust it, saved in pi's own
   `trust.json` like the terminal's `/trust`. pi reads skills when it starts, so changes restart
   it on the same session.

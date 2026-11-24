@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use gpui_kit::component::input::{Input, InputState};
-use gpui_kit::component::{ActiveTheme as _, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use remote::{ConfigValues, Target};
@@ -265,7 +265,7 @@ pub fn field(label: &'static str, input: &Entity<InputState>, cx: &App) -> Div {
                 .text_color(cx.theme().muted_foreground)
                 .child(label),
         )
-        .child(Input::new(input).small())
+        .child(Input::new(input))
 }
 
 /// `~/x` → `<home>/x`, so key paths work regardless of how ssh is invoked.

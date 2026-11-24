@@ -579,7 +579,7 @@ impl SettingsView {
                         SettingItem::new(
                             "Brave API key",
                             SettingField::render(move |_, _, _| {
-                                Input::new(&brave).small().mask_toggle().w(px(260.))
+                                Input::new(&brave).mask_toggle().w(px(260.))
                             }),
                         )
                         .description("Stored only on this computer, readable by you alone."),
@@ -587,7 +587,7 @@ impl SettingsView {
                     .item(SettingItem::new(
                         "Tavily API key",
                         SettingField::render(move |_, _, _| {
-                            Input::new(&tavily).small().mask_toggle().w(px(260.))
+                            Input::new(&tavily).mask_toggle().w(px(260.))
                         }),
                     )),
             )

@@ -11,6 +11,7 @@ pub enum AppIcon {
     GitCompare,
     Globe,
     Image,
+    Library,
     MessageSquare,
     Package,
     Paperclip,
@@ -19,6 +20,7 @@ pub enum AppIcon {
     RotateCcw,
     Sparkles,
     SquarePen,
+    Trash,
     Wrench,
 }
 
@@ -32,6 +34,7 @@ impl AppIcon {
             Self::GitCompare => "icons/git-compare.svg",
             Self::Globe => "icons/globe.svg",
             Self::Image => "icons/image.svg",
+            Self::Library => "icons/library.svg",
             Self::MessageSquare => "icons/message-square.svg",
             Self::Package => "icons/package.svg",
             Self::Paperclip => "icons/paperclip.svg",
@@ -40,6 +43,7 @@ impl AppIcon {
             Self::RotateCcw => "icons/rotate-ccw.svg",
             Self::Sparkles => "icons/sparkles.svg",
             Self::SquarePen => "icons/square-pen.svg",
+            Self::Trash => "icons/trash.svg",
             Self::Wrench => "icons/wrench.svg",
         }
     }

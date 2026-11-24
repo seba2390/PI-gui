@@ -524,7 +524,7 @@ impl ModelsDialog {
                 .flex_1()
                 .gap_1()
                 .child(div().text_xs().text_color(muted).child(label))
-                .child(Input::new(input).small())
+                .child(Input::new(input))
         };
         let section = |title: &'static str| {
             div()
