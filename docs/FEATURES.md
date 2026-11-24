@@ -15,7 +15,8 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   transcripts: `cargo run --release -p transcript --example label_corpus -- <session.jsonl…>`.
 - Tools that run other tools (subagents, code mode) show that work inside their own row: a
   live step count while running, and every nested call and reply when expanded.
-- Composer: attachments, working-folder picker, model and thinking pickers, context-window wheel,
+- Composer: attachments, working-folder picker (a long name fades out), model and thinking
+  pickers, context-window wheel,
   `/` command completion, inline `@file` completion (paths with spaces are quoted like pi does),
   ↑ / ↓ through earlier prompts, and `!cmd` shell commands (with live output; Esc stops them).
   Messages typed while pi starts, compacts or is busy sending are listed above the input as
@@ -137,7 +138,8 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
 - **Built-in skills**: Code sessions on this computer also load the skills that come with
   Pistachio, written to `~/.pi/agent/pistachio/skills` and passed with `--skill` (pi's own
   skill folders are not touched). They show read-only on the Skills page under "Comes with
-  Pistachio". So far there is one, `add-skill`, which walks pi through adding a new skill.
+  Pistachio", also before a session is open. So far there is one, `add-skill`, which walks pi
+  through adding a new skill.
 - **Add model**: the model picker under the composer ends with "Add model…" and "Edit
   models.json…". The form adds a custom model to pi's `models.json`, to a provider already in
   the file or a new one (presets for Ollama, LM Studio, vLLM, llama.cpp and OpenRouter; any

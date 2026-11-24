@@ -6,6 +6,16 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- A folder name too long for the message box's toolbar fades out instead of being cut off, then
+  the machine's does. Pointing at the folder shows its path.
+
+### Fixed
+
+- The Skills page lists the skills that come with Pistachio also when no session is open. It said
+  "No skills yet".
+
 ## [0.4.8] - 2026-11-24
 
 ### Fixed

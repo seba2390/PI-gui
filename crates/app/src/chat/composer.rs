@@ -34,8 +34,7 @@ use super::mention::{self, History};
 use super::session::{Lifecycle, PiSession, WebMode};
 use crate::config::{AppConfig, RecentFolders};
 use crate::theme::palette;
-use crate::ui::AppIcon;
-use crate::ui::QuietButton as _;
+use crate::ui::{AppIcon, FadingText, QuietButton as _};
 use gpui_kit::component::WindowExt as _;
 
 actions!(
@@ -969,12 +968,15 @@ impl Composer {
                 .gap_1()
                 .child(self.render_attach_popover(cx))
                 .child(self.render_device(Some(&host), cx))
-                .child(
+                .child(shrinking(
+                    "composer-folder",
+                    FOLDER_SHRINK,
                     Button::new("remote-folder")
                         .quiet(cx)
                         .small()
                         .icon(IconName::Folder)
-                        .label(folder)
+                        .child(FadingText::new(folder.clone()))
+                        .accessibility_label(folder)
                         .tooltip(format!(
                             "{} (choosing another starts a new session)",
                             cwd.display()
@@ -982,7 +984,7 @@ impl Composer {
                         .on_click(cx.listener(move |_, _, _, cx| {
                             cx.emit(ComposerEvent::BrowseRemote(host.clone()));
                         })),
-                );
+                ));
             return self.toolbar_layout(left, cx).into_any_element();
         }
 
@@ -990,7 +992,9 @@ impl Composer {
             .gap_1()
             .child(self.render_attach_popover(cx))
             .child(self.render_device(None, cx))
-            .child(
+            .child(shrinking(
+                "composer-folder",
+                FOLDER_SHRINK,
                 Button::new(menu_id(
                     "folder",
                     &(&cwd, cx.try_global::<RecentFolders>().map(|r| r.0.clone())),
@@ -998,14 +1002,15 @@ impl Composer {
                 .quiet(cx)
                 .small()
                 .icon(IconName::Folder)
-                .label(folder)
+                .child(FadingText::new(folder.clone()))
+                .accessibility_label(folder)
                 .tooltip(if folder_locked {
-                    "Working folder (choosing another starts a new chat)"
+                    format!("{} (choosing another starts a new chat)", cwd.display())
                 } else {
-                    "Choose working folder"
+                    format!("{} (choose another working folder)", cwd.display())
                 })
                 .dropdown_menu_with_anchor(Anchor::BottomLeft, folder_menu(cx.weak_entity(), cwd)),
-            );
+            ));
 
         self.toolbar_layout(left, cx).into_any_element()
     }
@@ -1104,21 +1109,22 @@ impl Composer {
             .iter()
             .map(|host| (host.id.0.clone(), format!("{:?}", hosts.status(&host.id))))
             .collect();
-        Button::new(menu_id("device", &(current.map(|id| id.0.clone()), key)))
+        let button = Button::new(menu_id("device", &(current.map(|id| id.0.clone()), key)))
             .quiet(cx)
             .small()
             .child(
                 h_flex()
                     .gap_1p5()
                     .child(crate::remote_ui::status_dot(status.as_ref(), cx))
-                    .child(label),
+                    .child(FadingText::new(label)),
             )
             .accessibility_label(tooltip.clone())
             .tooltip(tooltip)
             .dropdown_menu_with_anchor(
                 Anchor::BottomLeft,
                 device_menu(cx.weak_entity(), current.cloned()),
-            )
+            );
+        shrinking("composer-device", 1., button)
     }
 
     /// The composer's bottom bar: `left` controls, then model, thinking, context and send.
@@ -1174,15 +1180,20 @@ impl Composer {
                 },
             ));
 
-        // In a narrow column the left side (attach, device, folder) gives way and is clipped;
-        // the model, thinking level and send / stop always stay visible.
+        // In a narrow column the left side gives way: the folder's name fades out, then the
+        // device's, then they are clipped; the model, thinking level and send / stop always stay visible.
         h_flex()
             .w_full()
             .justify_between()
             .gap_1()
             .px_2()
             .pb_2()
-            .child(left.flex_1().min_w_0().overflow_hidden())
+            .child(
+                left.debug_selector(|| "composer-left".into())
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden(),
+            )
             .child(right.flex_none())
     }
 
@@ -2185,6 +2196,18 @@ fn menu_id(name: &'static str, key: &impl std::hash::Hash) -> ElementId {
     )
 }
 
+/// How much the folder gives way in a narrow toolbar, compared with the device's 1: it shrinks
+/// as far as it can first.
+const FOLDER_SHRINK: f32 = 1000.;
+
+/// A toolbar button that gives way in a narrow column.
+fn shrinking(name: &'static str, shrink: f32, button: impl IntoElement) -> Div {
+    div()
+        .debug_selector(|| name.into())
+        .flex_shrink(shrink)
+        .child(button)
+}
+
 fn folder_menu(
     composer: WeakEntity<Composer>,
     cwd: PathBuf,
@@ -2479,6 +2502,82 @@ mod suggestion_tests {
             provider: Some("anthropic".into()),
         };
         assert_eq!(*opened.borrow(), [login]);
+    }
+}
+
+#[cfg(test)]
+mod toolbar_tests {
+    use std::path::PathBuf;
+
+    use gpui_kit::component::Root;
+    use gpui_kit::{AppContext as _, Bounds, Pixels, TestAppContext, VisualTestContext, px, size};
+    use pi_sessions::Mode;
+
+    use super::{Composer, PiSession};
+
+    /// The device's and the folder's button, in a window of `width` with the folder `name`.
+    fn buttons<'a>(
+        name: &str,
+        width: Pixels,
+        cx: &'a mut TestAppContext,
+    ) -> ([Bounds<Pixels>; 2], &'a mut VisualTestContext) {
+        cx.update(|cx| {
+            gpui_kit::component::init(cx);
+            cx.set_global(crate::config::AppConfig::for_tests("pi".into()));
+            cx.set_global(crate::settings::AppSettings::default());
+            let hosts = cx.new(|_| crate::hosts::Hosts::for_tests(Vec::new()));
+            cx.set_global(crate::hosts::HostsHandle(hosts));
+            crate::stt::models::init(cx);
+        });
+        let folder = PathBuf::from("/code").join(name);
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let session = cx.new(|_| PiSession::idle(folder, Mode::Code));
+            let view = cx.new(|cx| Composer::new(session, window, cx));
+            Root::new(view, window, cx)
+        });
+        (at(width, cx), cx)
+    }
+
+    fn at(width: Pixels, cx: &mut VisualTestContext) -> [Bounds<Pixels>; 2] {
+        cx.simulate_resize(size(width, px(400.)));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        ["composer-device", "composer-folder"].map(|name| cx.debug_bounds(name).unwrap())
+    }
+
+    /// A long folder name gives way to the model, then the device's does. Neither is squeezed
+    /// to nothing.
+    #[gpui_kit::test]
+    fn a_long_folder_name_gives_way(cx: &mut TestAppContext) {
+        let name = "spin-adapted-decomposition-search.retired-2026-09-24";
+        let ([device, whole], cx) = buttons(name, px(2000.), cx);
+        assert!(whole.left() >= device.right());
+
+        let [same, less] = at(px(520.), cx);
+        assert_eq!(
+            same.size.width, device.size.width,
+            "the device gave way first"
+        );
+        assert!(less.size.width < whole.size.width);
+        let left = cx.debug_bounds("composer-left").unwrap();
+        assert!(less.right() <= left.right(), "the folder is clipped");
+
+        let [smaller, least] = at(px(300.), cx);
+        assert!(smaller.size.width < device.size.width);
+        assert!(least.size.width > px(56.), "the name is gone");
+    }
+
+    /// A short name is as wide as it is, in any window.
+    #[gpui_kit::test]
+    fn a_short_folder_name_stays_whole(cx: &mut TestAppContext) {
+        let ([_, whole], cx) = buttons("app", px(2000.), cx);
+        assert!(whole.size.width < px(120.));
+        for width in [900., 520., 300.] {
+            assert_eq!(at(px(width), cx)[1].size.width, whole.size.width, "{width}");
+        }
     }
 }
 
