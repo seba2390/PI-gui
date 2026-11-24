@@ -201,18 +201,30 @@ impl ConnectFlow {
 
     fn start_new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let input = cx.new(|cx| InputState::new(window, cx).placeholder("Folder name"));
-        self._subscriptions
-            .push(cx.subscribe(&input, |this, _, event: &InputEvent, cx| {
+        self._subscriptions.push(cx.subscribe_in(
+            &input,
+            window,
+            |this, _, event: &InputEvent, window, cx| {
                 if matches!(event, InputEvent::PressEnter { .. }) {
-                    this.create_folder(cx);
+                    this.create_folder(window, cx);
                 }
-            }));
+            },
+        ));
         input.update(cx, |input, cx| input.focus(window, cx));
         self.new_folder = Some(input);
         cx.notify();
     }
 
-    fn create_folder(&mut self, cx: &mut Context<Self>) {
+    /// Closes the "New folder" field; the keyboard goes to the path field, as a focused field
+    /// that is gone would leave it nowhere (Esc would not close the dialog).
+    fn close_new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.new_folder = None;
+        self.path_input
+            .update(cx, |input, cx| input.focus(window, cx));
+        cx.notify();
+    }
+
+    fn create_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (Some(input), Some(parent)) = (self.new_folder.clone(), self.current_path()) else {
             return;
         };
@@ -223,14 +235,14 @@ impl ConnectFlow {
         let Some(ssh) = self.hosts.read(cx).ssh(&self.host) else {
             return;
         };
-        self._load = cx.spawn(async move |this, cx| {
+        self._load = cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move { ssh.make_dir(&parent, &name) })
                 .await;
-            let _ = this.update(cx, |this, cx| match result {
+            let _ = this.update_in(cx, |this, window, cx| match result {
                 Ok(path) => {
-                    this.new_folder = None;
+                    this.close_new_folder(window, cx);
                     this.load(path, cx);
                 }
                 Err(error) => {
@@ -596,16 +608,17 @@ impl ConnectFlow {
                             Button::new("create-folder")
                                 .small()
                                 .label("Create")
-                                .on_click(cx.listener(|this, _, _, cx| this.create_folder(cx))),
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.create_folder(window, cx);
+                                })),
                         )
                         .child(
                             Button::new("cancel-folder")
                                 .quiet(cx)
                                 .small()
                                 .label("Cancel")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.new_folder = None;
-                                    cx.notify();
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.close_new_folder(window, cx);
                                 })),
                         ),
                 )

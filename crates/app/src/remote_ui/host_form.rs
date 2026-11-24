@@ -208,6 +208,11 @@ impl HostForm {
         ]
     }
 
+    /// Puts the keyboard in the first field.
+    pub fn focus(&self, window: &mut Window, cx: &mut App) {
+        self.name.update(cx, |input, cx| input.focus(window, cx));
+    }
+
     /// See [`HostFields::target`].
     pub fn target(
         &self,

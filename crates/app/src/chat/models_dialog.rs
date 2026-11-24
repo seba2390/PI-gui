@@ -8,7 +8,7 @@
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::checkbox::Checkbox;
-use gpui_kit::component::input::{Editor, EditorState, Input, InputState};
+use gpui_kit::component::input::{Editor, EditorState, Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{
@@ -100,6 +100,7 @@ pub struct ModelsDialog {
     json_error: Option<SharedString>,
     saving: bool,
     _tasks: Vec<Task<()>>,
+    _enter: Vec<Subscription>,
 }
 
 impl EventEmitter<ModelsDialogEvent> for ModelsDialog {}
@@ -146,10 +147,35 @@ impl ModelsDialog {
             json_error: None,
             saving: false,
             _tasks: Vec::new(),
+            _enter: Vec::new(),
             place,
         };
+        this._enter = this
+            .inputs()
+            .map(|input| {
+                cx.subscribe(input, |this, _, event: &InputEvent, cx| {
+                    if matches!(event, InputEvent::PressEnter { .. }) {
+                        this.add_model(cx);
+                    }
+                })
+            })
+            .into();
         this.load(cx);
         this
+    }
+
+    /// The fields of the form.
+    fn inputs(&self) -> [&Entity<InputState>; 8] {
+        [
+            &self.provider_id,
+            &self.provider_name,
+            &self.base_url,
+            &self.api_key,
+            &self.model_id,
+            &self.model_name,
+            &self.context_window,
+            &self.max_tokens,
+        ]
     }
 
     fn load(&mut self, cx: &mut Context<Self>) {
@@ -321,6 +347,9 @@ impl ModelsDialog {
     }
 
     fn add_model(&mut self, cx: &mut Context<Self>) {
+        if self.saving {
+            return;
+        }
         let Some(Ok(file)) = &self.loaded else { return };
         let mut file = file.clone();
         let result = (|| {
@@ -810,8 +839,91 @@ impl Render for ModelsDialog {
 
 #[cfg(test)]
 mod tests {
-    use super::Place;
+    use gpui_kit::ParentElement as _;
+    use gpui_kit::{AppContext as _, Entity, Focusable as _, TestAppContext, VisualTestContext};
+    use pi_config::ModelsFile;
+    use remote::HostId;
+
+    use super::{ModelsDialog, ModelsTab, Place};
+    use crate::config::AppConfig;
+    use crate::hosts::{Hosts, HostsHandle};
     use crate::pi_place::PiPlace;
+    use crate::ui::dialog::open_form_dialog;
+    use crate::ui::dialog::testing::{draw, is_open, press, window};
+
+    /// The dialog on an empty models.json in `dir`.
+    fn open(
+        dir: &std::path::Path,
+        tab: ModelsTab,
+        cx: &mut VisualTestContext,
+    ) -> Entity<ModelsDialog> {
+        let dialog = cx.update(|window, cx| {
+            cx.set_global(AppConfig::for_tests("pi".into()));
+            let hosts = cx.new(|_| Hosts::for_tests(Vec::new()));
+            cx.set_global(HostsHandle(hosts));
+            // A host that is not connected: pi's own files on this computer are not read.
+            let host = Some(HostId("none".into()));
+            let dialog = cx.new(|cx| {
+                let mut dialog = ModelsDialog::new(host, tab, window, cx);
+                dialog.place = Some(local(dir));
+                dialog.loaded = Some(Ok(ModelsFile::parse("").unwrap()));
+                dialog
+            });
+            let view = dialog.clone();
+            open_form_dialog(None, window, cx, move |shell, _, _| {
+                shell.child(view.clone())
+            });
+            dialog
+        });
+        draw(cx);
+        dialog
+    }
+
+    /// Enter in a field is "Add model": what is wrong shows, and nothing typed is lost.
+    #[gpui_kit::test]
+    #[allow(clippy::unused_async)] // gpui tests take an async body
+    async fn enter_adds_the_model(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let cx = window(cx);
+        let dialog = open(dir.path(), ModelsTab::Form, cx);
+        let type_in = |index: usize, text: &str, cx: &mut VisualTestContext| {
+            cx.update(|window, cx| {
+                let focus = dialog.read(cx).inputs()[index].focus_handle(cx);
+                focus.focus(window, cx);
+            });
+            draw(cx);
+            cx.simulate_input(text);
+        };
+        type_in(4, "qwen", cx);
+        press("enter", cx);
+        assert!(is_open(cx));
+        cx.update(|_, cx| assert!(dialog.read(cx).form_error.is_some()));
+        assert!(!dir.path().join("models.json").exists());
+        type_in(0, "ollama", cx);
+        type_in(2, "http://localhost:11434/v1", cx);
+        press("enter", cx);
+        let saved = std::fs::read_to_string(dir.path().join("models.json")).unwrap();
+        assert!(saved.contains("qwen"), "{saved}");
+    }
+
+    #[gpui_kit::test]
+    #[allow(clippy::unused_async)]
+    async fn enter_is_a_newline_in_the_json(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let cx = window(cx);
+        let dialog = open(dir.path(), ModelsTab::Json, cx);
+        cx.update(|window, cx| {
+            let focus = dialog.read(cx).editor.focus_handle(cx);
+            focus.focus(window, cx);
+        });
+        draw(cx);
+        cx.simulate_input("a");
+        press("enter", cx);
+        cx.simulate_input("b");
+        assert!(is_open(cx));
+        let text = cx.update(|_, cx| dialog.read(cx).editor.read(cx).value().to_string());
+        assert_eq!(text, "a\nb");
+    }
 
     fn local(agent_dir: &std::path::Path) -> Place {
         Place {
