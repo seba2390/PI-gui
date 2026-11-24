@@ -456,6 +456,12 @@ impl MainWindow {
                 "manage-hosts" => self.open_manage_hosts(window, cx),
                 "skills" => self.toggle_skills(window, cx),
                 "settings" => self.open_settings(&OpenSettings, window, cx),
+                "settings-web" => {
+                    self.open_settings(&OpenSettings, window, cx);
+                    if let Some(settings) = self.settings.as_ref().map(|s| s.0.clone()) {
+                        settings.update(cx, |settings, _| settings.start_on_web_search());
+                    }
+                }
                 "settings-ssh" => {
                     self.open_settings(&OpenSettings, window, cx);
                     if let Some(settings) = self.settings.as_ref().map(|s| s.0.clone()) {

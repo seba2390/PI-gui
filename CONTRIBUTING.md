@@ -88,7 +88,7 @@ checks scriptable:
   `<n>`th picture.
 - Dialogs: `add-host`, `manage-hosts`, `add-model`, `add-provider`, `edit-models`.
 - Skills page: `skills`, `new-skill`, `open-skill:<path>`; the Settings page: `settings`
-  (`settings-speech` and `settings-names` open those pages); `type-name:<text>` plays the
+  (`settings-web`, `settings-speech` and `settings-names` open those pages); `type-name:<text>` plays the
   sidebar's typing animation for the open session 2.5 s after start (nothing is saved).
 - SSH: `ssh:<alias>`, `remote:<alias>:<folder>` and `remote-latest:<alias>` open a remote
   session once connected. Panels listed after them apply to that session.

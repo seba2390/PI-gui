@@ -11,6 +11,8 @@ All notable changes to PI-gui are listed here. The format follows
 - The thinking menu lists only the levels that differ on the model. Ones that its
   `thinkingLevelMap` in `models.json` sends as another level are left out: with minimal sent as
   low and high as xhigh, it has off, low, medium and xhigh. Shift+Tab steps through the same ones.
+- Settings → Web search shows only what the chosen service needs: the SearXNG address, the Brave or
+  the Tavily API key. The others keep what was entered. Searching the settings for one finds it.
 
 ## [0.4.9] - 2026-11-24
 

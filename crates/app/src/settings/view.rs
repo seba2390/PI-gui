@@ -123,6 +123,8 @@ impl SettingsView {
                 }
             }),
             cx.observe(&crate::hosts::hosts(cx), |_, _, cx| cx.notify()),
+            // The chosen search service's field.
+            cx.observe_global::<WebSearchState>(|_, cx| cx.notify()),
         ];
         let models = models
             .into_iter()
@@ -533,8 +535,83 @@ impl SettingsView {
             )
     }
 
-    fn web_search_page(&self) -> SettingPage {
-        let (brave, tavily) = (self.brave_key.clone(), self.tavily_key.clone());
+    /// The search service, and what the chosen one needs.
+    fn search_service_group(&self, cx: &App) -> SettingGroup {
+        let key_field = |name: &'static str, input: &Entity<InputState>| {
+            let input = input.clone();
+            SettingField::render(move |_, _, _| {
+                div()
+                    .debug_selector(|| name.into())
+                    .child(Input::new(&input).mask_toggle().w(px(260.)))
+            })
+        };
+        let key_hint = "Stored only on this computer, readable by you alone.";
+        let service = SettingItem::new(
+            "Service",
+            SettingField::dropdown(
+                options(&[
+                    ("duckduckgo", "DuckDuckGo (no key)"),
+                    ("searxng", "SearXNG (your instance)"),
+                    ("brave", "Brave Search (API key)"),
+                    ("tavily", "Tavily (API key)"),
+                ]),
+                |cx| backend_value(cx.global::<WebSearchState>().config.backend).into(),
+                |value, cx| {
+                    let backend = match value.as_ref() {
+                        "searxng" => BackendKind::Searxng,
+                        "brave" => BackendKind::Brave,
+                        "tavily" => BackendKind::Tavily,
+                        _ => BackendKind::Duckduckgo,
+                    };
+                    update_web(cx, |config| config.backend = backend);
+                },
+            ),
+        )
+        // Found by the settings search also while another one is chosen.
+        .keywords([
+            "DuckDuckGo",
+            "SearXNG address",
+            "Brave API key",
+            "Tavily API key",
+        ]);
+        let needs = match cx.global::<WebSearchState>().config.backend {
+            BackendKind::Duckduckgo => None,
+            BackendKind::Searxng => Some(
+                SettingItem::new(
+                    "SearXNG address",
+                    SettingField::input(
+                        |cx| {
+                            cx.global::<WebSearchState>()
+                                .config
+                                .searxng
+                                .url
+                                .clone()
+                                .into()
+                        },
+                        |value, cx| {
+                            let url = value.trim().to_owned();
+                            update_web(cx, |config| config.searxng.url = url);
+                        },
+                    ),
+                )
+                .description("Its settings.yml must allow the json format."),
+            ),
+            BackendKind::Brave => Some(
+                SettingItem::new("Brave API key", key_field("brave-key", &self.brave_key))
+                    .description(key_hint),
+            ),
+            BackendKind::Tavily => Some(
+                SettingItem::new("Tavily API key", key_field("tavily-key", &self.tavily_key))
+                    .description(key_hint),
+            ),
+        };
+        SettingGroup::new()
+            .title("Search service")
+            .item(service)
+            .items(needs)
+    }
+
+    fn web_search_page(&self, cx: &App) -> SettingPage {
         let number = |min: f64, max: f64| NumberFieldOptions {
             min,
             max,
@@ -543,59 +620,7 @@ impl SettingsView {
         SettingPage::new("Web search")
             .icon(AppIcon::Globe)
             .description("For chats with web search on (the globe next to the paperclip).")
-            .group(
-                SettingGroup::new()
-                    .title("Search service")
-                    .item(SettingItem::new(
-                        "Service",
-                        SettingField::dropdown(
-                            options(&[
-                                ("duckduckgo", "DuckDuckGo (no key)"),
-                                ("searxng", "SearXNG (your instance)"),
-                                ("brave", "Brave Search (API key)"),
-                                ("tavily", "Tavily (API key)"),
-                            ]),
-                            |cx| backend_value(cx.global::<WebSearchState>().config.backend).into(),
-                            |value, cx| {
-                                let backend = match value.as_ref() {
-                                    "searxng" => BackendKind::Searxng,
-                                    "brave" => BackendKind::Brave,
-                                    "tavily" => BackendKind::Tavily,
-                                    _ => BackendKind::Duckduckgo,
-                                };
-                                update_web(cx, |config| config.backend = backend);
-                            },
-                        ),
-                    ))
-                    .item(
-                        SettingItem::new(
-                            "SearXNG address",
-                            SettingField::input(
-                                |cx| cx.global::<WebSearchState>().config.searxng.url.clone().into(),
-                                |value, cx| {
-                                    let url = value.trim().to_owned();
-                                    update_web(cx, |config| config.searxng.url = url);
-                                },
-                            ),
-                        )
-                        .description("Its settings.yml must allow the json format."),
-                    )
-                    .item(
-                        SettingItem::new(
-                            "Brave API key",
-                            SettingField::render(move |_, _, _| {
-                                Input::new(&brave).mask_toggle().w(px(260.))
-                            }),
-                        )
-                        .description("Stored only on this computer, readable by you alone."),
-                    )
-                    .item(SettingItem::new(
-                        "Tavily API key",
-                        SettingField::render(move |_, _, _| {
-                            Input::new(&tavily).mask_toggle().w(px(260.))
-                        }),
-                    )),
-            )
+            .group(self.search_service_group(cx))
             .group(
                 SettingGroup::new().title("New chats").item(SettingItem::new(
                     "Web search",
@@ -737,6 +762,11 @@ impl SettingsView {
         self.pi_field.clone()
     }
 
+    /// Opens on the Web search page (before the first render).
+    pub fn start_on_web_search(&mut self) {
+        self.start_page = 2;
+    }
+
     /// Opens on the SSH connections page (before the first render).
     pub fn start_on_ssh(&mut self) {
         self.start_page = 3;
@@ -828,7 +858,7 @@ impl Render for SettingsView {
                 .pages([
                     self.general_page(&weak),
                     self.pi_page(&weak, cx),
-                    self.web_search_page(),
+                    self.web_search_page(cx),
                     self.ssh_page(&weak),
                     self.speech_page(),
                     naming_page(cx),
@@ -1332,4 +1362,60 @@ fn write_pi_settings(path: &Path, defaults: &StartupDefaults) -> std::io::Result
         std::fs::set_permissions(&tmp, meta.permissions())?;
     }
     std::fs::rename(tmp, path)
+}
+
+#[cfg(test)]
+mod tests {
+    use deepsearch::config::BackendKind;
+    use gpui_kit::component::Root;
+    use gpui_kit::{AppContext as _, TestAppContext};
+
+    use super::{AppConfig, AppSettings, SettingsView, WebSearchState, update_web};
+
+    /// Choosing a search service shows what it needs, and only that, right away; the others
+    /// keep what was entered.
+    #[gpui_kit::test]
+    fn only_the_chosen_search_service_is_shown(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            gpui_kit::component::init(cx);
+            let mut config = AppConfig::for_tests("/nonexistent/pi".into());
+            config.deepsearch_dir = dir.path().to_path_buf();
+            cx.set_global(config);
+            cx.set_global(AppSettings::default());
+            crate::stt::init(cx);
+            crate::naming::init(cx);
+            let hosts = cx.new(|_| crate::hosts::Hosts::for_tests(Vec::new()));
+            cx.set_global(crate::hosts::HostsHandle(hosts));
+        });
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|cx| {
+                let mut view = SettingsView::new(Vec::new(), window, cx);
+                view.start_on_web_search();
+                view
+            });
+            Root::new(view, window, cx)
+        });
+        cx.run_until_parked();
+        for (backend, shown) in [
+            (BackendKind::Duckduckgo, (false, false)),
+            (BackendKind::Brave, (true, false)),
+            (BackendKind::Tavily, (false, true)),
+            (BackendKind::Searxng, (false, false)),
+            (BackendKind::Brave, (true, false)),
+        ] {
+            cx.update(|_, cx| {
+                update_web(cx, |config| {
+                    config.backend = backend;
+                    config.brave.api_key.get_or_insert_with(|| "key".into());
+                });
+            });
+            cx.run_until_parked();
+            let visible = ["brave-key", "tavily-key"].map(|key| cx.debug_bounds(key).is_some());
+            assert_eq!((visible[0], visible[1]), shown, "{backend:?}");
+        }
+        let key = cx.read(|cx| cx.global::<WebSearchState>().config.brave.api_key.clone());
+        assert_eq!(key.as_deref(), Some("key"));
+    }
 }

@@ -252,9 +252,9 @@ mouse.
 - **pi & models:** which `pi` to run (`PISTACHIO_PI_BIN` still wins), the model and thinking
   level pi starts with (saved in pi's own `settings.json`, like `/settings` in the terminal),
   and shortcuts to add models or edit `models.json`.
-- **Web search:** the search service (DuckDuckGo, SearXNG, Brave or Tavily, with API keys
-  stored only on this computer), whether new chats search, limits per message, and local
-  network access.
+- **Web search:** the search service (DuckDuckGo, SearXNG, Brave or Tavily) and the address or
+  API key the chosen one needs (keys are stored only on this computer), whether new chats search,
+  limits per message, and local network access.
 - **SSH connections:** whether saved connections connect when the app opens (off by
   default), and the saved hosts with their status, connecting, adding and managing them.
 - **Speech to text:** the dictation models (download, use, remove), how long a silence ends
