@@ -274,6 +274,13 @@ impl MainWindow {
                 },
             ),
             cx.subscribe_in(
+                &crate::search_server::search_server(cx),
+                window,
+                |_, _, event: &crate::search_server::SearchServerEvent, window, cx| {
+                    crate::search_server::notify(event, window, cx);
+                },
+            ),
+            cx.subscribe_in(
                 &crate::naming::models(cx),
                 window,
                 |_, _, event: &crate::naming::NamingModelsEvent, window, cx| {
@@ -462,6 +469,7 @@ impl MainWindow {
                         settings.update(cx, |settings, _| settings.start_on_web_search());
                     }
                 }
+                "searxng-get" => crate::settings::use_local_searxng(cx),
                 "settings-ssh" => {
                     self.open_settings(&OpenSettings, window, cx);
                     if let Some(settings) = self.settings.as_ref().map(|s| s.0.clone()) {

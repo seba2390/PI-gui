@@ -1849,6 +1849,7 @@ dependencies = [
  "html5ever 0.40.1",
  "markup5ever_rcdom 0.40.1+unofficial",
  "pretty_assertions",
+ "searxng",
  "serde",
  "serde_json",
  "tempfile",
@@ -6599,6 +6600,7 @@ dependencies = [
  "pi-sessions",
  "pretty_assertions",
  "remote",
+ "searxng",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -7800,6 +7802,19 @@ name = "seahash"
 version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c107b6f4780854c8b126e228ea8869f4d7b71260f962fefb57b996b8959ba6b"
+
+[[package]]
+name = "searxng"
+version = "0.4.9"
+dependencies = [
+ "flate2",
+ "pretty_assertions",
+ "serde_json",
+ "sha2 0.10.9",
+ "tar",
+ "tempfile",
+ "ureq 3.5.2",
+]
 
 [[package]]
 name = "security-framework"

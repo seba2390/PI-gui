@@ -52,7 +52,8 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
     reads. Settings live in `~/.pi/agent/pistachio/deepsearch/` and apply to the next message,
     no restart:
     - `config.json`: `backend` (`duckduckgo` by default, no key; `searxng` with
-      `searxng.url`, e.g. a self-hosted instance with `json` enabled in its `settings.yml`;
+      `searxng.url`, e.g. a self-hosted instance with `json` enabled in its `settings.yml`, or with
+      `searxng.local` the one Pistachio runs on this computer;
       `brave` or `tavily` with an API key or `api_key_env`), `default_mode` for new chats,
       `modes.search` / `modes.deep` limits (`max_searches`, `max_fetches` per message),
       results per search, page text per read (`fetch.max_chars`; lower it for small context
@@ -61,6 +62,14 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
     - `prompt-search.md` and `prompt-deep.md`: each mode's instructions (`{{date}}`,
       `{{max_searches}}` and `{{max_fetches}}` are filled in). Delete a file to get the
       default back.
+    - **SearXNG on this computer** (macOS and Linux, no Docker): choosing SearXNG in Settings
+      checks whether one answers at the address. If not, it says what is missing and offers to
+      download and run it. It does not come with the app: on request SearXNG, a Python of its own
+      and the packages it needs (about 80 MB, 190 MB on disk), each pinned and checked against its
+      checksum, go to the `searxng` folder here; your own Python is not touched, and Remove deletes
+      all of it. Only this computer can reach it, on a free port. It starts with the first message
+      of a chat that searches and stops when the app quits (also if it crashes) or another service
+      is chosen. Its settings are `searxng/settings.yml`, yours to edit.
     - Try settings without the GUI: `pistachio --deepsearch-tool search <query>` and
       `pistachio --deepsearch-tool fetch <url> [what to look for]` print what the model would
       see.
@@ -253,8 +262,9 @@ mouse.
   level pi starts with (saved in pi's own `settings.json`, like `/settings` in the terminal),
   and shortcuts to add models or edit `models.json`.
 - **Web search:** the search service (DuckDuckGo, SearXNG, Brave or Tavily) and the address or
-  API key the chosen one needs (keys are stored only on this computer), whether new chats search,
-  limits per message, and local network access.
+  API key the chosen one needs (keys are stored only on this computer) or a SearXNG on this
+  computer (download, start, stop, remove), whether new chats search, limits per message, and
+  local network access.
 - **SSH connections:** whether saved connections connect when the app opens (off by
   default), and the saved hosts with their status, connecting, adding and managing them.
 - **Speech to text:** the dictation models (download, use, remove), how long a silence ends

@@ -135,6 +135,8 @@ impl Default for DuckDuckGo {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Searxng {
+    /// Use the SearXNG Pistachio runs on this computer instead of the one at `url`.
+    pub local: bool,
     /// The instance's base URL. Its `settings.yml` must list `json` under `search.formats`.
     pub url: String,
     /// Comma-separated engines (e.g. `google,bing,wikipedia`); empty for the instance default.
@@ -146,6 +148,7 @@ pub struct Searxng {
 impl Default for Searxng {
     fn default() -> Self {
         Self {
+            local: false,
             url: "http://localhost:8080".into(),
             engines: String::new(),
             language: String::new(),

@@ -71,6 +71,7 @@ script/measure-memory.sh                 # memory of a running instance and its 
 script/perf.sh [release|debug] [runs] [baseline.json]   # time startup, navigation and quitting
 script/make-icon.sh                      # regenerate the .icns / PNG from icon.svg
 script/set-version.sh 0.5.0              # bump the version (Cargo.toml, Cargo.lock, README install links)
+script/update-searxng.sh                 # move the pins of the SearXNG the app can download
 script/release.sh 0.5.0                  # release a version (see Releasing)
 ```
 
@@ -88,7 +89,8 @@ checks scriptable:
   `<n>`th picture.
 - Dialogs: `add-host`, `manage-hosts`, `add-model`, `add-provider`, `edit-models`.
 - Skills page: `skills`, `new-skill`, `open-skill:<path>`; the Settings page: `settings`
-  (`settings-web`, `settings-speech` and `settings-names` open those pages); `type-name:<text>` plays the
+  (`settings-web`, `settings-speech` and `settings-names` open those pages; after `settings-web`,
+  `searxng-get` downloads and runs SearXNG); `type-name:<text>` plays the
   sidebar's typing animation for the open session 2.5 s after start (nothing is saved).
 - SSH: `ssh:<alias>`, `remote:<alias>:<folder>` and `remote-latest:<alias>` open a remote
   session once connected. Panels listed after them apply to that session.

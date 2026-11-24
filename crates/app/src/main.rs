@@ -23,6 +23,7 @@ mod persist;
 mod pi_place;
 mod relay;
 mod remote_ui;
+mod search_server;
 mod settings;
 mod shell_env;
 mod sidebar;
@@ -85,6 +86,7 @@ fn main() {
         settings::init_text_size(cx);
         actions::init(cx);
         cx.set_global(config);
+        search_server::init(cx);
         settings::apply_pi_program(cx);
         cx.set_global(ui_state::UiState::load(
             ui_state::UiState::path().as_deref(),

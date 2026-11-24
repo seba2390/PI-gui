@@ -2,13 +2,15 @@
 //! config names. To add a backend: a variant in [`crate::config::BackendKind`], its settings
 //! section in [`crate::config::Config`], and a function here.
 
+use std::time::Duration;
+
 use markup5ever_rcdom::{Handle, NodeData, RcDom};
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::config::{BackendKind, Config};
 use crate::extract::{fragment_text, squash};
-use crate::http::{backend_agent, read_body};
+use crate::http::{backend_agent, local_agent, read_body};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SearchResult {
@@ -17,6 +19,10 @@ pub struct SearchResult {
     pub snippet: String,
 }
 
+const USER_AGENT: &str = "pistachio-deepsearch";
+/// How long a search waits for the SearXNG on this computer, which the app starts with the
+/// message that searches.
+const LOCAL_START: Duration = Duration::from_secs(30);
 /// Search responses larger than this are cut off.
 const MAX_RESPONSE: usize = 2_000_000;
 
@@ -112,9 +118,20 @@ fn results_from(array: Option<&Value>, title: &str, url: &str, snippet: &str) ->
 
 fn searxng(config: &Config, query: &str) -> Result<Vec<SearchResult>, String> {
     let settings = &config.searxng;
-    let agent = backend_agent(config.search.timeout_secs, "pistachio-deepsearch");
+    let (agent, url) = if settings.local {
+        let dir = crate::config::default_dir().ok_or("The settings folder is unknown.")?;
+        (
+            local_agent(config.search.timeout_secs, USER_AGENT),
+            searxng::wait_for_url(&searxng::root_in(&dir), LOCAL_START)?,
+        )
+    } else {
+        (
+            backend_agent(config.search.timeout_secs, USER_AGENT),
+            settings.url.clone(),
+        )
+    };
     let mut request = agent
-        .get(format!("{}/search", settings.url.trim_end_matches('/')))
+        .get(format!("{}/search", url.trim_end_matches('/')))
         .query("q", query)
         .query("format", "json");
     if !settings.engines.trim().is_empty() {
@@ -136,7 +153,7 @@ fn brave(config: &Config, query: &str, count: usize) -> Result<Vec<SearchResult>
             config.brave.api_key_env
         )
     })?;
-    let agent = backend_agent(config.search.timeout_secs, "pistachio-deepsearch");
+    let agent = backend_agent(config.search.timeout_secs, USER_AGENT);
     let request = agent
         .get("https://api.search.brave.com/res/v1/web/search")
         .query("q", query)
@@ -162,7 +179,7 @@ fn tavily(config: &Config, query: &str, count: usize) -> Result<Vec<SearchResult
             config.tavily.api_key_env
         )
     })?;
-    let agent = backend_agent(config.search.timeout_secs, "pistachio-deepsearch");
+    let agent = backend_agent(config.search.timeout_secs, USER_AGENT);
     let body = serde_json::json!({
         "query": query,
         "max_results": count,

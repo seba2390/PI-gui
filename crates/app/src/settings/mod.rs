@@ -4,7 +4,10 @@
 //! pi's `settings.json` and web search in its own `config.json`; this file only holds what the
 //! app itself decides (look, start-up, notifications, updates, which `pi` to run).
 
+mod local_search;
 pub mod view;
+
+pub use local_search::use_local as use_local_searxng;
 
 use std::path::{Path, PathBuf};
 

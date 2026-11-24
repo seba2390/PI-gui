@@ -624,6 +624,9 @@ impl PiSession {
         // puts the previous mode back.
         let previous = self.web_mode();
         self.show_web_mode(mode, cx);
+        if mode != WebMode::Off {
+            crate::search_server::start_if_used(cx);
+        }
         let command = format!("/{} {}", deepsearch::COMMAND, mode.as_str());
         cx.spawn(async move |this, cx| {
             let result = client
@@ -872,6 +875,9 @@ impl PiSession {
         } else {
             StreamingBehavior::Steer
         });
+        if self.mode == Mode::Chat && self.web_mode() != WebMode::Off {
+            crate::search_server::start_if_used(cx);
+        }
         let (text, images) = (prompt.text.clone(), prompt.images.clone());
         self.queued.sending(&text, prompt.follow_up);
         self.sending = Some(Sending {

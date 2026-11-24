@@ -20,6 +20,7 @@ pi-config = { path = "crates/pi-config" }
 pi-rpc = { path = "crates/pi-rpc" }
 pi-sessions = { path = "crates/pi-sessions" }
 remote = { path = "crates/remote" }
+searxng = { path = "crates/searxng" }
 transcript = { path = "crates/transcript" }
 titles = { path = "crates/titles" }
 workspace = { path = "crates/workspace" }

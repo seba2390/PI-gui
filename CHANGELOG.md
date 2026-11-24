@@ -6,6 +6,14 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- SearXNG can run on this computer, with one click and without Docker (macOS and Linux). Choosing
+  it in Settings → Web search checks whether one answers at the address. If not, Download and run
+  gets SearXNG, a Python of its own and the packages it needs (about 80 MB) and starts it. Only
+  this computer can reach it. It starts when a chat searches, stops with Pistachio, and Remove
+  deletes it. It does not come with the app.
+
 ### Changed
 
 - The thinking menu lists only the levels that differ on the model. Ones that its

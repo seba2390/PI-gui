@@ -20,6 +20,7 @@ use super::{AppSettings, StartMode, TextSize, ThemeChoice};
 use crate::code_colors::CodeColors;
 use crate::config::AppConfig;
 use crate::remote_ui::SavedHostAction;
+use crate::search_server::{Running, search_server};
 use crate::ui::spinner::IndicatorStyle;
 use crate::ui::{AppIcon, PiField, QuietButton as _, buttons};
 
@@ -124,8 +125,13 @@ impl SettingsView {
             }),
             cx.observe(&crate::hosts::hosts(cx), |_, _, cx| cx.notify()),
             // The chosen search service's field.
-            cx.observe_global::<WebSearchState>(|_, cx| cx.notify()),
+            cx.observe_global::<WebSearchState>(|_, cx| {
+                check_searxng(false, cx);
+                cx.notify();
+            }),
+            cx.observe(&search_server(cx), |_, _, cx| cx.notify()),
         ];
+        check_searxng(true, cx);
         let models = models
             .into_iter()
             .map(|(provider, id, name)| {
@@ -551,7 +557,7 @@ impl SettingsView {
             SettingField::dropdown(
                 options(&[
                     ("duckduckgo", "DuckDuckGo (no key)"),
-                    ("searxng", "SearXNG (your instance)"),
+                    ("searxng", "SearXNG (no key)"),
                     ("brave", "Brave Search (API key)"),
                     ("tavily", "Tavily (API key)"),
                 ]),
@@ -574,36 +580,17 @@ impl SettingsView {
             "Brave API key",
             "Tavily API key",
         ]);
-        let needs = match cx.global::<WebSearchState>().config.backend {
-            BackendKind::Duckduckgo => None,
-            BackendKind::Searxng => Some(
-                SettingItem::new(
-                    "SearXNG address",
-                    SettingField::input(
-                        |cx| {
-                            cx.global::<WebSearchState>()
-                                .config
-                                .searxng
-                                .url
-                                .clone()
-                                .into()
-                        },
-                        |value, cx| {
-                            let url = value.trim().to_owned();
-                            update_web(cx, |config| config.searxng.url = url);
-                        },
-                    ),
-                )
-                .description("Its settings.yml must allow the json format."),
-            ),
-            BackendKind::Brave => Some(
+        let needs = match web_config(cx).backend {
+            BackendKind::Duckduckgo => Vec::new(),
+            BackendKind::Searxng => super::local_search::items(cx),
+            BackendKind::Brave => vec![
                 SettingItem::new("Brave API key", key_field("brave-key", &self.brave_key))
                     .description(key_hint),
-            ),
-            BackendKind::Tavily => Some(
+            ],
+            BackendKind::Tavily => vec![
                 SettingItem::new("Tavily API key", key_field("tavily-key", &self.tavily_key))
                     .description(key_hint),
-            ),
+            ],
         };
         SettingGroup::new()
             .title("Search service")
@@ -1265,6 +1252,29 @@ fn to_u32(value: f64) -> u32 {
     value.round().clamp(0., f64::from(u32::MAX)) as u32
 }
 
+pub(super) fn web_config(cx: &App) -> &WebConfig {
+    &cx.global::<WebSearchState>().config
+}
+
+/// Checks the SearXNG that is used, now or after a change of the settings: whether the address
+/// answers, or what state the one on this computer is in. That one stops when it is not used.
+fn check_searxng(opened: bool, cx: &mut App) {
+    let config = web_config(cx);
+    let used = config.backend == BackendKind::Searxng;
+    let (local, url) = (config.searxng.local, config.searxng.url.clone());
+    search_server(cx).update(cx, |server, cx| {
+        if opened {
+            server.refresh(cx);
+        }
+        if used && !local {
+            server.probe(&url, opened, cx);
+        }
+        if !(used && local) && matches!(server.running(), Running::Here(_)) {
+            server.stop(cx);
+        }
+    });
+}
+
 fn startup_model(cx: &App) -> String {
     let defaults = &cx.global::<PiStartupState>().defaults;
     match (&defaults.provider, &defaults.model) {
@@ -1288,7 +1298,7 @@ fn load_web_search(cx: &mut App) {
 
 /// Changes web search's settings and saves them (unless the file could not be read: then
 /// saving would replace what the user wrote).
-fn update_web(cx: &mut App, f: impl FnOnce(&mut WebConfig)) {
+pub(super) fn update_web(cx: &mut App, f: impl FnOnce(&mut WebConfig)) {
     let state = cx.global_mut::<WebSearchState>();
     let before = state.config.clone();
     f(&mut state.config);
@@ -1368,22 +1378,20 @@ fn write_pi_settings(path: &Path, defaults: &StartupDefaults) -> std::io::Result
 mod tests {
     use deepsearch::config::BackendKind;
     use gpui_kit::component::Root;
-    use gpui_kit::{AppContext as _, TestAppContext};
+    use gpui_kit::{AppContext as _, TestAppContext, VisualTestContext};
 
-    use super::{AppConfig, AppSettings, SettingsView, WebSearchState, update_web};
+    use super::{AppConfig, AppSettings, Path, SettingsView, WebConfig, update_web, web_config};
 
-    /// Choosing a search service shows what it needs, and only that, right away; the others
-    /// keep what was entered.
-    #[gpui_kit::test]
-    fn only_the_chosen_search_service_is_shown(cx: &mut TestAppContext) {
+    /// The Web search page, with its settings in `dir`.
+    fn open<'a>(dir: &Path, cx: &'a mut TestAppContext) -> &'a mut VisualTestContext {
         cx.executor().allow_parking();
-        let dir = tempfile::tempdir().unwrap();
         cx.update(|cx| {
             gpui_kit::component::init(cx);
             let mut config = AppConfig::for_tests("/nonexistent/pi".into());
-            config.deepsearch_dir = dir.path().to_path_buf();
+            config.deepsearch_dir = dir.to_path_buf();
             cx.set_global(config);
             cx.set_global(AppSettings::default());
+            crate::search_server::init(cx);
             crate::stt::init(cx);
             crate::naming::init(cx);
             let hosts = cx.new(|_| crate::hosts::Hosts::for_tests(Vec::new()));
@@ -1398,6 +1406,15 @@ mod tests {
             Root::new(view, window, cx)
         });
         cx.run_until_parked();
+        cx
+    }
+
+    /// Choosing a search service shows what it needs, and only that, right away; the others
+    /// keep what was entered.
+    #[gpui_kit::test]
+    fn only_the_chosen_search_service_is_shown(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let cx = open(dir.path(), cx);
         for (backend, shown) in [
             (BackendKind::Duckduckgo, (false, false)),
             (BackendKind::Brave, (true, false)),
@@ -1408,6 +1425,7 @@ mod tests {
             cx.update(|_, cx| {
                 update_web(cx, |config| {
                     config.backend = backend;
+                    config.searxng.url = "http://127.0.0.1:9".into();
                     config.brave.api_key.get_or_insert_with(|| "key".into());
                 });
             });
@@ -1415,7 +1433,59 @@ mod tests {
             let visible = ["brave-key", "tavily-key"].map(|key| cx.debug_bounds(key).is_some());
             assert_eq!((visible[0], visible[1]), shown, "{backend:?}");
         }
-        let key = cx.read(|cx| cx.global::<WebSearchState>().config.brave.api_key.clone());
+        let key = cx.read(|cx| web_config(cx).brave.api_key.clone());
         assert_eq!(key.as_deref(), Some("key"));
+    }
+
+    /// Choosing SearXNG checks the address, and offers the one on this computer unless one that
+    /// can be used answers there.
+    #[gpui_kit::test]
+    fn searxng_is_offered_when_none_answers(cx: &mut TestAppContext) {
+        use std::io::{Read as _, Write as _};
+
+        let dir = tempfile::tempdir().unwrap();
+        let cx = open(dir.path(), cx);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let running = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for mut stream in listener.incoming().flatten() {
+                let _ = stream.read(&mut [0; 2048]);
+                let body = r#"{"error": "No query"}"#;
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+        let free = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let nothing = format!("http://{}", free.local_addr().unwrap());
+        drop(free);
+        let shown = |change: &dyn Fn(&mut WebConfig), cx: &mut VisualTestContext| {
+            cx.update(|_, cx| {
+                update_web(cx, |config| {
+                    config.backend = BackendKind::Searxng;
+                    change(config);
+                });
+            });
+            cx.executor()
+                .advance_clock(std::time::Duration::from_secs(1));
+            cx.run_until_parked();
+            ["searxng-address-check", "searxng-offer", "searxng-local"]
+                .map(|row| cx.debug_bounds(row).is_some())
+        };
+        let supported = searxng::catalog::platform().is_some();
+        assert_eq!(
+            shown(&|config| config.searxng.url.clone_from(&nothing), cx),
+            [true, supported, false]
+        );
+        assert_eq!(
+            shown(&|config| config.searxng.url.clone_from(&running), cx),
+            [true, false, false]
+        );
+        assert_eq!(
+            shown(&|config| config.searxng.local = true, cx),
+            [!supported, false, supported]
+        );
     }
 }

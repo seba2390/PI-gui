@@ -14,6 +14,8 @@ crates/
                 small local models (quantized GGUF via candle, pure Rust)
   deepsearch/   chat web search (search / deep): search backends, public-only fetching, page text extraction,
                 passage ranking, settings, and the pi extension that runs them via the app
+  searxng/      a private SearXNG for that: downloading it on request (pinned and checked), running it,
+                checking one at an address
   app/          the GPUI application (binary `pistachio`)
 ```
 
