@@ -49,8 +49,12 @@ pub fn remote_key(host: &str, folder: Option<&Path>) -> PathBuf {
 impl Global for UiState {}
 
 impl UiState {
-    /// Where the state lives, or `None` if pi's agent dir is unknown.
+    /// Where the state lives, or `None` if pi's agent dir is unknown (or in tests, which never
+    /// write there).
     pub fn path() -> Option<PathBuf> {
+        if cfg!(test) {
+            return None;
+        }
         pi_sessions::app_dir().map(|dir| dir.join("state.json"))
     }
 

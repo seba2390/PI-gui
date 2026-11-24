@@ -394,6 +394,15 @@ impl PiSession {
         }
     }
 
+    /// A placeholder of a session on `host`.
+    #[cfg(test)]
+    pub fn idle_on_host(host: HostId) -> Self {
+        Self {
+            host: Some(host),
+            ..Self::idle(PathBuf::from("/srv"), Mode::Code)
+        }
+    }
+
     pub fn is_idle(&self) -> bool {
         self.lifecycle == Lifecycle::Idle
     }
@@ -569,6 +578,22 @@ impl PiSession {
 
     pub fn is_empty(&self) -> bool {
         self.transcript.items().is_empty() && self.outbox.is_empty()
+    }
+
+    /// Whether nothing was sent in this conversation yet. pi writes a session's file with its
+    /// first message, so a new one is not in the sidebar and has no file to resume.
+    pub fn is_new(&self) -> bool {
+        // A branch that starts before the first message is new too, unlike what it came from.
+        let resumed = self.resumed_from.is_some() && self.session_file() == self.resumed_from;
+        !resumed
+            && !self.is_idle()
+            && !self.is_busy()
+            && self.outbox.is_empty()
+            && !self
+                .transcript
+                .items()
+                .iter()
+                .any(|item| matches!(item.kind, transcript::ItemKind::User(_)))
     }
 
     /// Context-window usage as `(used tokens, window)`, live while streaming.
@@ -781,7 +806,8 @@ impl PiSession {
         (texts, images)
     }
 
-    /// Gives prompts that can no longer be sent (pi exited) back to the composer.
+    /// Gives prompts that can no longer be sent (pi exited), or should not be (Esc), back to
+    /// the composer.
     fn return_outbox(&mut self, cx: &mut Context<Self>) {
         let (texts, images) = self.take_outbox(cx);
         if !texts.is_empty() || !images.is_empty() {
@@ -816,26 +842,20 @@ impl PiSession {
     /// Esc: restore queued messages (pi's queue and prompts not sent yet) to the editor,
     /// then abort the run.
     pub fn interrupt(&mut self, cx: &mut Context<Self>) {
-        // Prompts still waiting here would otherwise be sent right after the abort.
-        let (local_text, local_images) = self.take_outbox(cx);
+        // Prompts still waiting here would otherwise be sent right after the abort. They are
+        // back in the editor before anything can let this chat go (it may not be busy now);
+        // pi's queue goes before them.
+        self.return_outbox(cx);
         let Some(client) = self.client.clone() else {
-            if !local_text.is_empty() || !local_images.is_empty() {
-                cx.emit(SessionEvent::RestoreToEditor {
-                    text: local_text.join("\n\n"),
-                    images: local_images,
-                    replace: false,
-                });
-            }
             return;
         };
         cx.spawn(async move |this, cx| {
-            let mut restored = client.clear_queue().await.unwrap_or_default();
-            restored.extend(local_text);
-            if !restored.is_empty() || !local_images.is_empty() {
+            let restored = client.clear_queue().await.unwrap_or_default();
+            if !restored.is_empty() {
                 let _ = this.update(cx, |_, cx| {
                     cx.emit(SessionEvent::RestoreToEditor {
                         text: restored.join("\n\n"),
-                        images: local_images,
+                        images: Vec::new(),
                         replace: false,
                     });
                 });
@@ -966,6 +986,48 @@ impl PiSession {
         self.transcript.set_session_name(Some(name.clone()));
         cx.emit(SessionEvent::SessionFileChanged);
         self.run(cx, async move |client| client.set_session_name(name).await);
+    }
+
+    /// [`Self::rename`] for a pi that may still be starting; tells when pi has saved the name.
+    pub fn rename_when_ready(
+        &mut self,
+        name: String,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<(), String>> {
+        let (changed, changes) = async_channel::bounded(1);
+        let observed = cx.observe_self(move |_, _| {
+            let _ = changed.try_send(());
+        });
+        cx.spawn(async move |this, cx| {
+            let _observed = observed;
+            let gone = |_| "pi was stopped.".to_owned();
+            let client = loop {
+                let client = this
+                    .update(cx, |this, _| match &this.lifecycle {
+                        Lifecycle::Ready => Ok(this.client.clone()),
+                        Lifecycle::Exited { message } => Err(message.clone()),
+                        Lifecycle::Idle | Lifecycle::Starting => Ok(None),
+                    })
+                    .map_err(gone)??;
+                match client {
+                    Some(client) => break client,
+                    None => changes.recv().await.map_err(|error| error.to_string())?,
+                }
+            };
+            client
+                .set_session_name(name.clone())
+                .await
+                .map_err(|error| match error {
+                    RpcError::Rejected { message, .. } => message,
+                    other => other.to_string(),
+                })?;
+            this.update(cx, |this, cx| {
+                this.transcript.set_session_name(Some(name));
+                cx.emit(SessionEvent::SessionFileChanged);
+                cx.notify();
+            })
+            .map_err(gone)
+        })
     }
 
     /// `!cmd` / `!!cmd`: run a shell command through pi (added to context unless `!!`).
