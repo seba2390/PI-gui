@@ -40,11 +40,6 @@ pub struct OpenLogin {
 }
 
 impl OpenLogin {
-    /// The command as typed in pi's terminal.
-    pub fn slash_command(&self) -> &'static str {
-        if self.logout { "/logout" } else { "/login" }
-    }
-
     /// pi's arguments for it: `pi auth login <provider>` does it directly; without a provider,
     /// pi itself opens, to choose one there.
     pub fn pi_args(&self) -> Vec<String> {
@@ -53,6 +48,49 @@ impl OpenLogin {
         };
         let verb = if self.logout { "logout" } else { "login" };
         vec!["auth".into(), verb.into(), provider.clone()]
+    }
+
+    /// The command line for a login shell on a host whose pi is `pi` (a path, maybe `~/…`, or
+    /// a name).
+    pub fn remote_command(&self, pi: &str) -> String {
+        use remote::remote_word;
+        let program = match (pi.strip_prefix("~/"), pi.rsplit_once('/')) {
+            // A quoted `~` would not be expanded.
+            (Some(rest), _) => format!("~/{}", remote_word(rest)),
+            // Programs next to pi (its node) are found, as for the session's pi.
+            (None, Some((dir, _))) if pi.starts_with('/') => {
+                format!(
+                    "env PATH={}:\"$PATH\" {}",
+                    remote_word(dir),
+                    remote_word(pi)
+                )
+            }
+            _ => remote_word(pi),
+        };
+        let args = self.pi_args();
+        std::iter::once(program)
+            .chain(args.iter().map(|arg| remote_word(arg)))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// What the chat says once the terminal is open.
+    pub fn notice(&self) -> String {
+        let command = if self.logout { "/logout" } else { "/login" };
+        let first = match &self.provider {
+            Some(provider) => format!(
+                "pi runs {command} {provider} in the terminal. If it can't, run `pi` there and \
+                 type {command}."
+            ),
+            None => format!(
+                "pi starts in the terminal: type {command} there (run `pi` first if you see a \
+                 shell)."
+            ),
+        };
+        format!(
+            "{first} Then come back and use /reload, so this session's pi picks it up. Closing \
+             the terminal brings back the one that was open before (ctrl+`)."
+        )
     }
 }
 
@@ -183,6 +221,29 @@ fn menus() -> Vec<Menu> {
 #[cfg(test)]
 mod tests {
     use gpui_kit::Keystroke;
+
+    use super::OpenLogin;
+
+    #[test]
+    fn login_runs_pi_or_its_sign_in() {
+        let plain = OpenLogin {
+            logout: false,
+            provider: None,
+        };
+        assert_eq!(plain.pi_args(), [] as [String; 0]);
+        assert_eq!(plain.remote_command("pi"), "pi");
+        assert_eq!(plain.remote_command("~/my bin/pi"), "~/'my bin/pi'");
+        let named = OpenLogin {
+            logout: true,
+            provider: Some("anthropic".into()),
+        };
+        assert_eq!(named.pi_args(), ["auth", "logout", "anthropic"]);
+        assert_eq!(
+            named.remote_command("/opt/pi/bin/pi"),
+            "env PATH=/opt/pi/bin:\"$PATH\" /opt/pi/bin/pi auth logout anthropic"
+        );
+        assert!(named.notice().contains("/logout anthropic"));
+    }
 
     /// Every binding must parse; an invalid one panics at startup.
     #[test]
