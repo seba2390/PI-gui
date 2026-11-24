@@ -77,9 +77,13 @@ pub mod testing {
         }
     }
 
-    /// An empty window that dialogs can open in.
+    /// An empty window that dialogs can open in, at their place at once (a click could miss one
+    /// that still moves).
     pub fn window(cx: &mut TestAppContext) -> &mut VisualTestContext {
-        cx.update(gpui_kit::component::init);
+        cx.update(|cx| {
+            gpui_kit::component::init(cx);
+            cx.set_reduce_motion(true);
+        });
         let (_, cx) = cx.add_window_view(|window, cx| {
             let empty = cx.new(|_| Empty);
             Root::new(empty, window, cx)
