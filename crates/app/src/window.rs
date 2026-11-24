@@ -3204,7 +3204,23 @@ impl Render for MainWindow {
             .overflow_hidden()
             .child(self.render_chat_header(cx))
             .when_some(settings, |this, settings| {
-                this.child(div().flex_1().min_h_0().child(settings.cached(full())))
+                let pi_field = settings.read(cx).pi_field();
+                this.child(
+                    div()
+                        .relative()
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_hidden()
+                        .child(
+                            div()
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .size_full()
+                                .child(pi_field.cached(full())),
+                        )
+                        .child(settings.cached(full())),
+                )
             })
             .when_some(skills, |this, skills| {
                 this.child(div().flex_1().min_h_0().child(skills.cached(full())))

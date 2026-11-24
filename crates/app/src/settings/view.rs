@@ -21,7 +21,7 @@ use crate::code_colors::CodeColors;
 use crate::config::AppConfig;
 use crate::remote_ui::SavedHostAction;
 use crate::ui::spinner::IndicatorStyle;
-use crate::ui::{AppIcon, QuietButton as _, buttons};
+use crate::ui::{AppIcon, PiField, QuietButton as _, buttons};
 
 /// What the window does for the page (dialogs and connections live there).
 #[derive(Debug, Clone)]
@@ -68,6 +68,8 @@ pub struct SettingsView {
     indicator_drawn: std::rc::Rc<std::cell::Cell<bool>>,
     /// The preview's repaint loop is running.
     indicator_ticking: std::rc::Rc<std::cell::Cell<bool>>,
+    /// The drifting π signs behind the pages.
+    pi_field: Entity<PiField>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -140,6 +142,7 @@ impl SettingsView {
             models,
             pi_version: None,
             start_page: 0,
+            pi_field: cx.new(|_| PiField::plain()),
             code_colors_hover: None,
             indicator_hover: None,
             indicator_drawn: std::rc::Rc::default(),
@@ -728,6 +731,12 @@ impl SettingsView {
 }
 
 impl SettingsView {
+    /// The π signs, for the window to draw behind this view: drawn in it, each of their frames
+    /// would render the pages again.
+    pub fn pi_field(&self) -> Entity<PiField> {
+        self.pi_field.clone()
+    }
+
     /// Opens on the SSH connections page (before the first render).
     pub fn start_on_ssh(&mut self) {
         self.start_page = 3;
@@ -809,7 +818,8 @@ impl Render for SettingsView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let _timer = crate::perf::render("settings");
         let weak = cx.weak_entity();
-        div().size_full().bg(cx.theme().background).child(
+        // No background: the π signs are behind it.
+        div().size_full().child(
             Settings::new("app-settings")
                 .default_selected_index(SelectIndex {
                     page_ix: self.start_page,

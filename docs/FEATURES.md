@@ -241,7 +241,8 @@ All three are Apache 2.0 licensed. Models live in `~/.pi/agent/pistachio/naming/
 ## Settings and updates
 
 Settings opens from the Pistachio menu (⌘,) or the button at the bottom of the sidebar. Every
-change is saved right away.
+change is saved right away. Small π signs drift behind its pages and move out of the way of the
+mouse.
 
 - **General:** theme (follow the system, light or dark), code colors (the syntax palette for
   code in chat, diffs, skills and `models.json`, with a live preview), the working indicator's
