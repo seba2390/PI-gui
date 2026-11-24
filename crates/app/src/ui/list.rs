@@ -1904,13 +1904,15 @@ mod tests {
         assert!(!state.0.borrow().items.summary().has_unknown_height);
         assert_eq!(state.0.borrow().items.summary().height, px(30. * 120.));
 
-        for _ in 0..40 {
-            if unmeasured(&state) == 0 {
-                break;
-            }
+        // Every frame gets somewhere, so it finishes. How far depends on the machine: a sleep
+        // can take much longer than asked, down to one row per frame.
+        let mut left = after_first;
+        while left > 0 {
             frame(cx);
+            let now = unmeasured(&state);
+            assert!(now < left, "a frame measured nothing ({left} rows left)");
+            left = now;
         }
-        assert_eq!(unmeasured(&state), 0, "measuring did not finish");
         assert_eq!(state.0.borrow().items.summary().height, px(30. * 120.));
     }
 

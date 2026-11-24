@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::menu::DropdownMenu as _;
+use gpui_kit::component::notification::Notification;
 use gpui_kit::component::resizable::{h_resizable, resizable_panel};
 use gpui_kit::component::{
     ActiveTheme as _, IconName, Selectable as _, Sizable as _, TitleBar, WindowExt as _, h_flex,
@@ -46,6 +47,9 @@ mod tests;
 mod update_prompt;
 
 use drafts::{DraftKey, Drafts};
+
+/// Identifies the notification of "Check for updates", so that the result takes its place.
+struct UpdateCheck;
 
 /// Registers the window's key bindings and global models, once per process.
 pub fn init(cx: &mut App) {
@@ -1020,7 +1024,6 @@ impl MainWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        use gpui_kit::component::notification::Notification;
         let title = chat
             .read(cx)
             .session()
@@ -1896,9 +1899,8 @@ impl MainWindow {
     /// Looks for a newer release in the background. `manual` (the menu or Settings) also says
     /// when there is none or the check failed; at start a skipped version is not offered.
     fn check_for_updates(&mut self, manual: bool, window: &mut Window, cx: &mut Context<Self>) {
-        use gpui_kit::component::notification::Notification;
         if manual {
-            window.push_notification("Checking for updates…", cx);
+            Self::show_update_check(window, cx);
         }
         let task = cx
             .background_executor()
@@ -1906,32 +1908,56 @@ impl MainWindow {
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
             let _ = this.update_in(cx, |this, window, cx| {
-                let current = crate::updates::compared_version();
-                match result {
-                    Ok(Some(release)) if crate::updates::is_newer(&release.version, &current) => {
-                        let skipped = cx.global::<AppSettings>().skipped_version.as_deref()
-                            == Some(release.version.as_str());
-                        // At start, never over the card that says what the last update changed.
-                        if manual || (!skipped && this.update_prompt.is_none()) {
-                            this.offer_update(release, window, cx);
-                        }
-                    }
-                    Ok(_) if manual => window.push_notification(
-                        Notification::success(format!(
-                            "You have the latest version (Pistachio {current})."
-                        )),
-                        cx,
-                    ),
-                    Err(error) if manual => window.push_notification(
-                        Notification::error(format!("Could not check for updates: {error}")),
-                        cx,
-                    ),
-                    Ok(_) => {}
-                    Err(error) => log::info!("update check failed: {error}"),
-                }
+                this.update_check_done(manual, result, window, cx);
             });
         })
         .detach();
+    }
+
+    /// Says that updates are looked for, until [`Self::update_check_done`].
+    fn show_update_check(window: &mut Window, cx: &mut App) {
+        let checking = Notification::new()
+            .message("Checking for updates…")
+            .id::<UpdateCheck>()
+            .autohide(false);
+        window.push_notification(checking, cx);
+    }
+
+    fn update_check_done(
+        &mut self,
+        manual: bool,
+        result: Result<Option<crate::updates::Release>, String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let current = crate::updates::compared_version();
+        match result {
+            Ok(Some(release)) if crate::updates::is_newer(&release.version, &current) => {
+                if manual {
+                    window.remove_notification::<UpdateCheck>(cx);
+                }
+                let skipped = cx.global::<AppSettings>().skipped_version.as_deref()
+                    == Some(release.version.as_str());
+                // At start, never over the card that says what the last update changed.
+                if manual || (!skipped && self.update_prompt.is_none()) {
+                    self.offer_update(release, window, cx);
+                }
+            }
+            Ok(_) if manual => window.push_notification(
+                Notification::success(format!(
+                    "You have the latest version (Pistachio {current})."
+                ))
+                .id::<UpdateCheck>(),
+                cx,
+            ),
+            Err(error) if manual => window.push_notification(
+                Notification::error(format!("Could not check for updates: {error}"))
+                    .id::<UpdateCheck>(),
+                cx,
+            ),
+            Ok(_) => {}
+            Err(error) => log::info!("update check failed: {error}"),
+        }
     }
 
     /// "Manage SSH connections".
@@ -2276,7 +2302,6 @@ impl MainWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        use gpui_kit::component::notification::Notification;
         let key = (host, summary.path.clone());
         let session = match (self.open_pi(&key, cx), &key.0) {
             (Some(session), _) => session,
@@ -2556,7 +2581,6 @@ impl MainWindow {
 
     /// `/resume`: pick an earlier session of this chat's mode and folder.
     fn resume_session(&mut self, _: &ResumeSession, window: &mut Window, cx: &mut Context<Self>) {
-        use gpui_kit::component::notification::Notification;
         let (folder, current, remote) = {
             let session = self.chat.read(cx).session().read(cx);
             (

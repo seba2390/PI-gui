@@ -19,11 +19,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::thread;
 use std::time::Duration;
 
 use crate::config::resolve_full;
 use crate::error::meaningful_lines;
 use crate::host::Target;
+use crate::local_network;
 use crate::process::{self, Output};
 use crate::{RemoteError, classify};
 
@@ -301,7 +303,15 @@ impl Ssh {
     /// client backgrounds a master) rather than `ssh -fN -o ControlMaster=yes`: `auto` replaces
     /// a stale socket and never leaves a second, unshared connection behind when a master
     /// already runs.
+    ///
+    /// On macOS, a host on the local network that can't be reached is tried again for a while
+    /// (~15 s): macOS may just be asking the user whether to allow it. Turning the connection
+    /// off ends that.
     pub fn connect(&self, trust_recorded_key: bool) -> Result<(), RemoteError> {
+        local_network::retrying(|| self.connect_once(trust_recorded_key), thread::sleep)
+    }
+
+    fn connect_once(&self, trust_recorded_key: bool) -> Result<(), RemoteError> {
         let _changing = self.start_connecting()?;
         if self.is_connected() {
             return Ok(());
@@ -1083,6 +1093,7 @@ mod tests {
         assert_eq!(ssh.unshared_args(), os(&[]));
     }
 
+    #[cfg(unix)] // Unix shells, file modes or connection sharing
     #[test]
     fn command_args() {
         let dir = tempfile::tempdir().unwrap();
@@ -1197,7 +1208,7 @@ mod tests {
         // The forward is there: the program starts.
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let open = listener.local_addr().unwrap().port();
-        std::thread::spawn(move || {
+        thread::spawn(move || {
             for stream in listener.incoming().flatten() {
                 drop(stream);
             }

@@ -32,6 +32,7 @@ type OnAction = Rc<dyn Fn(SavedHostAction, &mut Window, &mut App)>;
 
 pub fn saved_hosts(
     on_action: impl Fn(SavedHostAction, &mut Window, &mut App) + 'static,
+    window: &Window,
     cx: &App,
 ) -> AnyElement {
     let on_action: OnAction = Rc::new(on_action);
@@ -43,7 +44,7 @@ pub fn saved_hosts(
         .iter()
         .map(|host| {
             let status = hosts.status(&host.id);
-            host_row(&host.id, &host.label, &status, &on_action, cx)
+            host_row(&host.id, &host.label, &status, &on_action, window, cx)
         })
         .collect();
     v_flex()
@@ -80,6 +81,7 @@ fn host_row(
     label: &str,
     status: &crate::hosts::HostStatus,
     on_action: &OnAction,
+    window: &Window,
     cx: &App,
 ) -> AnyElement {
     // On while it connects too, so an attempt can be stopped.
@@ -118,6 +120,7 @@ fn host_row(
                     toggle(action, window, cx);
                 },
                 Some(format!("Connect {label}").into()),
+                window,
                 cx,
             )
             .flex_none()
@@ -245,6 +248,7 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
+    use gpui_kit::component::ActiveTheme as _;
     use gpui_kit::{
         AppContext as _, Context, IntoElement, Modifiers, ParentElement as _, Render, Styled as _,
         TestAppContext, VisualTestContext, Window, div, px,
@@ -258,10 +262,11 @@ mod tests {
     struct List(Rc<RefCell<Vec<SavedHostAction>>>);
 
     impl Render for List {
-        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             let actions = self.0.clone();
             div().w(px(600.)).child(super::saved_hosts(
                 move |action, _, _| actions.borrow_mut().push(action),
+                window,
                 cx,
             ))
         }
@@ -334,6 +339,54 @@ mod tests {
             assert_eq!(take(), [expected]);
         }
     }
+
+    /// A switch shows a focus ring for the keyboard, not after a click.
+    #[gpui_kit::test]
+    #[allow(clippy::unused_async)]
+    async fn a_click_leaves_no_focus_ring(cx: &mut TestAppContext) {
+        let mut store = HostStore::default();
+        let alias = "one".to_owned();
+        store.add(alias.clone(), Target::Alias { alias });
+        cx.update(|cx| {
+            gpui_kit::component::init(cx);
+            cx.set_reduce_motion(true);
+            let hosts = cx.new(|_| Hosts::for_tests(store.hosts));
+            cx.set_global(HostsHandle(hosts));
+        });
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let list = cx.new(|_| List(Rc::default()));
+            gpui_kit::component::Root::new(list, window, cx)
+        });
+        let draw = |cx: &mut VisualTestContext| {
+            cx.run_until_parked();
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+        };
+        // The ring colors the switch's border (other borders there are transparent).
+        let ring = |cx: &mut VisualTestContext| {
+            draw(cx);
+            let bounds = cx.debug_bounds("host-switch:one").unwrap();
+            cx.update(|window, cx| {
+                let color = cx.theme().ring;
+                let bounds = bounds.scale(window.scale_factor());
+                window.painted_quads().iter().any(|quad| {
+                    quad.border_color == color && bounds.contains(&quad.bounds.center())
+                })
+            })
+        };
+        draw(cx);
+        assert!(!ring(cx));
+        let switch = cx.debug_bounds("host-switch:one").unwrap();
+        for _ in 0..2 {
+            cx.simulate_click(switch.center(), Modifiers::default());
+            assert!(!ring(cx), "a click left a focus ring");
+        }
+        // It has the focus, and shows so when the keyboard is used.
+        cx.simulate_keystrokes("space");
+        assert!(ring(cx), "the keyboard shows no focus ring");
+        cx.simulate_click(switch.center(), Modifiers::default());
+        assert!(!ring(cx), "a click kept the focus ring");
+    }
+
     /// Enter saves the new name; an empty one keeps the dialog open.
     #[gpui_kit::test]
     #[allow(clippy::unused_async)]
