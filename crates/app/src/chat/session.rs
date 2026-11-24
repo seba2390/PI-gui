@@ -13,12 +13,12 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::{Context, EventEmitter, Task};
 use pi_rpc::protocol::{
-    AgentMessage, ContentBlock, Disposition, ExtensionUiAnswer, ExtensionUiMethod,
-    ExtensionUiRequest, ImageContent, MessageContent, Model, NotifyKind, SessionState,
-    SessionStats, SlashCommand, StreamingBehavior, ThinkingLevel,
+    AgentMessage, CompactionReason, ContentBlock, Disposition, ExtensionUiAnswer,
+    ExtensionUiMethod, ExtensionUiRequest, ImageContent, MessageContent, Model, NotifyKind,
+    SessionState, SessionStats, SlashCommand, StreamingBehavior, ThinkingLevel,
 };
 use pi_rpc::{ClientEvent, PiClient, PiProcess, RpcError, SpawnOptions};
-use transcript::{BashStatus, NoticeKind, Transcript};
+use transcript::{BashStatus, NoticeKind, RunStatus, Transcript};
 
 use crate::config::AppConfig;
 
@@ -79,9 +79,9 @@ pub enum AfterFork {
     Keep,
 }
 
-/// How long after a lost connection the disconnect itself (which comes after the last events
-/// pi sent) may take to arrive.
-const DISCONNECT_GRACE: Duration = Duration::from_secs(1);
+/// How long events pi sent before an answer (or before it stopped) may take to be handled after
+/// it.
+const EVENT_GRACE: Duration = Duration::from_secs(1);
 
 /// The images of the user message `from_end` messages before the last one (0 is the
 /// newest), if its text is `text`; empty when it cannot be matched.
@@ -198,6 +198,13 @@ pub struct PiSession {
     awaiting_start: bool,
     /// `agent_start` events seen so far.
     runs_started: u64,
+    /// `/compact` was sent and pi has not answered yet.
+    compact_sent: bool,
+    /// pi compacts outside a run (`/compact`, or an extension asked for it) and refuses
+    /// prompts meanwhile.
+    compacting_between_runs: bool,
+    /// Compactions outside a run that ended so far.
+    compactions_ended: u64,
     /// [`Self::is_busy`] as last reported with [`SessionEvent::BusyChanged`].
     reported_busy: bool,
     /// `(provider, model id)` to switch to once pi has started (after adding a model).
@@ -287,6 +294,9 @@ impl PiSession {
             sending: None,
             awaiting_start: false,
             runs_started: 0,
+            compact_sent: false,
+            compacting_between_runs: false,
+            compactions_ended: 0,
             reported_busy: false,
             pending_model: None,
             _event_pump: Task::ready(()),
@@ -394,6 +404,9 @@ impl PiSession {
             sending: None,
             awaiting_start: false,
             runs_started: 0,
+            compact_sent: false,
+            compacting_between_runs: false,
+            compactions_ended: 0,
             reported_busy: false,
             pending_model: None,
             _event_pump: Task::ready(()),
@@ -453,14 +466,33 @@ impl PiSession {
         self.transcript.is_bash_running()
     }
 
-    /// Whether something visible goes on that Esc and the stop button end.
-    pub fn can_stop(&self) -> bool {
-        self.is_running() || self.is_bash_running()
+    /// Whether the conversation is being compacted, in a run or between runs.
+    pub fn is_compacting(&self) -> bool {
+        self.holds_prompts() || *self.transcript.status() == RunStatus::Compacting
     }
 
-    /// Whether this session has work in flight: a run, a shell command, prompts waiting to
-    /// be sent, or a prompt pi accepted but has not started showing yet. A busy chat must stay
-    /// alive when the user switches away, or its messages are lost.
+    /// Whether the transcript ends with the working row.
+    pub fn shows_working(&self) -> bool {
+        self.is_running() || self.is_compacting()
+    }
+
+    /// What the working row says.
+    pub fn working_status(&self) -> RunStatus {
+        if self.is_compacting() {
+            RunStatus::Compacting
+        } else {
+            self.transcript.status().clone()
+        }
+    }
+
+    /// Whether something visible goes on that Esc and the stop button end.
+    pub fn can_stop(&self) -> bool {
+        self.shows_working() || self.is_bash_running()
+    }
+
+    /// Whether this session has work in flight: a run, a shell command, compaction, prompts
+    /// waiting to be sent, or a prompt pi accepted but has not started showing yet. A busy chat
+    /// must stay alive when the user switches away, or its messages are lost.
     pub fn is_busy(&self) -> bool {
         matches!(self.lifecycle, Lifecycle::Starting | Lifecycle::Ready)
             && (self.agent_busy() || self.is_bash_running())
@@ -468,7 +500,7 @@ impl PiSession {
 
     /// [`Self::is_busy`] without shell commands.
     fn agent_busy(&self) -> bool {
-        self.is_running()
+        self.shows_working()
             || self.sending.is_some()
             || self.awaiting_start
             || !self.outbox.is_empty()
@@ -744,9 +776,15 @@ impl PiSession {
         }
     }
 
+    /// Whether prompts wait for a compaction between runs to end: pi refuses them while it
+    /// lasts, and one sent just before it would run into it.
+    fn holds_prompts(&self) -> bool {
+        self.compact_sent || self.compacting_between_runs
+    }
+
     /// Sends the next waiting prompt once pi is ready and has answered the previous one.
     fn flush_outbox(&mut self, cx: &mut Context<Self>) {
-        if self.sending.is_some() || self.lifecycle != Lifecycle::Ready {
+        if self.sending.is_some() || self.lifecycle != Lifecycle::Ready || self.holds_prompts() {
             return;
         }
         let Some(client) = self.client.clone() else {
@@ -773,7 +811,7 @@ impl PiSession {
                 // Events pi sent before it stopped may still wait to be handled, and they say
                 // whether the prompt's run started. The disconnect comes after them and gives
                 // the prompt back; this is for when it doesn't come.
-                cx.background_executor().timer(DISCONNECT_GRACE).await;
+                cx.background_executor().timer(EVENT_GRACE).await;
             }
             let _ = this.update(cx, |this, cx| this.prompt_answered(result, cx));
         })
@@ -1021,8 +1059,48 @@ impl PiSession {
         self.set_thinking_level(next, cx);
     }
 
+    /// Compacts the conversation (`/compact`), aborting a run like pi's terminal does.
+    /// Prompts submitted meanwhile wait.
     pub fn compact(&mut self, instructions: Option<String>, cx: &mut Context<Self>) {
-        self.run(cx, async move |client| client.compact(instructions).await);
+        let Some(client) = self.client.clone() else {
+            self.push_notice(NoticeKind::Error, "pi is not running.", cx);
+            return;
+        };
+        if self.holds_prompts() {
+            let text = "The conversation is already being compacted.";
+            self.push_notice(NoticeKind::Info, text, cx);
+            return;
+        }
+        self.compact_sent = true;
+        let ended = self.compactions_ended;
+        cx.spawn(async move |this, cx| {
+            let result = client.compact(instructions).await;
+            let _ = this.update(cx, |this, cx| {
+                this.compact_sent = false;
+                this.compacting_between_runs = false;
+                this.flush_outbox(cx);
+                this.transcript_changed(cx);
+            });
+            match result {
+                // A lost connection says so itself.
+                Ok(()) | Err(RpcError::Disconnected) => return,
+                Err(RpcError::Rejected { .. }) => {
+                    // pi tells how a compaction ended with an event, which may still wait to
+                    // be handled.
+                    cx.background_executor().timer(EVENT_GRACE).await;
+                }
+                Err(_) => {}
+            }
+            let _ = this.update(cx, |this, cx| {
+                if let Err(error) = result
+                    && this.compactions_ended == ended
+                {
+                    this.report(&error, cx);
+                }
+            });
+        })
+        .detach();
+        self.transcript_changed(cx);
     }
 
     pub fn rename(&mut self, name: String, cx: &mut Context<Self>) {
@@ -1297,6 +1375,8 @@ impl PiSession {
                     Err(error) => this.report(&error, cx),
                 }
                 this.stats = stats;
+                // Another session in pi: one that compacted the old one is over.
+                this.compacting_between_runs = false;
                 cx.emit(SessionEvent::Reloaded);
                 cx.emit(SessionEvent::SessionFileChanged);
                 cx.emit(SessionEvent::MetaChanged);
@@ -1530,11 +1610,24 @@ impl PiSession {
                     pi_rpc::protocol::Event::AgentStart => {
                         self.runs_started += 1;
                         self.awaiting_start = false;
+                        self.compacting_between_runs = false;
                     }
                     pi_rpc::protocol::Event::AgentSettled { .. } => {
                         self.awaiting_start = false;
                         self.refresh_stats(cx);
                         cx.emit(SessionEvent::Settled);
+                    }
+                    pi_rpc::protocol::Event::CompactionStart {
+                        reason: CompactionReason::Manual,
+                    } => self.compacting_between_runs = true,
+                    pi_rpc::protocol::Event::CompactionEnd {
+                        reason: CompactionReason::Manual,
+                        ..
+                    } => {
+                        self.compacting_between_runs = false;
+                        self.compactions_ended += 1;
+                        self.flush_outbox(cx);
+                        self.refresh_stats(cx);
                     }
                     pi_rpc::protocol::Event::TurnEnd { .. }
                     | pi_rpc::protocol::Event::CompactionEnd { .. } => self.refresh_stats(cx),
@@ -1565,6 +1658,8 @@ impl PiSession {
                     self.outbox.push_front(sent.prompt);
                 }
                 self.awaiting_start = false;
+                self.compact_sent = false;
+                self.compacting_between_runs = false;
                 self.return_outbox(cx);
                 cx.emit(SessionEvent::MetaChanged);
             }

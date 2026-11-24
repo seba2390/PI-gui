@@ -100,7 +100,7 @@ pub fn render_row(
         (Some(_), Some(RowRole::Hidden)) => return div().into_any_element(),
         (Some(_), Some(RowRole::Group(group))) => render_group(group, &context),
         (Some(item), _) => render_item(item, &context, theme.muted, cx),
-        (None, _) => render_working(session.transcript().status(), &context),
+        (None, _) => render_working(&session.working_status(), &context),
     };
     // Rows of only activity (and "Explored" groups) sit on one continuous rail; text gets more
     // room where it meets them.
@@ -307,12 +307,12 @@ fn render_bash(id: ItemId, bash: &BashItem, cx: &RowContext<'_>) -> AnyElement {
         .into_any_element()
 }
 
-/// The line under a running command. Esc stops the agent first when it works too, so it is
-/// only offered while the agent rests.
+/// The line under a running command. Esc stops the agent (or a compaction) first, so it is
+/// only offered while that rests.
 fn render_bash_running(since: Instant, cx: &RowContext<'_>) -> impl IntoElement {
     let style = working_style(cx);
     let elapsed = format_duration(since.elapsed());
-    let hint = if cx.session.read(cx.app).is_running() {
+    let hint = if cx.session.read(cx.app).shows_working() {
         elapsed
     } else {
         format!("{elapsed} · esc to stop")
@@ -1323,7 +1323,10 @@ fn render_working(status: &RunStatus, cx: &RowContext<'_>) -> AnyElement {
         ),
         RunStatus::Idle => ("Working…".to_owned(), None),
     };
-    let elapsed = since.map(|since| since.elapsed());
+    let hint = match status {
+        RunStatus::Compacting => Some("esc to cancel".to_owned()),
+        _ => since.map(|since| format!("{} · esc to interrupt", format_duration(since.elapsed()))),
+    };
     let style = working_style(cx);
     h_flex()
         .w_full()
@@ -1341,12 +1344,8 @@ fn render_working(status: &RunStatus, cx: &RowContext<'_>) -> AnyElement {
             label.into(),
             cx.palette.accent,
         ))
-        .when_some(elapsed, |this, elapsed| {
-            this.child(
-                div()
-                    .text_color(cx.muted)
-                    .child(format!("{} · esc to interrupt", format_duration(elapsed))),
-            )
+        .when_some(hint, |this, hint| {
+            this.child(div().text_color(cx.muted).child(hint))
         })
         .into_any_element()
 }

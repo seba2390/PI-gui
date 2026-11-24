@@ -298,7 +298,13 @@ impl Transcript {
                 if let Some(result) = result {
                     self.push_notice(NoticeKind::Compaction, compaction_text(result));
                 } else if let Some(error) = error_message {
-                    self.push_notice(NoticeKind::Error, format!("Compaction failed: {error}"));
+                    // pi's message says what failed ("Compaction failed: Nothing to compact").
+                    let text = if error.contains("failed") {
+                        error.clone()
+                    } else {
+                        format!("Compaction failed: {error}")
+                    };
+                    self.push_notice(NoticeKind::Error, text);
                 } else if *aborted {
                     self.push_notice(NoticeKind::Warning, "Compaction cancelled");
                 }

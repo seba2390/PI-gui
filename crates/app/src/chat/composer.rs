@@ -965,12 +965,12 @@ impl Composer {
     fn toolbar_layout(&self, left: Div, cx: &mut Context<Self>) -> Div {
         let session = self.session.read(cx);
         let running = session.is_running();
-        let stop_label = session.can_stop().then(|| {
-            if running {
-                "Interrupt (esc)"
-            } else {
-                "Stop the command (esc)"
-            }
+        let stop_label = session.can_stop().then_some(if running {
+            "Interrupt (esc)"
+        } else if session.is_compacting() {
+            "Cancel compaction (esc)"
+        } else {
+            "Stop the command (esc)"
         });
         let ready = matches!(session.lifecycle(), Lifecycle::Ready | Lifecycle::Starting);
         let has_input =
