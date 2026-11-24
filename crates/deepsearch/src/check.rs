@@ -15,6 +15,8 @@ use crate::tools;
 
 /// How much of each source is shown for a claim.
 const EVIDENCE_CHARS: usize = 2400;
+/// Statements without a source that are shown at most.
+const MAX_UNSOURCED: usize = 60;
 /// Pages loaded at once.
 const THREADS: usize = 6;
 /// A quote counts as found when this share of its word triples is on the page.
@@ -59,28 +61,42 @@ pub struct Claim {
     pub evidence: String,
 }
 
+/// A statement that no page the model read stands behind.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Unsourced {
+    pub text: String,
+    /// What it cites instead: pages that were not read.
+    pub urls: Vec<String>,
+    /// It says something checkable (a number that no sourced claim has, or it cites a page that
+    /// was not read). Otherwise it may be advice or a remark: the model is asked.
+    pub sure: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Checked {
     pub links: Vec<Link>,
     /// The claims to judge, in the order of the report.
     pub claims: Vec<Claim>,
-    /// How many claims of the report there are.
+    pub unsourced: Vec<Unsourced>,
+    /// How many claims of the report there are, with and without a source.
     pub total_claims: usize,
 }
 
-/// A sentence of the report with links to its sources.
+/// A sentence, bullet or table row of the report and the sources it names.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Cited {
+struct Statement {
     text: String,
     urls: Vec<String>,
+    /// It is in a part about what is uncertain, where nothing has to be proven.
+    caveat: bool,
 }
 
 pub fn check(config: &Config, input: &CheckInput) -> Checked {
-    let cited = citations(&input.report);
+    let statements = statements(&input.report);
     let mut urls: Vec<String> = Vec::new();
-    for url in cited
+    for url in statements
         .iter()
-        .flat_map(|cited| &cited.urls)
+        .flat_map(|statement| &statement.urls)
         .cloned()
         .chain(all_links(&input.report))
     {
@@ -93,35 +109,47 @@ pub fn check(config: &Config, input: &CheckInput) -> Checked {
     }
     let read: HashSet<String> = input.read.iter().map(|url| pages::key(url)).collect();
     let loaded = load_all(config, input, &urls, &read);
-    let links = urls
+    let links: Vec<Link> = urls
         .iter()
         .zip(&loaded)
         .map(|(url, page)| link(url, page, &read))
         .collect();
-    let by_key: HashMap<String, &StoredPage> = urls
+    // A page that was not read is no source, whatever it says.
+    let sources: HashMap<String, Option<&StoredPage>> = links
         .iter()
         .zip(&loaded)
-        .filter_map(|(url, page)| Some((pages::key(url), page.as_ref().ok()?)))
+        .filter(|(link, _)| link.state == LinkState::Read)
+        .map(|(link, page)| (pages::key(&link.url), page.as_ref().ok()))
         .collect();
 
-    let total_claims = cited.len();
+    let (cited, bare): (Vec<&Statement>, Vec<&Statement>) =
+        statements.iter().partition(|statement| {
+            statement
+                .urls
+                .iter()
+                .any(|url| sources.contains_key(&pages::key(url)))
+        });
+    let unsourced = unsourced(&cited, &bare);
+    let total_claims = cited.len() + unsourced.iter().filter(|claim| claim.sure).count();
     let claims = pick(&cited, input.max_claims)
         .into_iter()
         .filter_map(|index| {
-            let claim = &cited[index];
+            let claim = cited[index];
+            let pages: Vec<(&String, &StoredPage)> = claim
+                .urls
+                .iter()
+                .filter_map(|url| Some((url, (*sources.get(&pages::key(url))?)?)))
+                .collect();
             let mut evidence = String::new();
-            for url in &claim.urls {
-                if let Some(page) = by_key.get(&pages::key(url)) {
-                    let budget = EVIDENCE_CHARS / claim.urls.len();
-                    let passages = passages_for(page, &claim.text, budget);
-                    let _ = writeln!(evidence, "From {url} ({}):\n{passages}", page.title);
-                }
+            for (url, page) in &pages {
+                let passages = passages_for(page, &claim.text, EVIDENCE_CHARS / pages.len());
+                let _ = writeln!(evidence, "From {url} ({}):\n{passages}", page.title);
             }
-            // Nothing to judge it by: the link's own state says so.
+            // Read before, but not there any more: nothing to judge it by.
             (!evidence.is_empty()).then(|| Claim {
                 id: index + 1,
                 text: claim.text.clone(),
-                urls: claim.urls.clone(),
+                urls: pages.iter().map(|(url, _)| (*url).clone()).collect(),
                 evidence,
             })
         })
@@ -129,8 +157,53 @@ pub fn check(config: &Config, input: &CheckInput) -> Checked {
     Checked {
         links,
         claims,
+        unsourced,
         total_claims,
     }
+}
+
+/// The statements among `bare` that need a source.
+fn unsourced(cited: &[&Statement], bare: &[&Statement]) -> Vec<Unsourced> {
+    let sourced: HashSet<String> = cited
+        .iter()
+        .flat_map(|claim| numbers(&claim.text))
+        .collect();
+    let mut out: Vec<Unsourced> = Vec::new();
+    for statement in bare {
+        let sure = if statement.urls.is_empty() {
+            let numbers = numbers(&statement.text);
+            // A summary may repeat what is backed elsewhere.
+            if statement.caveat || (!numbers.is_empty() && numbers.is_subset(&sourced)) {
+                continue;
+            }
+            !numbers.is_empty()
+        } else {
+            true
+        };
+        if !out.iter().any(|known| known.text == statement.text) {
+            out.push(Unsourced {
+                text: statement.text.clone(),
+                urls: statement.urls.clone(),
+                sure,
+            });
+        }
+    }
+    // Where there are too many, the sure ones.
+    out.sort_by_key(|claim| !claim.sure);
+    out.truncate(MAX_UNSOURCED);
+    out
+}
+
+/// The numbers in `text`, without what groups their digits.
+fn numbers(text: &str) -> HashSet<String> {
+    text.split(|c: char| c.is_whitespace() || "–—-/()[]:;|~≈".contains(c))
+        .map(|word| {
+            word.chars()
+                .filter(char::is_ascii_digit)
+                .collect::<String>()
+        })
+        .filter(|digits| !digits.is_empty())
+        .collect()
 }
 
 /// What `page` says that is closest to `claim`.
@@ -206,7 +279,7 @@ fn link(url: &str, page: &Result<StoredPage, String>, read: &HashSet<String>) ->
 
 /// The claims to judge, at most `max`: those with numbers first, as they are the easiest to get
 /// wrong. In the order of the report.
-fn pick(cited: &[Cited], max: usize) -> Vec<usize> {
+fn pick(cited: &[&Statement], max: usize) -> Vec<usize> {
     let has_number = |index: &usize| cited[*index].text.chars().any(|c| c.is_ascii_digit());
     let (mut picked, rest): (Vec<usize>, Vec<usize>) = (0..cited.len()).partition(has_number);
     picked.extend(rest);
@@ -215,80 +288,309 @@ fn pick(cited: &[Cited], max: usize) -> Vec<usize> {
     picked
 }
 
-/// The sentences of `report` that cite a source, up to its list of sources.
-fn citations(report: &str) -> Vec<Cited> {
-    let mut out: Vec<Cited> = Vec::new();
+/// A part of the report as it is written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Part {
+    Heading(String),
+    Paragraph(String),
+    /// How far it is indented, and its text.
+    Bullet(usize, String),
+    /// Its cells, as `column: value`.
+    Row(String),
+}
+
+fn parts(report: &str) -> Vec<Part> {
+    let mut out: Vec<Part> = Vec::new();
     let mut code = false;
-    for line in report.lines() {
-        let line = line.trim();
-        if line.starts_with("```") {
+    let mut open = false;
+    let mut columns: Vec<String> = Vec::new();
+    for raw in report.lines() {
+        let line = raw.trim();
+        if line.starts_with("```") || line.starts_with("~~~") {
             code = !code;
-        }
-        if code || line.starts_with("```") {
+            open = false;
             continue;
         }
-        if is_sources_heading(line) {
-            break;
+        if code {
+            continue;
         }
-        let mut in_line = 0;
-        for sentence in sentences(line) {
-            let (text, urls) = without_links(&sentence);
-            if urls.is_empty() {
-                // A link after the full stop belongs to the sentence before it.
-                out.push(Cited { text, urls });
-                in_line += 1;
-                continue;
+        if line.starts_with('|') {
+            open = false;
+            let cells = cells(line);
+            if columns.is_empty() {
+                columns = cells;
+            } else if !cells
+                .iter()
+                .all(|cell| cell.chars().all(|c| "-: ".contains(c)))
+            {
+                let named = cells
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, cell)| !cell.is_empty());
+                let text = named
+                    .map(|(index, cell)| match columns.get(index) {
+                        Some(column) if !column.is_empty() && index > 0 => {
+                            format!("{column}: {cell}")
+                        }
+                        _ => cell.clone(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                out.push(Part::Row(text));
             }
-            let words = text.split_whitespace().count();
-            let labels = link_words(&sentence);
-            if words.saturating_sub(labels) < 3 && in_line > 0 {
-                if let Some(last) = out.last_mut() {
-                    last.urls.extend(urls);
-                }
-                continue;
+            continue;
+        }
+        columns.clear();
+        if line.is_empty() || line.chars().all(|c| "-*_= ".contains(c)) {
+            open = false;
+        } else if line.starts_with('#') {
+            out.push(Part::Heading(line.to_owned()));
+            open = false;
+        } else if let Some(text) = bullet(line) {
+            out.push(Part::Bullet(raw.len() - raw.trim_start().len(), text));
+            open = true;
+        } else if let (true, Some(Part::Paragraph(text) | Part::Bullet(_, text))) =
+            (open, out.last_mut())
+        {
+            text.push(' ');
+            text.push_str(line);
+        } else {
+            // A line in bold alone is a heading too.
+            let bold = line.starts_with("**") && line.trim_end_matches(':').ends_with("**");
+            if bold && line.matches("**").count() == 2 && line.len() < 90 {
+                out.push(Part::Heading(line.to_owned()));
+                open = false;
+            } else {
+                out.push(Part::Paragraph(
+                    line.trim_start_matches(['>', ' ']).to_owned(),
+                ));
+                open = true;
             }
-            out.push(Cited { text, urls });
-            in_line += 1;
         }
     }
-    out.retain(|cited| !cited.urls.is_empty() && cited.text.split_whitespace().count() >= 4);
     out
 }
 
-fn is_sources_heading(line: &str) -> bool {
-    let title = line
-        .trim_matches(|c: char| !c.is_alphabetic())
-        .to_lowercase();
-    let heading = line.starts_with('#') || line.starts_with("**") || line == "Sources";
-    heading
-        && matches!(
-            title.as_str(),
-            "sources" | "references" | "bibliography" | "source list"
-        )
+fn cells(line: &str) -> Vec<String> {
+    line.trim_matches('|')
+        .replace("\\|", "¦")
+        .split('|')
+        .map(|cell| cell.trim().to_owned())
+        .collect()
 }
 
-/// Splits a line at the ends of sentences, but not inside links.
-fn sentences(line: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut current = String::new();
-    let mut depth = 0i32;
-    let chars: Vec<char> = line.chars().collect();
-    for (index, &c) in chars.iter().enumerate() {
-        current.push(c);
-        match c {
-            '[' | '(' => depth += 1,
-            ']' | ')' => depth = (depth - 1).max(0),
-            '.' | '!' | '?' if depth == 0 => {
-                let space = chars.get(index + 1).is_none_or(|next| next.is_whitespace());
-                let starts = chars.get(index + 2).is_none_or(|next| !next.is_lowercase());
-                if space && starts {
-                    out.push(std::mem::take(&mut current).trim().to_owned());
-                }
+/// What a list item says, or `None` for another line.
+fn bullet(line: &str) -> Option<String> {
+    let text = line
+        .strip_prefix(['-', '*', '+', '•'])
+        .or_else(|| {
+            let digits = line.trim_start_matches(|c: char| c.is_ascii_digit());
+            (digits.len() < line.len() && line.len() - digits.len() < 4)
+                .then(|| digits.strip_prefix(['.', ')']))
+                .flatten()
+        })
+        .filter(|text| text.starts_with(char::is_whitespace))?;
+    Some(text.trim().to_owned())
+}
+
+/// Everything the report states, with the sources it names for it: in the same sentence, else
+/// in its paragraph or bullet, else in the line that leads into its list or table or right after
+/// it. Without the list of sources.
+fn statements(report: &str) -> Vec<Statement> {
+    let mut out: Vec<Statement> = Vec::new();
+    // The statements of the block of bullets or rows being read, or just read.
+    let mut block: Option<usize> = None;
+    let mut lead: Vec<String> = Vec::new();
+    // The bullets above, by how far they are indented, and what they cite.
+    let mut above: Vec<(usize, Vec<String>)> = Vec::new();
+    let mut sources = false;
+    let mut caveat = false;
+    for part in parts(report) {
+        match part {
+            Part::Heading(text) => {
+                sources = is_sources_heading(&text);
+                caveat = is_caveat_heading(&text);
+                block = None;
+                lead.clear();
+                above.clear();
             }
-            _ => {}
+            _ if sources => {}
+            Part::Paragraph(text) => {
+                let (plain, urls) = without_links(&text);
+                if is_sources_heading(&plain) && urls.is_empty() {
+                    sources = true;
+                    continue;
+                }
+                // "Sources: [a], [b]" below a list or table.
+                if let Some(from) = block.take() {
+                    let named: Vec<String> = sentences(&text)
+                        .iter()
+                        .filter(|sentence| is_source_line(sentence))
+                        .flat_map(|sentence| without_links(sentence).1)
+                        .collect();
+                    for statement in &mut out[from..] {
+                        if statement.urls.is_empty() {
+                            statement.urls.clone_from(&named);
+                        }
+                    }
+                }
+                above.clear();
+                lead = if plain.trim_end().ends_with(':') {
+                    urls
+                } else {
+                    Vec::new()
+                };
+                state(&text, &[], caveat, &mut out);
+            }
+            Part::Bullet(indent, text) => {
+                above.retain(|(other, _)| *other < indent);
+                let inherited = above
+                    .iter()
+                    .rev()
+                    .find(|(_, urls)| !urls.is_empty())
+                    .map_or_else(|| lead.clone(), |(_, urls)| urls.clone());
+                block.get_or_insert(out.len());
+                state(&text, &inherited, caveat, &mut out);
+                above.push((indent, without_links(&text).1));
+            }
+            Part::Row(text) => {
+                block.get_or_insert(out.len());
+                let (text, urls) = without_links(&text);
+                out.push(Statement {
+                    text,
+                    urls: if urls.is_empty() { lead.clone() } else { urls },
+                    caveat,
+                });
+            }
         }
     }
-    out.push(current.trim().to_owned());
+    out.retain(|statement| {
+        let words = statement.text.split_whitespace().count();
+        let number = statement.text.chars().any(|c| c.is_ascii_digit());
+        words >= if number { 3 } else { 5 } && !statement.text.trim_end().ends_with('?')
+    });
+    out
+}
+
+/// Adds the sentences of a paragraph or bullet. Those without a link get the block's own links,
+/// or `inherited`.
+fn state(text: &str, inherited: &[String], caveat: bool, out: &mut Vec<Statement>) {
+    let first = out.len();
+    let own = without_links(text).1;
+    for sentence in sentences(text) {
+        let (text, urls) = without_links(&sentence);
+        // A link after the full stop belongs to the sentence before it.
+        if is_source_line(&sentence) {
+            if let Some(last) = out[first..].last_mut() {
+                last.urls.extend(urls);
+                continue;
+            }
+            // "Details: [a]", or a short link; a long one may be the claim itself.
+            let named = text
+                .split_whitespace()
+                .next()
+                .is_some_and(|word| word.ends_with(':'));
+            if named || link_words(&sentence) < 6 {
+                continue;
+            }
+        }
+        // A line that only introduces what follows.
+        if urls.is_empty() && text.ends_with(':') {
+            continue;
+        }
+        out.push(Statement { text, urls, caveat });
+    }
+    let fallback = if own.is_empty() { inherited } else { &own };
+    for statement in &mut out[first..] {
+        if statement.urls.is_empty() {
+            statement.urls = fallback.to_vec();
+        }
+    }
+}
+
+/// Whether a sentence says nothing besides its links ("Source: [a] and [b]").
+fn is_source_line(sentence: &str) -> bool {
+    let (text, urls) = without_links(sentence);
+    let words = text.split_whitespace().count();
+    !urls.is_empty() && words.saturating_sub(link_words(sentence)) < 4
+}
+
+fn heading_title(line: &str) -> String {
+    line.trim_matches(|c: char| !c.is_alphabetic())
+        .to_lowercase()
+}
+
+fn is_sources_heading(line: &str) -> bool {
+    matches!(
+        heading_title(line).as_str(),
+        "sources"
+            | "sources used"
+            | "references"
+            | "bibliography"
+            | "source list"
+            | "kilder"
+            | "quellen"
+            | "fuentes"
+            | "källor"
+            | "bronnen"
+    )
+}
+
+fn is_caveat_heading(line: &str) -> bool {
+    let title = heading_title(line);
+    [
+        "caveat",
+        "limitation",
+        "verif",
+        "uncertain",
+        "open question",
+        "gaps",
+        "not confirmed",
+        "unknown",
+        "forbehold",
+        "usikker",
+    ]
+    .iter()
+    .any(|word| title.contains(word))
+}
+
+/// Words whose full stop does not end a sentence.
+const ABBREVIATIONS: &[&str] = &[
+    "kr", "ca", "approx", "vs", "no", "nr", "inkl", "incl", "ekskl", "excl", "mr", "ms", "dr",
+    "st", "fig", "e.g", "i.e", "bl.a", "f.eks", "z.b", "u.s",
+];
+
+/// Splits a paragraph at the ends of sentences, but not inside links.
+fn sentences(text: &str) -> Vec<String> {
+    let links: Vec<_> = links(text).into_iter().map(|(range, _, _)| range).collect();
+    let mut out = Vec::new();
+    let mut from = 0;
+    for (at, _) in text.match_indices(['.', '!', '?']) {
+        if links.iter().any(|link| link.contains(&at)) {
+            continue;
+        }
+        let mut after = text[at + 1..].chars().peekable();
+        // "…**." and "…)." still end one.
+        while after.next_if(|c| "*)\"”".contains(*c)).is_some() {}
+        let space = after.next().is_none_or(char::is_whitespace);
+        let starts = after.next().is_none_or(|next| !next.is_lowercase());
+        let word = text[from..at].split_whitespace().next_back().unwrap_or("");
+        let word = word
+            .trim_matches(|c: char| !c.is_alphanumeric())
+            .to_lowercase();
+        // After "kr." a new sentence may start, but a number or sign goes on.
+        let short = text[at..].starts_with('.')
+            && ABBREVIATIONS.contains(&word.as_str())
+            && !(word == "kr" && text[at + 1..].trim_start().starts_with(char::is_alphabetic));
+        if space && starts && !short {
+            let end = text[at + 1..]
+                .find(char::is_whitespace)
+                .map_or(text.len(), |space| at + 1 + space);
+            out.push(text[from..end].trim().to_owned());
+            from = end;
+        }
+    }
+    out.push(text[from..].trim().to_owned());
     out.retain(|sentence| !sentence.is_empty());
     out
 }
@@ -439,23 +741,27 @@ A second claim is that context was cleared early. [Paper](https://b.org/x)
 - [CORE](https://a.org/p(1)): what it contributed was this and that.
 ";
 
+    fn found(report: &str) -> Vec<(String, Vec<String>)> {
+        statements(report)
+            .into_iter()
+            .map(|statement| (statement.text, statement.urls))
+            .collect()
+    }
+
+    fn claim(text: &str, urls: &[&str]) -> (String, Vec<String>) {
+        (
+            text.to_owned(),
+            urls.iter().map(|url| (*url).to_owned()).collect(),
+        )
+    }
+
     #[test]
     fn finds_the_claims_and_their_sources() {
-        let found: Vec<_> = citations(REPORT)
-            .into_iter()
-            .map(|cited| (cited.text, cited.urls))
-            .collect();
-        let claim = |text: &str, urls: &[&str]| {
-            (
-                text.to_owned(),
-                urls.iter().map(|url| (*url).to_owned()).collect::<Vec<_>>(),
-            )
-        };
         assert_eq!(
-            found,
+            found(REPORT),
             [
                 claim(
-                    "Qwen scored 87.1% on it (CORE, up from 77.7%. Nothing cited here.",
+                    "Qwen scored 87.1% on it (CORE, up from 77.7%.",
                     &["https://a.org/p(1)"]
                 ),
                 claim(
@@ -470,14 +776,122 @@ A second claim is that context was cleared early. [Paper](https://b.org/x)
         );
     }
 
+    /// The report that had 2 checked claims out of dozens: most of it was in a table and bullets.
+    #[test]
+    fn sentences_end_where_they_end() {
+        assert_eq!(
+            sentences(
+                "It costs ca. 5.149 kr. 100 were sold. That is 5.699 kr. Proshop has it [A. B \
+                 C](https://a.org/x.y). **Sold out.** Done"
+            ),
+            [
+                "It costs ca. 5.149 kr. 100 were sold.",
+                "That is 5.699 kr.",
+                "Proshop has it [A. B C](https://a.org/x.y).",
+                "**Sold out.**",
+                "Done",
+            ]
+        );
+    }
+
+    #[test]
+    fn tables_and_bullets_are_claims_too() {
+        let report = "\
+Here is what I found.
+
+## Prices
+
+| Model | Price | Store |
+|---|---|---|
+| PS5 Digital | 5.149 kr. | Komplett |
+| **PS5 Pro** | 7.499 kr. | [Elgiganten](https://e.dk) |
+
+Prices include VAT. Details: [PSGAMER – what it costs](https://p.dk/a) and [offers](https://p.dk/b).
+
+## Stock
+According to [POWER](https://power.dk):
+- The Pro is in 12 stores
+  - most of them in Copenhagen, 9 to be exact
+- The Slim is sold out everywhere
+
+1. Sony raised the price by 400 kr. in April.
+2. It fell again in May [Sony](https://s.dk/x).
+
+## Caveats
+- No prices for 27 November 2026 are known yet.
+
+**Sources**
+- [PSGAMER](https://p.dk/a): 100 prices of everything
+
+Shall I check 3 more stores for you?
+";
+        let psgamer = ["https://p.dk/a", "https://p.dk/b"];
+        let power = ["https://power.dk"];
+        assert_eq!(
+            found(report),
+            [
+                claim("Here is what I found.", &[]),
+                claim("PS5 Digital; Price: 5.149 kr.; Store: Komplett", &psgamer),
+                claim(
+                    "PS5 Pro; Price: 7.499 kr.; Store: Elgiganten",
+                    &["https://e.dk"]
+                ),
+                claim("The Pro is in 12 stores", &power),
+                claim("most of them in Copenhagen, 9 to be exact", &power),
+                claim("The Slim is sold out everywhere", &power),
+                claim("Sony raised the price by 400 kr. in April.", &power),
+                claim("It fell again in May Sony.", &["https://s.dk/x"]),
+                claim("No prices for 27 November 2026 are known yet.", &[]),
+            ]
+        );
+    }
+
+    #[test]
+    fn statements_with_numbers_need_a_source() {
+        let statement = |text: &str, caveat| Statement {
+            text: text.into(),
+            urls: Vec::new(),
+            caveat,
+        };
+        let cited = Statement {
+            urls: vec!["https://a.org".into()],
+            ..statement("It costs 5.149 kr. at Komplett and 5.699 elsewhere.", false)
+        };
+        let bare = [
+            // Says again what is backed above.
+            statement("In short, 5149–5.699 kr. is what it costs.", false),
+            statement("Nobody knows what 2027 brings.", true),
+            statement("It is the better console for most.", false),
+            statement("It costs 13.580 kr. at Føniks.", false),
+            Statement {
+                urls: vec!["https://unread.org".into()],
+                ..statement("Another page says so as well.", false)
+            },
+        ];
+        let found: Vec<_> = unsourced(&[&cited], &bare.iter().collect::<Vec<_>>())
+            .into_iter()
+            .map(|claim| (claim.text, claim.sure))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                ("It costs 13.580 kr. at Føniks.".to_owned(), true),
+                ("Another page says so as well.".to_owned(), true),
+                ("It is the better console for most.".to_owned(), false),
+            ]
+        );
+    }
+
     #[test]
     fn claims_with_numbers_come_first_when_there_are_too_many() {
         let cited: Vec<_> = ["no number", "has 1", "none", "has 22"]
-            .map(|text| Cited {
+            .map(|text| Statement {
                 text: text.into(),
                 urls: vec!["https://a.org".into()],
+                caveat: false,
             })
             .into();
+        let cited: Vec<_> = cited.iter().collect();
         assert_eq!(pick(&cited, 3), [0, 1, 3]);
         assert_eq!(pick(&cited, 2), [1, 3]);
         assert_eq!(pick(&cited, 0), [0usize; 0]);
@@ -530,13 +944,21 @@ A second claim is that context was cleared early. [Paper](https://b.org/x)
             "{:?}",
             checked.links
         );
-        // The one without a page has nothing to judge it by.
+        // Pages that were not read are no sources, also if they exist.
         assert_eq!(checked.total_claims, 3);
-        assert_eq!(checked.claims.len(), 2);
+        assert_eq!(checked.claims.len(), 1);
         assert!(
             checked.claims[0]
                 .evidence
                 .contains("accuracy of 87.1 percent")
+        );
+        assert_eq!(
+            checked
+                .unsourced
+                .iter()
+                .map(|claim| (claim.urls[0].as_str(), claim.sure))
+                .collect::<Vec<_>>(),
+            [("https://b.org", true), ("https://nowhere.invalid/x", true)]
         );
         let light = CheckInput {
             max_claims: 0,

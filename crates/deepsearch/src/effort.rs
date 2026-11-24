@@ -50,7 +50,9 @@ impl Effort {
             Self::Standard => {
                 "Answers every part of the question. Checks links and the key claims."
             }
-            Self::Thorough => "Two sources for every key fact. Checks links and every claim.",
+            Self::Thorough => {
+                "Keeps researching until every part is backed. Checks links and every claim."
+            }
             Self::Max => {
                 "Also looks for contrary evidence. Checks links and every claim, one by one."
             }
@@ -105,6 +107,16 @@ pub struct DeepBudget {
     pub claims_per_check: usize,
     /// How often the report may go back to the model because of what the checks found.
     pub max_revisions: u32,
+    /// The question is split into at most this many sub-questions, which must be answered.
+    pub max_questions: u32,
+    /// The least research per sub-question, so that simple questions stay short. With fewer
+    /// searches or pages the model is sent back to its research.
+    pub searches_per_question: u32,
+    pub pages_per_question: u32,
+    /// Different sites to read, if that many pages are asked for.
+    pub min_sites: u32,
+    /// How often the model is sent back to its research at most.
+    pub max_rounds: u32,
 }
 
 impl Default for DeepBudget {
@@ -115,19 +127,59 @@ impl Default for DeepBudget {
 
 impl DeepBudget {
     pub fn of(effort: Effort) -> Self {
-        let budget = |calls, max_results, max_claims, claims_per_check, max_revisions| Self {
-            max_searches: calls,
-            max_fetches: calls,
-            max_results,
-            max_claims,
-            claims_per_check,
-            max_revisions,
-        };
         match effort {
-            Effort::Light => budget(10, 8, 0, 1, 1),
-            Effort::Standard => budget(30, 10, 12, 6, 1),
-            Effort::Thorough => budget(80, 15, 200, 4, 2),
-            Effort::Max => budget(160, 20, 200, 1, 3),
+            Effort::Light => Self {
+                max_searches: 10,
+                max_fetches: 10,
+                max_results: 8,
+                max_claims: 0,
+                claims_per_check: 1,
+                max_revisions: 1,
+                max_questions: 3,
+                searches_per_question: 1,
+                pages_per_question: 1,
+                min_sites: 2,
+                max_rounds: 1,
+            },
+            Effort::Standard => Self {
+                max_searches: 30,
+                max_fetches: 30,
+                max_results: 10,
+                max_claims: 12,
+                claims_per_check: 6,
+                max_revisions: 1,
+                max_questions: 5,
+                searches_per_question: 1,
+                pages_per_question: 2,
+                min_sites: 4,
+                max_rounds: 2,
+            },
+            Effort::Thorough => Self {
+                max_searches: 80,
+                max_fetches: 80,
+                max_results: 15,
+                max_claims: 200,
+                claims_per_check: 4,
+                max_revisions: 2,
+                max_questions: 8,
+                searches_per_question: 2,
+                pages_per_question: 2,
+                min_sites: 7,
+                max_rounds: 4,
+            },
+            Effort::Max => Self {
+                max_searches: 160,
+                max_fetches: 160,
+                max_results: 20,
+                max_claims: 200,
+                claims_per_check: 1,
+                max_revisions: 3,
+                max_questions: 12,
+                searches_per_question: 3,
+                pages_per_question: 3,
+                min_sites: 10,
+                max_rounds: 8,
+            },
         }
     }
 }
@@ -209,8 +261,17 @@ mod tests {
             assert!(less.max_results < more.max_results);
             assert!(less.max_claims <= more.max_claims);
             assert!(less.max_revisions <= more.max_revisions);
+            assert!(less.max_questions < more.max_questions);
+            assert!(less.searches_per_question <= more.searches_per_question);
+            assert!(less.pages_per_question <= more.pages_per_question);
+            assert!(less.min_sites < more.min_sites);
+            assert!(less.max_rounds < more.max_rounds);
         }
         for effort in Effort::ALL {
+            // What has to be done is well within what may be done.
+            let budget = DeepBudget::of(effort);
+            assert!(budget.max_questions * budget.searches_per_question * 2 <= budget.max_searches);
+            assert!(budget.max_questions * budget.pages_per_question * 2 <= budget.max_fetches);
             assert_eq!(Effort::parse(effort.as_str()), Some(effort));
             assert!(!effort.guidance().contains("  "));
         }

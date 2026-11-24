@@ -23,7 +23,10 @@ pub const DIR_ENV: &str = "PISTACHIO_DEEPSEARCH_DIR";
 pub const DEFAULT_SEARCH_PROMPT: &str = include_str!("prompt-search.md");
 pub const DEFAULT_DEEP_PROMPT: &str = include_str!("prompt-deep.md");
 /// Earlier defaults of it: a file that still holds one was not edited, and is brought up to date.
-const OLD_DEEP_PROMPTS: &[&str] = &[include_str!("prompt-deep-1.md")];
+const OLD_DEEP_PROMPTS: &[&str] = &[
+    include_str!("prompt-deep-1.md"),
+    include_str!("prompt-deep-2.md"),
+];
 
 /// How a chat uses the web.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -102,6 +105,9 @@ pub struct Config {
     pub modes: Modes,
     /// What each effort level of deep search may do.
     pub deep: Deep,
+    /// The limits of the questions deep search asks the model besides the conversation (the
+    /// plan, and the check of a report).
+    pub check: Check,
 }
 
 impl Default for Config {
@@ -121,6 +127,7 @@ impl Default for Config {
             fetch: Fetch::default(),
             modes: Modes::default(),
             deep: Deep::default(),
+            check: Check::default(),
         }
     }
 }
@@ -289,6 +296,27 @@ impl Default for SearchBudget {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Check {
+    /// How long one question may take.
+    pub timeout_secs: u64,
+    /// How long checking one report may take.
+    pub total_secs: u64,
+    /// How much the model may write in answer to one question, thinking included.
+    pub max_tokens: u32,
+}
+
+impl Default for Check {
+    fn default() -> Self {
+        Self {
+            timeout_secs: 120,
+            total_secs: 1200,
+            max_tokens: 8192,
+        }
+    }
+}
+
 /// The instructions for each mode, as read from disk.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Prompts {
@@ -442,9 +470,11 @@ mod tests {
     fn instructions_that_were_not_edited_are_brought_up_to_date() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join(DEEP_PROMPT_FILE);
-        fs::write(&file, OLD_DEEP_PROMPTS[0]).unwrap();
-        assert_eq!(load(dir.path()).unwrap().1.deep, DEFAULT_DEEP_PROMPT);
-        assert_eq!(fs::read_to_string(&file).unwrap(), DEFAULT_DEEP_PROMPT);
+        for old in OLD_DEEP_PROMPTS {
+            fs::write(&file, old).unwrap();
+            assert_eq!(load(dir.path()).unwrap().1.deep, DEFAULT_DEEP_PROMPT);
+            assert_eq!(fs::read_to_string(&file).unwrap(), DEFAULT_DEEP_PROMPT);
+        }
         fs::write(&file, "Mine.").unwrap();
         assert_eq!(load(dir.path()).unwrap().1.deep, "Mine.");
         assert!(DEFAULT_DEEP_PROMPT.contains("{{depth}}"));
