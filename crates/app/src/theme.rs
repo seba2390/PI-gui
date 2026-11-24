@@ -128,6 +128,12 @@ pub struct Palette {
     pub success: Hsla,
     pub error: Hsla,
     pub warning: Hsla,
+    /// A switch that is on: its track and outline.
+    pub switch_on: Hsla,
+    pub switch_on_edge: Hsla,
+    /// The outline of a switch that is off (its track is the theme's).
+    pub switch_edge: Hsla,
+    pub switch_thumb: Hsla,
 }
 
 pub fn palette(cx: &App) -> Palette {
@@ -146,6 +152,10 @@ pub fn palette(cx: &App) -> Palette {
             success: rgb(0x007F_B069).into(),
             error: rgb(0x00E5_675B).into(),
             warning: rgb(0x00D9_A63C).into(),
+            switch_on: rgb(0x001F_7A3C).into(),
+            switch_on_edge: rgb(0x005C_C45E).into(),
+            switch_edge: rgb(0x008B_877E).into(),
+            switch_thumb: rgb(0x00F5_F3EC).into(),
         }
     } else {
         Palette {
@@ -162,6 +172,10 @@ pub fn palette(cx: &App) -> Palette {
             success: rgb(0x004E_8A3A).into(),
             error: rgb(0x00C2_463A).into(),
             warning: rgb(0x00A8_7A16).into(),
+            switch_on: rgb(0x001B_7A3A).into(),
+            switch_on_edge: rgb(0x000F_5225).into(),
+            switch_edge: rgb(0x008F_8B80).into(),
+            switch_thumb: rgb(0x00FF_FFFF).into(),
         }
     }
 }

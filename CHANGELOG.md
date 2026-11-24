@@ -8,6 +8,8 @@ All notable changes to PI-gui are listed here. The format follows
 
 ### Changed
 
+- Switches in Settings have an outline and a light knob, and a brighter green when on. In the dark
+  theme one that was off looked like it could not be clicked.
 - A folder name too long for the message box's toolbar fades out instead of being cut off, then
   the machine's does. Pointing at the folder shows its path.
 

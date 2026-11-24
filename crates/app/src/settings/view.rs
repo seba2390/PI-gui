@@ -710,7 +710,7 @@ impl SettingsView {
             .group(
                 SettingGroup::new()
                     .title("Saved connections")
-                    .item(SettingItem::render(move |_, window, cx| {
+                    .item(SettingItem::render(move |_, _, cx| {
                         let weak = weak.clone();
                         crate::remote_ui::saved_hosts(
                             move |action, _, cx| {
@@ -718,7 +718,6 @@ impl SettingsView {
                                     cx.emit(SettingsEvent::Host(action));
                                 });
                             },
-                            window,
                             cx,
                         )
                     })),
@@ -914,14 +913,13 @@ fn hover_switch(
     set_value: impl Fn(bool, &mut App) + 'static,
 ) -> SettingField<SharedString> {
     let set_value = std::rc::Rc::new(set_value);
-    SettingField::render(move |_, window, cx| {
+    SettingField::render(move |_, _, cx| {
         let set_value = set_value.clone();
         crate::ui::hover_switch(
             id,
             value(cx),
             move |checked, _, cx| set_value(checked, cx),
             None,
-            window,
             cx,
         )
     })
