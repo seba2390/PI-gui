@@ -34,6 +34,7 @@ use crate::settings::AppSettings;
 use crate::settings::view::{SettingsEvent, SettingsView};
 use crate::sidebar::{Activity, Sidebar, SidebarEvent};
 use crate::ui::QuietButton as _;
+use crate::ui::dialog::{on_submit, open_form_dialog};
 use crate::ui::{AppIcon, TOP_BAR_HEIGHT, TRAFFIC_LIGHT_INSET, WindowDrag};
 use crate::ui_state::{LastSession, UiState};
 use remote::HostId;
@@ -1212,7 +1213,7 @@ impl MainWindow {
                     this.open_connect_flow(host.clone(), window, cx);
                 }),
             );
-        window.open_dialog(cx, move |dialog, _, _| {
+        open_form_dialog(None, window, cx, move |dialog, _, _| {
             dialog
                 .title("Add SSH connection")
                 .w(px(480.))
@@ -1265,7 +1266,7 @@ impl MainWindow {
                 }
             },
         ));
-        window.open_dialog(cx, move |dialog, _, _| {
+        open_form_dialog(None, window, cx, move |dialog, _, _| {
             dialog.title(title.clone()).w(px(520.)).child(flow.clone())
         });
     }
@@ -1304,7 +1305,7 @@ impl MainWindow {
             },
         ));
         let view = dialog.clone();
-        window.open_dialog(cx, move |dialog_view, _, _| {
+        open_form_dialog(None, window, cx, move |dialog_view, _, _| {
             dialog_view
                 .title(title.clone())
                 .w(px(600.))
@@ -1578,7 +1579,7 @@ impl MainWindow {
                 }
             },
         ));
-        window.open_dialog(cx, move |dialog, _, _| {
+        open_form_dialog(None, window, cx, move |dialog, _, _| {
             dialog
                 .title(format!("Change {label}"))
                 .w(px(480.))
@@ -1704,7 +1705,7 @@ impl MainWindow {
                 }
             },
         ));
-        window.open_dialog(cx, move |dialog, _, _| {
+        open_form_dialog(None, window, cx, move |dialog, _, _| {
             dialog
                 .title("SSH connections")
                 .w(px(560.))
@@ -1948,12 +1949,33 @@ impl MainWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let input =
-            cx.new(|cx| InputState::new(window, cx).default_value(summary.title().to_owned()));
+        let input = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).default_value(summary.title().to_owned());
+            input.select_all(window, cx);
+            input
+        });
         let weak = cx.weak_entity();
-        window.open_dialog(cx, move |dialog, _, _| {
-            let (weak, summary, input_value) = (weak.clone(), summary.clone(), input.clone());
-            let host = host.clone();
+        let submit = on_submit(&input, window, cx, move |name, window, cx| {
+            // First: showing the chat can open a question it held.
+            window.close_dialog(cx);
+            let name = name.trim().to_owned();
+            if !name.is_empty() {
+                let summary = summary.clone();
+                let host = host.clone();
+                let _ = weak.update(cx, |this, cx| {
+                    // Renames go through pi so the session file stays pi's
+                    // (on the host, for remote sessions).
+                    let chat = this.open_session(host, &summary, window, cx);
+                    chat.read(cx)
+                        .session()
+                        .clone()
+                        .update(cx, |session, cx| session.rename(name, cx));
+                });
+            }
+        });
+        let focus = input.focus_handle(cx);
+        open_form_dialog(Some(focus), window, cx, move |dialog, _, _| {
+            let submit = submit.clone();
             dialog
                 .title("Rename chat")
                 .w(px(420.))
@@ -1968,25 +1990,12 @@ impl MainWindow {
                                 .label("Cancel")
                                 .on_click(|_, window, cx| window.close_dialog(cx)),
                         )
-                        .child(Button::new("rename-ok").primary().label("Rename").on_click(
-                            move |_, window, cx| {
-                                let name = input_value.read(cx).value().trim().to_owned();
-                                if !name.is_empty() {
-                                    let summary = summary.clone();
-                                    let host = host.clone();
-                                    let _ = weak.update(cx, |this, cx| {
-                                        // Renames go through pi so the session file stays pi's
-                                        // (on the host, for remote sessions).
-                                        let chat = this.open_session(host, &summary, window, cx);
-                                        chat.read(cx)
-                                            .session()
-                                            .clone()
-                                            .update(cx, |session, cx| session.rename(name, cx));
-                                    });
-                                }
-                                window.close_dialog(cx);
-                            },
-                        )),
+                        .child(
+                            Button::new("rename-ok")
+                                .primary()
+                                .label("Rename")
+                                .on_click(move |_, window, cx| submit(window, cx)),
+                        ),
                 )
         });
     }

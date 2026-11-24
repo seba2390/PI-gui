@@ -39,6 +39,14 @@ pub struct Prompt {
 }
 
 impl Prompt {
+    /// A prompt that no ssh asked, and where its answer arrives.
+    #[doc(hidden)]
+    pub fn for_tests(text: &str) -> (Self, mpsc::Receiver<Option<String>>) {
+        let (reply, answer) = mpsc::channel();
+        let text = text.to_owned();
+        (Self { text, reply }, answer)
+    }
+
     /// Whether the answer is a secret (password, passphrase, PIN) rather than a yes/no.
     pub fn is_secret(&self) -> bool {
         let text = self.text.to_lowercase();

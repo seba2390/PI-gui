@@ -2,6 +2,7 @@
 //! dialog opens), or a custom connection entered by hand.
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::input::InputEvent;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -29,6 +30,7 @@ pub struct AddHost {
     discovered: Option<Vec<Discovered>>,
     custom: Option<HostForm>,
     _scan: Task<()>,
+    _enter: Vec<Subscription>,
 }
 
 impl EventEmitter<AddHostEvent> for AddHost {}
@@ -78,6 +80,7 @@ impl AddHost {
             discovered: None,
             custom: None,
             _scan: scan,
+            _enter: Vec::new(),
         }
     }
 
@@ -105,7 +108,19 @@ impl AddHost {
     }
 
     fn show_custom(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.custom = Some(HostForm::new(&HostFields::default(), None, window, cx));
+        let form = HostForm::new(&HostFields::default(), None, window, cx);
+        self._enter = form
+            .inputs()
+            .map(|input| {
+                cx.subscribe(input, |this, _, event: &InputEvent, cx| {
+                    if matches!(event, InputEvent::PressEnter { .. }) {
+                        this.add_custom(cx);
+                    }
+                })
+            })
+            .into();
+        form.focus(window, cx);
+        self.custom = Some(form);
         cx.notify();
     }
 
@@ -259,5 +274,64 @@ impl Render for AddHost {
                 .into_any_element(),
         };
         v_flex().w_full().gap_3().child(body)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use gpui_kit::component::WindowExt as _;
+    use gpui_kit::{AppContext as _, ParentElement as _, TestAppContext};
+
+    use super::{AddHost, AddHostEvent};
+    use crate::config::AppConfig;
+    use crate::hosts::{Hosts, HostsHandle};
+    use crate::ui::dialog::open_form_dialog;
+    use crate::ui::dialog::testing::{click, draw, is_open, press, window};
+
+    /// Enter in a field adds the connection; what is wrong shows in the dialog, which stays.
+    #[gpui_kit::test]
+    #[allow(clippy::unused_async)] // gpui tests take an async body
+    async fn enter_adds_a_custom_host(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(AppConfig::for_tests("pi".into()));
+            let hosts = cx.new(|_| Hosts::for_tests(Vec::new()));
+            cx.set_global(HostsHandle(hosts));
+        });
+        let cx = window(cx);
+        let added = Rc::new(Cell::new(0));
+        let add = cx.update(|window, cx| {
+            let add = cx.new(AddHost::new);
+            let added = added.clone();
+            window
+                .subscribe(&add, cx, move |_, _: &AddHostEvent, window, cx| {
+                    added.set(added.get() + 1);
+                    window.close_dialog(cx);
+                })
+                .detach();
+            let view = add.clone();
+            open_form_dialog(None, window, cx, move |dialog, _, _| {
+                dialog.child(view.clone())
+            });
+            add
+        });
+        draw(cx);
+        press("enter", cx);
+        assert!(is_open(cx));
+        click("custom-host", cx);
+        cx.simulate_input("Build server");
+        press("enter", cx);
+        assert!(is_open(cx));
+        assert_eq!(added.get(), 0);
+        cx.update(|_, cx| {
+            assert!(add.read(cx).custom.as_ref().unwrap().error.is_some());
+        });
+        press("tab", cx);
+        cx.simulate_input("192.0.2.7");
+        press("enter", cx);
+        assert_eq!(added.get(), 1);
+        assert!(!is_open(cx));
     }
 }

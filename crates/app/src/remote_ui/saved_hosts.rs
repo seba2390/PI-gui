@@ -4,7 +4,7 @@
 use std::rc::Rc;
 
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::{
     ActiveTheme as _, IconName, Sizable as _, WindowExt as _, h_flex, v_flex,
@@ -14,6 +14,7 @@ use gpui_kit::*;
 use remote::HostId;
 
 use crate::hosts::hosts;
+use crate::ui::dialog::{on_submit, open_form_dialog};
 use crate::ui::{AppIcon, QuietButton as _, hover_switch};
 
 /// What the user asked for in the list.
@@ -207,28 +208,13 @@ fn open_input_dialog(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let submit = {
-        let input = input.clone();
-        Rc::new(move |window: &mut Window, cx: &mut App| {
-            let value = input.read(cx).value().to_string();
-            if save(value, cx) {
-                window.close_dialog(cx);
-            }
-        })
-    };
-    let handle = window.window_handle();
-    {
-        let submit = submit.clone();
-        cx.subscribe(&input, move |_, event: &InputEvent, cx| {
-            if matches!(event, InputEvent::PressEnter { .. }) {
-                let submit = submit.clone();
-                let _ = handle.update(cx, move |_, window, cx| submit(window, cx));
-            }
-        })
-        .detach();
-    }
-    input.update(cx, |input, cx| input.focus(window, cx));
-    window.open_dialog(cx, move |dialog, _, _| {
+    let submit = on_submit(&input, window, cx, move |text, window, cx| {
+        if save(text, cx) {
+            window.close_dialog(cx);
+        }
+    });
+    let focus = input.focus_handle(cx);
+    open_form_dialog(Some(focus), window, cx, move |dialog, _, _| {
         let submit = submit.clone();
         dialog
             .title(title)
@@ -267,6 +253,7 @@ mod tests {
 
     use super::SavedHostAction;
     use crate::hosts::{HostStatus, Hosts, HostsHandle};
+    use crate::ui::dialog::testing as dialog;
 
     struct List(Rc<RefCell<Vec<SavedHostAction>>>);
 
@@ -346,5 +333,28 @@ mod tests {
             draw(cx);
             assert_eq!(take(), [expected]);
         }
+    }
+    /// Enter saves the new name; an empty one keeps the dialog open.
+    #[gpui_kit::test]
+    #[allow(clippy::unused_async)]
+    async fn enter_renames_a_host(cx: &mut TestAppContext) {
+        let mut store = HostStore::default();
+        let alias = "one".to_owned();
+        let id = store.add(alias.clone(), Target::Alias { alias });
+        cx.update(|cx| {
+            let hosts = cx.new(|_| Hosts::for_tests(store.hosts));
+            cx.set_global(HostsHandle(hosts));
+        });
+        let cx = dialog::window(cx);
+        cx.update(|window, cx| super::open_rename_host(&id, window, cx));
+        dialog::draw(cx);
+        cx.simulate_keystrokes("secondary-a backspace");
+        dialog::press("enter", cx);
+        assert!(dialog::is_open(cx));
+        cx.simulate_input("Build server");
+        dialog::press("enter", cx);
+        assert!(!dialog::is_open(cx));
+        let label = cx.update(|_, cx| super::hosts(cx).read(cx).label(&id));
+        assert_eq!(label, "Build server");
     }
 }

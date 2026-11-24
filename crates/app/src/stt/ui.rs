@@ -12,13 +12,14 @@ use super::catalog::{self, DEFAULT_MODEL, MODELS, Model};
 use super::models::models;
 use crate::settings::AppSettings;
 use crate::theme::palette;
+use crate::ui::dialog::open_form_dialog;
 
 /// Asks whether to download a model, showing each one's size, speed and languages.
 pub fn open_download_dialog(window: &mut Window, cx: &mut App) {
     let dialog = cx.new(|_| DownloadDialog {
         selected: catalog::model(DEFAULT_MODEL).unwrap_or(&MODELS[0]),
     });
-    window.open_dialog(cx, move |dialog_view, _, _| {
+    open_form_dialog(None, window, cx, move |dialog_view, _, _| {
         dialog_view
             .title("Download a speech-to-text model?")
             .w(px(560.))

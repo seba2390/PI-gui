@@ -3,6 +3,7 @@
 pub mod backdrop;
 mod button;
 mod copy_button;
+pub mod dialog;
 mod drag;
 mod hover_switch;
 mod icons;
