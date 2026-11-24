@@ -234,7 +234,7 @@ async fn a_shell_command_streams_and_stops(cx: &mut TestAppContext) {
     fake.until(cx, |session| !session.is_busy()).await;
     assert_eq!(fake.bash(cx).status, BashStatus::Cancelled);
     assert_eq!(fake.bash(cx).output, "working\n");
-    assert!(fake.notices(cx).is_empty());
+    assert_eq!(fake.notices(cx), []);
 }
 
 /// Every way a command ends leaves no running row behind.
