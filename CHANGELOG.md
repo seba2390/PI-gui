@@ -11,6 +11,10 @@ All notable changes to PI-gui are listed here. The format follows
 - Clicking a switch in Settings no longer leaves a green outline on it. The outline shows when the
   keyboard is used.
 - Check for Updates shows one notification: the result takes the place of "Checking for updates…".
+- macOS: the first connection to an SSH host on the local network goes through once you allow
+  local network access. It failed while macOS asked, and had to be turned off and on again. If the
+  host still can't be reached, the error says where the setting is, and macOS' question says what
+  the access is for.
 
 ## [0.4.7] - 2026-11-24
 

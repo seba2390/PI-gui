@@ -29,6 +29,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
+  <key>NSLocalNetworkUsageDescription</key><string>Pistachio connects to SSH hosts, models and web pages on your local network that you ask for.</string>
   <key>NSMicrophoneUsageDescription</key><string>Pistachio listens while you dictate a message. Speech is transcribed on this Mac and is not sent anywhere.</string>
 </dict>
 </plist>

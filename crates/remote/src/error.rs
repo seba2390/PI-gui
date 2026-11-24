@@ -31,6 +31,14 @@ pub enum RemoteError {
     #[error("Could not reach the host: {0}")]
     Unreachable(String),
 
+    /// [`RemoteError::Unreachable`] on the local network, which macOS may be blocking. Holds
+    /// ssh's own message.
+    #[error(
+        "Could not reach the host: {0}. If it is on, macOS may be blocking local network access: \
+         check System Settings → Privacy & Security → Local Network, then connect again."
+    )]
+    LocalNetwork(String),
+
     /// Anything else, e.g. a remote command that failed. Holds the (cleaned) stderr.
     #[error("{0}")]
     Failed(String),

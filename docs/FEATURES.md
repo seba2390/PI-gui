@@ -107,6 +107,9 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   - Passwords, key passphrases and one-time codes are asked for in the app (ssh's
     `SSH_ASKPASS`); nothing is stored. Unknown host keys are shown for confirmation; a changed
     host key is explained, and you can remove the old key and confirm the new one.
+  - macOS asks once whether Pistachio may reach devices on your local network, and blocks the
+    connection meanwhile. It is tried again for about 15 s, so it goes through once you allow it;
+    otherwise the error says where the setting is.
   - The folder browser takes a typed or pasted path, creates folders and can show hidden ones.
   - Remote sessions behave like local ones: they are listed in the sidebar under the host
     (then folder), can be opened, renamed and moved to the host's trash, and with "Reopen the

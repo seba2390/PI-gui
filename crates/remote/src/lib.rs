@@ -25,6 +25,7 @@ mod extras;
 pub mod host;
 mod install;
 pub mod link;
+mod local_network;
 mod process;
 pub mod sessions;
 pub mod ssh;
