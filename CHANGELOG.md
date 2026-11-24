@@ -6,6 +6,8 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.4.7] - 2026-11-24
+
 ### Added
 
 - The `/` list works from the keyboard: ↑ / ↓ move through it, Tab or Enter takes the highlighted
@@ -405,7 +407,8 @@ chats, skills and model management. Changes since the last private build:
 - A corrupt `hosts.json` is kept as a backup.
 - A remembered terminal height can no longer squeeze out the chat.
 
-[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.4.6...HEAD
+[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.4.7...HEAD
+[0.4.7]: https://github.com/seba2390/pistachio/compare/v0.4.6...v0.4.7
 [0.4.6]: https://github.com/seba2390/pistachio/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/seba2390/pistachio/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/seba2390/pistachio/compare/v0.4.3...v0.4.4
