@@ -85,8 +85,9 @@ impl QuietButton for Button {
 
     fn choice_card(self, chosen: bool, cx: &App) -> Self {
         let theme = cx.theme();
+        let green = crate::theme::palette(cx).accent_icon;
         let (edge, fill) = if chosen {
-            (theme.foreground.opacity(0.55), theme.secondary)
+            (green, theme.background.blend(green.opacity(0.1)))
         } else {
             (theme.input, theme.background)
         };

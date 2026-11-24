@@ -16,7 +16,8 @@ All notable changes to PI-gui are listed here. The format follows
   session open). Its instructions start with a template.
 - An open skill has Move to trash, Discard and Save centered below it. Save is there when something
   was changed, and opening another skill no longer drops changes that are not saved.
-- Text fields are as tall as the search field everywhere.
+- Text fields are as tall as the search field everywhere, and the focused one has a thin white
+  outline (dark in the light theme) instead of a green glow.
 - Switches in Settings have an outline and a light knob, and a brighter green when on. In the dark
   theme one that was off looked like it could not be clicked.
 - A folder name too long for the message box's toolbar fades out instead of being cut off, then

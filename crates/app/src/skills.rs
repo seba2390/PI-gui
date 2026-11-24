@@ -29,7 +29,7 @@ use crate::builtin_skills;
 use crate::chat::session::{Lifecycle, PiSession};
 use crate::config::{AppConfig, RecentFolders};
 use crate::pi_place::PiPlace;
-use crate::ui::{AppIcon, QuietButton as _};
+use crate::ui::{AppIcon, PiField, QuietButton as _};
 
 /// How wide the list is beside an open skill.
 const LIST_WIDTH: Pixels = px(288.);
@@ -257,6 +257,8 @@ pub struct SkillsView {
     /// A skill was created: the form starts empty again.
     reset_form: bool,
     window: AnyWindowHandle,
+    /// Behind the libraries.
+    pi_field: Entity<PiField>,
     _session_subscription: Subscription,
     _editor_subscription: Subscription,
     _recent_subscription: Subscription,
@@ -307,6 +309,7 @@ impl SkillsView {
             notice: None,
             reset_form: false,
             window: window.window_handle(),
+            pi_field: cx.new(|_| PiField::plain()),
             _session_subscription: subscription,
             _editor_subscription: editor_subscription,
             // The projects are known a moment after the app opened.
@@ -1026,6 +1029,7 @@ impl SkillsView {
             .rounded_xl()
             .border_1()
             .border_color(border)
+            // The π signs show through, faintly; the cards are solid.
             .bg(crate::theme::palette(cx).sidebar.opacity(0.4))
             .child(
                 v_flex()
@@ -1801,6 +1805,16 @@ impl Render for SkillsView {
             .size_full()
             .overflow_hidden()
             .bg(cx.theme().background)
+            // The field is its own cached view, as on the welcome screen.
+            .when(detail.is_none(), |this| {
+                this.child(
+                    div().absolute().top_0().left_0().size_full().child(
+                        self.pi_field
+                            .clone()
+                            .cached(StyleRefinement::default().size_full()),
+                    ),
+                )
+            })
             .child(
                 div()
                     .relative()
