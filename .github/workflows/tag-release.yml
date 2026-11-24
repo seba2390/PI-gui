@@ -1,0 +1,38 @@
+name: Tag release
+
+# When a release is merged (main has a new version in Cargo.toml and a dated changelog section
+# for it), tags that commit `v<version>` and starts release.yml, which builds and publishes it.
+# Any other push to main changes nothing.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: tag-release
+
+jobs:
+  tag:
+    name: Tag a merged release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Tag and start the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$(script/release-tag.sh)"
+          [[ -n "$tag" ]] || exit 0
+          if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$tag" -m "Pistachio ${tag#v}"
+            git push origin "refs/tags/$tag"
+          fi
+          # A tag pushed with the workflow's token starts no workflow by itself.
+          gh workflow run release.yml --ref "$tag"

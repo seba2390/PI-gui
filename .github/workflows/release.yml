@@ -1,6 +1,7 @@
 name: Release
 
-# Push a tag like `v0.2.0` to build the apps and publish a GitHub release.
+# Push a tag like `v0.2.0` to build the apps and publish a GitHub release. tag-release.yml does
+# it when a release is merged into main.
 on:
   push:
     tags: ["v*"]
@@ -163,14 +164,21 @@ jobs:
       # A deploy key with write access to seba2390/homebrew-tap.
       TAP_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
     steps:
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
+      - name: Release notes
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          script/release-notes.sh "$version" > "$RUNNER_TEMP/notes.md"
+          echo "TITLE=Pistachio $version" >> "$GITHUB_ENV"
       - uses: softprops/action-gh-release@v3
         with:
           files: dist/*
-          generate_release_notes: true
+          name: ${{ env.TITLE }}
+          body_path: ${{ runner.temp }}/notes.md
       # `brew install --cask seba2390/tap/pistachio` follows stable releases (not `v1.2.3-beta`).
       - name: Update the Homebrew cask
         if: env.TAP_KEY != '' && !contains(github.ref_name, '-')
