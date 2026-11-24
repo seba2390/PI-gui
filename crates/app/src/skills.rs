@@ -3,7 +3,8 @@
 //! `SKILL.md` files.
 //!
 //! The list comes from pi itself (`get_commands` reports each skill's file and scope), so it is
-//! exactly what pi sees, here or on an SSH host. pi reads skills only when it starts, so every
+//! exactly what pi sees, here or on an SSH host. Until pi runs, the skills that come with the app
+//! are listed (it will load them). pi reads skills only when it starts, so every
 //! change asks the window to restart pi on the same session ([`SkillsEvent::Changed`]).
 
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
@@ -232,7 +233,8 @@ impl SkillsView {
         self._tasks.push(task);
     }
 
-    /// The list: skills pi loaded, then project skills it skipped.
+    /// The list: skills pi loaded (the ones that come with the app also before pi runs), then
+    /// project skills it skipped.
     fn entries(&self, cx: &App) -> Vec<Entry> {
         let builtin_dir = &cx.global::<AppConfig>().builtin_skills_dir;
         let session = self.session.read(cx);
@@ -263,6 +265,26 @@ impl SkillsView {
                 }
             })
             .collect();
+        // pi on a host does not get them; what a running pi here says about them counts.
+        if session.host().is_none() && session.lifecycle() != &Lifecycle::Ready {
+            for (name, path, text) in builtin_skills::all(builtin_dir) {
+                let path = path.to_string_lossy().into_owned();
+                if entries.iter().any(|entry| entry.path == path) {
+                    continue;
+                }
+                entries.push(Entry {
+                    name: name.to_owned(),
+                    description: skills::parse_front_matter(text)
+                        .description
+                        .unwrap_or_default(),
+                    path,
+                    scope: Scope::BuiltIn,
+                    loaded: true,
+                    from_package: false,
+                    builtin: true,
+                });
+            }
+        }
         if let Some(Ok(scan)) = &self.scan {
             for (path, front) in &scan.skills {
                 if entries.iter().any(|entry| &entry.path == path) {
@@ -308,10 +330,18 @@ impl SkillsView {
             return;
         };
         self.loaded_text = None;
+        // One that comes with the app is written when a session starts, which may be later.
+        let dir = cx.global::<AppConfig>().builtin_skills_dir.clone();
+        let missing = matches!(place, PiPlace::Local { .. })
+            && builtin_skills::is_builtin(&dir, &path)
+            && self.session.read(cx).lifecycle() != &Lifecycle::Ready;
         let task = cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move {
+                    if missing && let Err(error) = builtin_skills::install(&dir) {
+                        return Err(format!("Could not write {path}: {error}"));
+                    }
                     place
                         .read(&path)
                         .and_then(|text| text.ok_or_else(|| format!("{path} no longer exists.")))
@@ -494,7 +524,6 @@ impl SkillsView {
             theme.secondary_hover,
             theme.accent,
         );
-        let starting = self.session.read(cx).lifecycle() == &Lifecycle::Starting;
         let entries = self.entries(cx);
         let mut list = v_flex().gap_0p5();
         let mut current: Option<Scope> = None;
@@ -553,19 +582,14 @@ impl SkillsView {
                     ),
             );
         }
-        if entries.is_empty() {
-            list = list.child(
-                div()
-                    .px_2()
-                    .pt_3()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(if starting {
-                        "pi is starting…"
-                    } else {
-                        "No skills yet."
-                    }),
-            );
+        let note = match self.session.read(cx).lifecycle() {
+            Lifecycle::Idle => Some("Your own skills are listed when a session is open."),
+            Lifecycle::Starting => Some("pi is starting…"),
+            _ if entries.is_empty() => Some("No skills yet."),
+            _ => None,
+        };
+        if let Some(note) = note {
+            list = list.child(div().px_2().pt_3().text_xs().text_color(muted).child(note));
         }
         v_flex()
             .w(px(280.))
@@ -1115,7 +1139,7 @@ fn write_trust(place: &PiPlace, folder: &str, decision: Option<bool>) -> Result<
 
 #[cfg(test)]
 mod tests {
-    use super::{PROJECT_SCAN, PiPlace, parse_scan, scan_project, write_trust};
+    use super::{PROJECT_SCAN, PiPlace, Scope, SkillsView, parse_scan, scan_project, write_trust};
     use std::fs;
 
     #[test]
@@ -1211,6 +1235,62 @@ mod tests {
         assert!(!scan.needs_trust || !scan.skills.is_empty());
     }
 
+    /// On the welcome screen no pi reports any skills; those that come with the app are listed
+    /// all the same, and can be read. On a host they are not: pi there does not get them.
+    #[gpui_kit::test]
+    fn built_in_skills_are_listed_before_pi_runs(cx: &mut gpui_kit::TestAppContext) {
+        use crate::chat::session::PiSession;
+        use crate::config::AppConfig;
+        use gpui_kit::AppContext as _;
+
+        cx.executor().allow_parking();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("skills/add-skill/SKILL.md");
+        cx.update(|cx| {
+            gpui_kit::component::init(cx);
+            let mut config = AppConfig::for_tests("pi".into());
+            config.builtin_skills_dir = dir.path().join("skills");
+            cx.set_global(config);
+            let hosts = cx.new(|_| crate::hosts::Hosts::for_tests(Vec::new()));
+            cx.set_global(crate::hosts::HostsHandle(hosts));
+        });
+        let project = dir.path().to_path_buf();
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            let session = cx.new(|_| PiSession::idle(project, pi_sessions::Mode::Code));
+            SkillsView::new(session, window, cx)
+        });
+        let entries = cx.read(|cx| view.read(cx).entries(cx));
+        let shown: Vec<_> = entries
+            .iter()
+            .map(|entry| (entry.name.as_str(), entry.scope, entry.loaded))
+            .collect();
+        assert_eq!(shown, [("add-skill", Scope::BuiltIn, true)]);
+        assert!(entries[0].description.starts_with("Create a new pi skill"));
+
+        // It opens, though no session has written it yet.
+        assert!(!path.exists());
+        view.update(cx, |view, cx| {
+            view.place = Some(PiPlace::Local {
+                agent_dir: dir.path().into(),
+            });
+            view.load_skill(entries[0].path.clone(), cx);
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while cx.read(|cx| view.read(cx).loaded_text.is_none()) {
+            assert!(std::time::Instant::now() < deadline, "it was not read");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            cx.run_until_parked();
+        }
+        let text = cx.read(|cx| view.read(cx).loaded_text.clone()).unwrap();
+        assert!(text.unwrap().contains("# Adding a skill"));
+        assert!(path.exists());
+
+        let host = remote::HostId("box".into());
+        let on_host = cx.new(|_| PiSession::idle_on_host(host));
+        view.update(cx, |view, cx| view.set_session(on_host, cx));
+        assert_eq!(cx.read(|cx| view.read(cx).entries(cx)), []);
+    }
+
     /// With real pi (`pi` on PATH): a personal and a project skill written the way the page
     /// writes them are not loaded by a running pi, but after trusting the project (as the page
     /// does) and restarting pi, both are, with their files and scopes, and the page lists them.
@@ -1262,7 +1342,9 @@ mod tests {
                     .read(cx)
                     .commands()
                     .iter()
-                    .filter(|command| command.source == "skill")
+                    .filter(|command| {
+                        command.source == "skill" && command.name != "skill:add-skill"
+                    })
                     .map(|command| {
                         (
                             command.name.clone(),
@@ -1342,15 +1424,22 @@ mod tests {
             "{paths:?}"
         );
 
-        // The page lists both as loaded.
+        // The page lists both as loaded, and the one that comes with the app.
         let (view, cx) =
-            cx.add_window_view(|window, cx| super::SkillsView::new(third.clone(), window, cx));
+            cx.add_window_view(|window, cx| SkillsView::new(third.clone(), window, cx));
         let entries = cx.read(|cx| view.read(cx).entries(cx));
         let shown: Vec<(&str, bool)> = entries
             .iter()
             .map(|entry| (entry.name.as_str(), entry.loaded))
             .collect();
-        assert_eq!(shown, [("repo-guide", true), ("release-notes", true)]);
+        assert_eq!(
+            shown,
+            [
+                ("repo-guide", true),
+                ("release-notes", true),
+                ("add-skill", true)
+            ]
+        );
     }
 
     /// The scan, skill files and trust writes over SSH, in a scratch folder on the host (not

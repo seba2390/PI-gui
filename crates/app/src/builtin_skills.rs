@@ -28,6 +28,13 @@ pub fn install(dir: &Path) -> io::Result<Vec<PathBuf>> {
         .collect()
 }
 
+/// The skills' names and `SKILL.md` files in `dir`, with their text.
+pub fn all(dir: &Path) -> impl Iterator<Item = (&'static str, PathBuf, &'static str)> {
+    SKILLS
+        .iter()
+        .map(move |(name, text)| (*name, dir.join(name).join("SKILL.md"), *text))
+}
+
 /// Whether the skill file at `path` is one of these (so the Skills page shows it read-only).
 pub fn is_builtin(dir: &Path, path: &str) -> bool {
     Path::new(path).starts_with(dir)
@@ -55,6 +62,10 @@ mod tests {
         let folders = super::install(&dir).unwrap();
         assert_eq!(folders, [dir.join("add-skill")]);
         let file = dir.join("add-skill/SKILL.md");
+        let listed: Vec<_> = super::all(&dir)
+            .map(|(name, path, _)| (name, path))
+            .collect();
+        assert_eq!(listed, [("add-skill", file.clone())]);
         assert_eq!(std::fs::read_to_string(&file).unwrap(), super::SKILLS[0].1);
         assert!(super::is_builtin(&dir, &file.to_string_lossy()));
         assert!(!super::is_builtin(&dir, "/elsewhere/add-skill/SKILL.md"));
