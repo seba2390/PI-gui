@@ -202,3 +202,83 @@ impl Render for EditHost {
             )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use gpui_kit::component::WindowExt as _;
+    use gpui_kit::{AppContext as _, ParentElement as _, TestAppContext};
+    use remote::{HostStore, Target};
+
+    use super::{EditHost, EditHostEvent};
+    use crate::config::AppConfig;
+    use crate::hosts::{Hosts, HostsHandle};
+    use crate::ui::dialog::open_form_dialog;
+    use crate::ui::dialog::testing::{draw, is_open, press, window};
+
+    /// Enter in a field saves; what is wrong shows in the dialog, which stays.
+    #[gpui_kit::test]
+    #[allow(clippy::unused_async)] // gpui tests take an async body
+    async fn enter_saves_the_host(cx: &mut TestAppContext) {
+        let mut store = HostStore::default();
+        let target = Target::Custom {
+            host: "192.0.2.7".into(),
+            user: None,
+            port: None,
+            identity_file: None,
+            proxy_jump: None,
+        };
+        let id = store.add("one".into(), target);
+        cx.update(|cx| {
+            cx.set_global(AppConfig::for_tests("pi".into()));
+            let hosts = cx.new(|_| Hosts::for_tests(store.hosts));
+            cx.set_global(HostsHandle(hosts));
+        });
+        let cx = window(cx);
+        let saved = Rc::new(RefCell::new(Vec::new()));
+        let edit = cx.update(|window, cx| {
+            let edit = EditHost::new(&id, window, cx).unwrap();
+            let saved = saved.clone();
+            window
+                .subscribe(&edit, cx, move |_, event: &EditHostEvent, window, cx| {
+                    let EditHostEvent::Save(edit) = event;
+                    saved.borrow_mut().push(edit.label.clone());
+                    window.close_dialog(cx);
+                })
+                .detach();
+            let view = edit.clone();
+            open_form_dialog(None, window, cx, move |dialog, _, _| {
+                dialog.child(view.clone())
+            });
+            edit
+        });
+        draw(cx);
+        let focus = |index: usize, cx: &mut gpui_kit::VisualTestContext| {
+            cx.update(|window, cx| {
+                let fields = &edit.read(cx).form.as_ref().unwrap().fields;
+                let input = fields.inputs()[index].clone();
+                input.update(cx, |input, cx| {
+                    input.select_all(window, cx);
+                    input.focus(window, cx);
+                });
+            });
+            draw(cx);
+        };
+        // The host, then the name.
+        focus(1, cx);
+        press("backspace enter", cx);
+        assert!(is_open(cx));
+        cx.update(|_, cx| {
+            let form = edit.read(cx).form.as_ref().unwrap();
+            assert!(form.fields.error.is_some());
+        });
+        cx.simulate_input("192.0.2.8");
+        focus(0, cx);
+        cx.simulate_input("Build server");
+        press("enter", cx);
+        assert_eq!(*saved.borrow(), ["Build server"]);
+        assert!(!is_open(cx));
+    }
+}

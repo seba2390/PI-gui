@@ -665,3 +665,67 @@ impl Render for ConnectFlow {
         v_flex().w_full().gap_3().child(body)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::{AppContext as _, Focusable as _, ParentElement as _, TestAppContext};
+    use remote::{DirListing, HostId};
+
+    use super::{Browse, ConnectFlow};
+    use crate::hosts::{HostStatus, Hosts, HostsHandle};
+    use crate::ui::dialog::open_form_dialog;
+    use crate::ui::dialog::testing::{click, draw, is_open, press, window};
+
+    /// Enter in the path and "New folder" fields keeps the dialog, and closing the "New
+    /// folder" field leaves the keyboard in the dialog.
+    #[gpui_kit::test]
+    #[allow(clippy::unused_async)] // gpui tests take an async body
+    async fn enter_keeps_the_folder_browser(cx: &mut TestAppContext) {
+        // Not a saved host: nothing connects anywhere.
+        let id = HostId("none".into());
+        cx.update(|cx| {
+            let hosts = cx.new(|_| Hosts::for_tests(Vec::new()));
+            hosts.update(cx, |hosts, cx| {
+                hosts.set_status_for_tests(&id, HostStatus::Connected, cx);
+            });
+            cx.set_global(HostsHandle(hosts));
+        });
+        let cx = window(cx);
+        let flow = cx.update(|window, cx| {
+            let flow = cx.new(|cx| {
+                let mut flow = ConnectFlow::new(id, false, window, cx);
+                flow.browse = Some(Browse::Ready(DirListing {
+                    path: "/home/u".into(),
+                    parent: Some("/home".into()),
+                    dirs: vec!["project".into()],
+                }));
+                flow
+            });
+            let view = flow.clone();
+            open_form_dialog(None, window, cx, move |dialog, _, _| {
+                dialog.title("Open a folder").child(view.clone())
+            });
+            flow
+        });
+        draw(cx);
+        let path = cx.update(|_, cx| flow.read(cx).path_input.focus_handle(cx));
+        cx.update(|window, cx| path.focus(window, cx));
+        draw(cx);
+        cx.simulate_input("/srv");
+        press("enter", cx);
+        assert!(is_open(cx));
+
+        click("new-folder", cx);
+        cx.simulate_input("src");
+        press("enter", cx);
+        assert!(is_open(cx));
+        cx.update(|_, cx| {
+            let name = flow.read(cx).new_folder.as_ref().unwrap().read(cx).value();
+            assert_eq!(name, "src");
+        });
+        click("cancel-folder", cx);
+        cx.update(|window, _| assert!(path.is_focused(window)));
+        press("escape", cx);
+        assert!(!is_open(cx));
+    }
+}
