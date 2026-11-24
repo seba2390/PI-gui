@@ -1127,6 +1127,8 @@ impl Composer {
         let running = session.is_running();
         let stop_label = session.can_stop().then_some(if running {
             "Interrupt (esc)"
+        } else if session.is_compacting() {
+            "Cancel compaction (esc)"
         } else {
             "Stop the command (esc)"
         });

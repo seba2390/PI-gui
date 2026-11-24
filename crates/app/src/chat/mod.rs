@@ -11,6 +11,7 @@ mod images;
 mod math;
 pub(crate) mod mention;
 pub mod models_dialog;
+mod queued;
 mod rows;
 pub mod session;
 #[cfg(all(test, unix))]
@@ -424,7 +425,7 @@ impl ChatView {
     fn sync(&mut self, cx: &mut Context<Self>) {
         let session = self.session.read(cx);
         let transcript = session.transcript();
-        let running = session.is_running();
+        let working = session.shows_working();
         let ticking = session.can_stop();
         let items = transcript.items();
 
@@ -553,7 +554,7 @@ impl ChatView {
 
         // 2b. Link the files finished answers mention. When a turn ends, list the folder again
         //     first: it may have made the files it talks about.
-        if self.working_row && !running {
+        if self.working_row && !working {
             self.composer
                 .update(cx, |composer, cx| composer.refresh_file_index(cx));
         }
@@ -563,7 +564,7 @@ impl ChatView {
         let old_items = self.row_versions.len();
         let old_rows = old_items + usize::from(self.working_row);
         let new_items = new_versions.len();
-        let new_rows = new_items + usize::from(running);
+        let new_rows = new_items + usize::from(working);
         self.scroller.update(cx, |scroller, cx| {
             if new_items < old_items {
                 // A reset (history reload): rebuild the list.
@@ -584,7 +585,7 @@ impl ChatView {
             self.hovered_row = None;
         }
         self.row_versions = new_versions;
-        self.working_row = running;
+        self.working_row = working;
         // A turn under the pointer may just have ended (or the transcript was replaced).
         self.update_hovered_turn(cx);
 
@@ -1029,7 +1030,7 @@ impl Focusable for ChatView {
 impl Render for ChatView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let _timer = crate::perf::render("chat");
-        let is_empty = self.session.read(cx).is_empty() && !self.session.read(cx).is_running();
+        let is_empty = self.session.read(cx).is_empty() && !self.session.read(cx).shows_working();
         let weak = cx.weak_entity();
         let background = cx.theme().background;
         // Once faded out, the field is let go (it costs nothing either way while still).

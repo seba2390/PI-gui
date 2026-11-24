@@ -13,13 +13,14 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::{Context, EventEmitter, Task};
 use pi_rpc::protocol::{
-    AgentMessage, ContentBlock, Disposition, ExtensionUiAnswer, ExtensionUiMethod,
-    ExtensionUiRequest, ImageContent, MessageContent, Model, NotifyKind, SessionState,
-    SessionStats, SlashCommand, StreamingBehavior, ThinkingLevel,
+    AgentMessage, CompactionReason, ContentBlock, Disposition, ExtensionUiAnswer,
+    ExtensionUiMethod, ExtensionUiRequest, ImageContent, MessageContent, Model, NotifyKind,
+    SessionState, SessionStats, SlashCommand, StreamingBehavior, ThinkingLevel,
 };
 use pi_rpc::{ClientEvent, PiClient, PiProcess, RpcError, SpawnOptions};
-use transcript::{BashStatus, NoticeKind, Transcript};
+use transcript::{BashStatus, NoticeKind, RunStatus, Transcript};
 
+use super::queued::QueuedPrompts;
 use crate::config::{AppConfig, ChildEnv};
 
 /// Where the pi process is in its life.
@@ -79,9 +80,9 @@ pub enum AfterFork {
     Keep,
 }
 
-/// How long after a lost connection the disconnect itself (which comes after the last events
-/// pi sent) may take to arrive.
-const DISCONNECT_GRACE: Duration = Duration::from_secs(1);
+/// How long events pi sent before an answer (or before it stopped) may take to be handled after
+/// it.
+const EVENT_GRACE: Duration = Duration::from_secs(1);
 
 /// The images of the user message `from_end` messages before the last one (0 is the
 /// newest), if its text is `text`; empty when it cannot be matched.
@@ -165,6 +166,17 @@ struct Sending {
     first: bool,
 }
 
+/// Compaction outside a run.
+#[derive(Default)]
+struct Compaction {
+    /// `/compact` was sent and pi has not answered yet.
+    sent: bool,
+    /// pi compacts (`/compact`, or an extension asked for it) and refuses prompts meanwhile.
+    running: bool,
+    /// How many ended so far.
+    ended: u64,
+}
+
 pub struct PiSession {
     /// The SSH host pi runs on, or `None` for this computer.
     host: Option<HostId>,
@@ -190,6 +202,11 @@ pub struct PiSession {
     outbox: VecDeque<PendingPrompt>,
     /// The prompt that was sent and that pi has not answered yet.
     sending: Option<Sending>,
+    /// The prompts in pi's queue, for their images.
+    queued: QueuedPrompts,
+    /// `clear_queue` commands pi has not answered yet. The queue updates they cause don't
+    /// mean that messages were delivered.
+    clearing_queue: usize,
     /// pi said it started a run whose first event has not arrived yet (until then,
     /// `transcript.is_running()` is still false). Responses and events travel separately, so
     /// the run may also have started (and even ended) before the response is handled: see
@@ -197,6 +214,7 @@ pub struct PiSession {
     awaiting_start: bool,
     /// `agent_start` events seen so far.
     runs_started: u64,
+    compaction: Compaction,
     /// [`Self::is_busy`] as last reported with [`SessionEvent::BusyChanged`].
     reported_busy: bool,
     /// `(provider, model id)` to switch to once pi has started (after adding a model).
@@ -287,8 +305,11 @@ impl PiSession {
             widgets: BTreeMap::new(),
             outbox: VecDeque::new(),
             sending: None,
+            queued: QueuedPrompts::default(),
+            clearing_queue: 0,
             awaiting_start: false,
             runs_started: 0,
+            compaction: Compaction::default(),
             reported_busy: false,
             pending_model: None,
             _event_pump: Task::ready(()),
@@ -409,8 +430,11 @@ impl PiSession {
             widgets: BTreeMap::new(),
             outbox: VecDeque::new(),
             sending: None,
+            queued: QueuedPrompts::default(),
+            clearing_queue: 0,
             awaiting_start: false,
             runs_started: 0,
+            compaction: Compaction::default(),
             reported_busy: false,
             pending_model: None,
             _event_pump: Task::ready(()),
@@ -479,14 +503,33 @@ impl PiSession {
         self.transcript.is_bash_running()
     }
 
-    /// Whether something visible goes on that Esc and the stop button end.
-    pub fn can_stop(&self) -> bool {
-        self.is_running() || self.is_bash_running()
+    /// Whether the conversation is being compacted, in a run or between runs.
+    pub fn is_compacting(&self) -> bool {
+        self.holds_prompts() || *self.transcript.status() == RunStatus::Compacting
     }
 
-    /// Whether this session has work in flight: a run, a shell command, prompts waiting to
-    /// be sent, or a prompt pi accepted but has not started showing yet. A busy chat must stay
-    /// alive when the user switches away, or its messages are lost.
+    /// Whether the transcript ends with the working row.
+    pub fn shows_working(&self) -> bool {
+        self.is_running() || self.is_compacting()
+    }
+
+    /// What the working row says.
+    pub fn working_status(&self) -> RunStatus {
+        if self.is_compacting() {
+            RunStatus::Compacting
+        } else {
+            self.transcript.status().clone()
+        }
+    }
+
+    /// Whether something visible goes on that Esc and the stop button end.
+    pub fn can_stop(&self) -> bool {
+        self.shows_working() || self.is_bash_running()
+    }
+
+    /// Whether this session has work in flight: a run, a shell command, compaction, prompts
+    /// waiting to be sent, or a prompt pi accepted but has not started showing yet. A busy chat
+    /// must stay alive when the user switches away, or its messages are lost.
     pub fn is_busy(&self) -> bool {
         matches!(self.lifecycle, Lifecycle::Starting | Lifecycle::Ready)
             && (self.agent_busy() || self.is_bash_running())
@@ -494,7 +537,7 @@ impl PiSession {
 
     /// [`Self::is_busy`] without shell commands.
     fn agent_busy(&self) -> bool {
-        self.is_running()
+        self.shows_working()
             || self.sending.is_some()
             || self.awaiting_start
             || !self.outbox.is_empty()
@@ -785,9 +828,15 @@ impl PiSession {
         }
     }
 
+    /// Whether prompts wait for a compaction between runs to end: pi refuses them while it
+    /// lasts, and one sent just before it would run into it.
+    fn holds_prompts(&self) -> bool {
+        self.compaction.sent || self.compaction.running
+    }
+
     /// Sends the next waiting prompt once pi is ready and has answered the previous one.
     fn flush_outbox(&mut self, cx: &mut Context<Self>) {
-        if self.sending.is_some() || self.lifecycle != Lifecycle::Ready {
+        if self.sending.is_some() || self.lifecycle != Lifecycle::Ready || self.holds_prompts() {
             return;
         }
         let Some(client) = self.client.clone() else {
@@ -803,6 +852,7 @@ impl PiSession {
             StreamingBehavior::Steer
         });
         let (text, images) = (prompt.text.clone(), prompt.images.clone());
+        self.queued.sending(&text, prompt.follow_up);
         self.sending = Some(Sending {
             prompt,
             runs_before: self.runs_started,
@@ -814,7 +864,7 @@ impl PiSession {
                 // Events pi sent before it stopped may still wait to be handled, and they say
                 // whether the prompt's run started. The disconnect comes after them and gives
                 // the prompt back; this is for when it doesn't come.
-                cx.background_executor().timer(DISCONNECT_GRACE).await;
+                cx.background_executor().timer(EVENT_GRACE).await;
             }
             let _ = this.update(cx, |this, cx| this.prompt_answered(result, cx));
         })
@@ -827,6 +877,9 @@ impl PiSession {
         let Some(sent) = self.sending.take() else {
             return;
         };
+        if !matches!(result, Ok(Disposition::Queued)) {
+            self.queued.not_queued();
+        }
         match result {
             Ok(Disposition::Started) => {
                 // Unless its run already showed up: then the transcript tracks it.
@@ -834,7 +887,10 @@ impl PiSession {
                 self.consider_naming(&sent, cx);
             }
             // Joins the active run, which the transcript tracks.
-            Ok(Disposition::Queued) => self.consider_naming(&sent, cx),
+            Ok(Disposition::Queued) => {
+                self.consider_naming(&sent, cx);
+                self.queued.accepted(sent.prompt.images);
+            }
             // A command: nothing was said.
             Ok(Disposition::Handled) => {}
             // pi took the prompt, but its answer could not be read.
@@ -883,13 +939,7 @@ impl PiSession {
     /// (Esc), back to the composer.
     fn return_outbox(&mut self, cx: &mut Context<Self>) {
         let (texts, images) = self.take_outbox(cx);
-        if !texts.is_empty() || !images.is_empty() {
-            cx.emit(SessionEvent::RestoreToEditor {
-                text: texts.join("\n\n"),
-                images,
-                replace: false,
-            });
-        }
+        restore(&texts, images, cx);
     }
 
     /// Prompts typed but not sent to pi yet (pi is starting, or busy with the previous one).
@@ -927,17 +977,10 @@ impl PiSession {
         let Some(client) = self.client.clone() else {
             return;
         };
+        let queue = self.take_queue(client.clone(), cx);
         cx.spawn(async move |this, cx| {
-            let restored = client.clear_queue().await.unwrap_or_default();
-            if !restored.is_empty() {
-                let _ = this.update(cx, |_, cx| {
-                    cx.emit(SessionEvent::RestoreToEditor {
-                        text: restored.join("\n\n"),
-                        images: Vec::new(),
-                        replace: false,
-                    });
-                });
-            }
+            let (texts, images) = queue.await;
+            let _ = this.update(cx, |_, cx| restore(&texts, images, cx));
             if let Err(error) = client.abort().await {
                 let _ = this.update(cx, |this, cx| this.report(&error, cx));
             }
@@ -950,20 +993,35 @@ impl PiSession {
         let Some(client) = self.client.clone() else {
             return;
         };
+        let queue = self.take_queue(client, cx);
         cx.spawn(async move |this, cx| {
-            if let Ok(restored) = client.clear_queue().await
-                && !restored.is_empty()
-            {
-                let _ = this.update(cx, |_, cx| {
-                    cx.emit(SessionEvent::RestoreToEditor {
-                        text: restored.join("\n\n"),
-                        images: Vec::new(),
-                        replace: false,
-                    });
-                });
-            }
+            let (texts, images) = queue.await;
+            let _ = this.update(cx, |_, cx| restore(&texts, images, cx));
         })
         .detach();
+    }
+
+    /// Takes the messages out of pi's queue: their texts and images.
+    fn take_queue(
+        &mut self,
+        client: PiClient,
+        cx: &mut Context<Self>,
+    ) -> Task<(Vec<String>, Vec<ImageContent>)> {
+        self.clearing_queue += 1;
+        cx.spawn(async move |this, cx| {
+            let cleared = client.clear_queue().await;
+            this.update(cx, |this, _| {
+                this.clearing_queue -= 1;
+                let Ok(cleared) = cleared else {
+                    return (Vec::new(), Vec::new());
+                };
+                let images = this.queued.take(&cleared.steering, &cleared.follow_up);
+                let texts = cleared.steering.into_iter().chain(cleared.follow_up);
+                // One with only images has no text.
+                (texts.filter(|text| !text.is_empty()).collect(), images)
+            })
+            .unwrap_or_default()
+        })
     }
 
     pub fn set_model(&mut self, model: &Model, cx: &mut Context<Self>) {
@@ -1056,8 +1114,48 @@ impl PiSession {
         self.set_thinking_level(next, cx);
     }
 
+    /// Compacts the conversation (`/compact`), aborting a run like pi's terminal does.
+    /// Prompts submitted meanwhile wait.
     pub fn compact(&mut self, instructions: Option<String>, cx: &mut Context<Self>) {
-        self.run(cx, async move |client| client.compact(instructions).await);
+        let Some(client) = self.client.clone() else {
+            self.push_notice(NoticeKind::Error, "pi is not running.", cx);
+            return;
+        };
+        if self.holds_prompts() {
+            let text = "The conversation is already being compacted.";
+            self.push_notice(NoticeKind::Info, text, cx);
+            return;
+        }
+        self.compaction.sent = true;
+        let ended = self.compaction.ended;
+        cx.spawn(async move |this, cx| {
+            let result = client.compact(instructions).await;
+            let _ = this.update(cx, |this, cx| {
+                this.compaction.sent = false;
+                this.compaction.running = false;
+                this.flush_outbox(cx);
+                this.transcript_changed(cx);
+            });
+            match result {
+                // A lost connection says so itself.
+                Ok(()) | Err(RpcError::Disconnected) => return,
+                Err(RpcError::Rejected { .. }) => {
+                    // pi tells how a compaction ended with an event, which may still wait to
+                    // be handled.
+                    cx.background_executor().timer(EVENT_GRACE).await;
+                }
+                Err(_) => {}
+            }
+            let _ = this.update(cx, |this, cx| {
+                if let Err(error) = result
+                    && this.compaction.ended == ended
+                {
+                    this.report(&error, cx);
+                }
+            });
+        })
+        .detach();
+        self.transcript_changed(cx);
     }
 
     pub fn rename(&mut self, name: String, cx: &mut Context<Self>) {
@@ -1374,6 +1472,9 @@ impl PiSession {
                     Err(error) => this.report(&error, cx),
                 }
                 this.stats = stats;
+                // Another session in pi: the old one's queue and compaction are over.
+                this.queued.clear();
+                this.compaction.running = false;
                 cx.emit(SessionEvent::Reloaded);
                 cx.emit(SessionEvent::SessionFileChanged);
                 cx.emit(SessionEvent::MetaChanged);
@@ -1607,11 +1708,31 @@ impl PiSession {
                     pi_rpc::protocol::Event::AgentStart => {
                         self.runs_started += 1;
                         self.awaiting_start = false;
+                        self.compaction.running = false;
                     }
+                    pi_rpc::protocol::Event::QueueUpdate {
+                        steering,
+                        follow_up,
+                    } if self.clearing_queue == 0 => self.queued.update(&steering, &follow_up),
                     pi_rpc::protocol::Event::AgentSettled { .. } => {
                         self.awaiting_start = false;
+                        if self.clearing_queue == 0 && self.transcript.queue().is_empty() {
+                            self.queued.clear();
+                        }
                         self.refresh_stats(cx);
                         cx.emit(SessionEvent::Settled);
+                    }
+                    pi_rpc::protocol::Event::CompactionStart {
+                        reason: CompactionReason::Manual,
+                    } => self.compaction.running = true,
+                    pi_rpc::protocol::Event::CompactionEnd {
+                        reason: CompactionReason::Manual,
+                        ..
+                    } => {
+                        self.compaction.running = false;
+                        self.compaction.ended += 1;
+                        self.flush_outbox(cx);
+                        self.refresh_stats(cx);
                     }
                     pi_rpc::protocol::Event::TurnEnd { .. }
                     | pi_rpc::protocol::Event::CompactionEnd { .. } => self.refresh_stats(cx),
@@ -1642,6 +1763,9 @@ impl PiSession {
                     self.outbox.push_front(sent.prompt);
                 }
                 self.awaiting_start = false;
+                self.compaction.sent = false;
+                self.compaction.running = false;
+                self.queued = QueuedPrompts::default();
                 self.return_outbox(cx);
                 cx.emit(SessionEvent::MetaChanged);
             }
@@ -1687,6 +1811,17 @@ impl PiSession {
             | ExtensionUiMethod::Editor { .. } => cx.emit(SessionEvent::Dialog(request)),
         }
         cx.emit(SessionEvent::MetaChanged);
+    }
+}
+
+/// Gives messages back to the composer, if there are any.
+fn restore(texts: &[String], images: Vec<ImageContent>, cx: &mut Context<PiSession>) {
+    if !texts.is_empty() || !images.is_empty() {
+        cx.emit(SessionEvent::RestoreToEditor {
+            text: texts.join("\n\n"),
+            images,
+            replace: false,
+        });
     }
 }
 

@@ -185,6 +185,14 @@ pub struct SourceInfo {
     pub base_dir: Option<String>,
 }
 
+/// `clear_queue` response data: the texts of the messages that were queued, oldest first.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ClearedQueue {
+    pub steering: Vec<String>,
+    pub follow_up: Vec<String>,
+}
+
 /// `bash` response data.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]

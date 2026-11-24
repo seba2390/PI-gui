@@ -22,8 +22,8 @@ pub use message::{
     UsageCost, UserMessage,
 };
 pub use model::{
-    BashResult, ContextUsage, Disposition, ForkMessage, Model, QueueMode, SessionState,
-    SessionStats, SlashCommand, SourceInfo, ThinkingLevel, TokenTotals,
+    BashResult, ClearedQueue, ContextUsage, Disposition, ForkMessage, Model, QueueMode,
+    SessionState, SessionStats, SlashCommand, SourceInfo, ThinkingLevel, TokenTotals,
 };
 
 /// The reply to one command.

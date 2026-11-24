@@ -2,10 +2,11 @@
 //! refuses, shell commands, compaction and queued messages.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use gpui_kit::{AppContext as _, Entity, Subscription, TestAppContext};
 use pi_rpc::protocol::ImageContent;
-use transcript::{BashItem, BashStatus, ItemKind, NoticeKind};
+use transcript::{BashItem, BashStatus, ItemKind, NoticeKind, RunStatus};
 
 use super::session::{Lifecycle, PiSession, SessionEvent};
 use crate::config::AppConfig;
@@ -78,6 +79,12 @@ impl Fake {
     fn run_bash(&self, command: &str, cx: &mut TestAppContext) {
         self.session.update(cx, |session, cx| {
             session.run_bash(command.into(), false, cx);
+        });
+    }
+
+    fn compact(&self, instructions: &str, cx: &mut TestAppContext) {
+        self.session.update(cx, |session, cx| {
+            session.compact(Some(instructions.into()), cx);
         });
     }
 
@@ -234,7 +241,8 @@ async fn a_shell_command_streams_and_stops(cx: &mut TestAppContext) {
     fake.until(cx, |session| !session.is_busy()).await;
     assert_eq!(fake.bash(cx).status, BashStatus::Cancelled);
     assert_eq!(fake.bash(cx).output, "working\n");
-    assert_eq!(fake.notices(cx), []);
+    let notices = fake.notices(cx);
+    assert!(notices.is_empty(), "{notices:?}");
 }
 
 /// Every way a command ends leaves no running row behind.
@@ -281,4 +289,114 @@ async fn esc_stops_the_agent_before_a_shell_command(cx: &mut TestAppContext) {
     fake.interrupt(cx);
     fake.until(cx, |session| !session.is_busy()).await;
     assert_eq!(fake.bash(cx).status, BashStatus::Cancelled);
+}
+
+/// `/compact` keeps the chat busy from the start, and prompts wait until it ends.
+#[gpui_kit::test]
+async fn prompts_wait_while_compacting(cx: &mut TestAppContext) {
+    let fake = Fake::ready(cx).await;
+    fake.compact("hang", cx);
+    assert!(fake.is_busy(cx) && fake.read(cx, PiSession::shows_working));
+    assert!(!fake.read(cx, PiSession::is_running), "nothing to steer");
+    assert_eq!(
+        fake.read(cx, PiSession::working_status),
+        RunStatus::Compacting
+    );
+    fake.submit("first", &[], cx);
+    fake.until(cx, |session| {
+        *session.transcript().status() == RunStatus::Compacting
+    })
+    .await;
+    fake.submit("second", &[], cx);
+    assert_eq!(
+        fake.read(cx, |session| session.pending_prompts().count()),
+        2
+    );
+
+    fake.run_bash("finish compaction", cx);
+    fake.until(cx, |session| {
+        !session.is_busy() && session.transcript().items().len() > 6
+    })
+    .await;
+    assert_eq!(fake.prompts(cx), ["first", "second"]);
+    assert_eq!(
+        fake.notices(cx),
+        [(
+            NoticeKind::Compaction,
+            "Context compacted · 2.0k → ~1.0k tokens".to_owned()
+        )]
+    );
+}
+
+/// Esc cancels a compaction, gives back the prompts that waited for it, and one notice says
+/// so.
+#[gpui_kit::test]
+async fn esc_cancels_a_compaction(cx: &mut TestAppContext) {
+    let fake = Fake::ready(cx).await;
+    fake.compact("hang", cx);
+    fake.submit("wait", &[image("A")], cx);
+    fake.interrupt(cx);
+    let (text, images) = fake.restored().await;
+    assert_eq!((text.as_str(), images), ("wait", vec![image("A")]));
+    fake.until(cx, |session| !session.is_busy()).await;
+    assert!(!fake.read(cx, PiSession::is_compacting));
+    cx.executor().advance_clock(Duration::from_secs(5));
+    cx.run_until_parked();
+    assert_eq!(
+        fake.notices(cx),
+        [(NoticeKind::Warning, "Compaction cancelled".to_owned())]
+    );
+
+    // A failed one is reported once as well.
+    fake.compact("", cx);
+    fake.until(cx, |session| !session.is_busy()).await;
+    cx.executor().advance_clock(Duration::from_secs(5));
+    cx.run_until_parked();
+    assert_eq!(
+        fake.notices(cx)[1..],
+        [(
+            NoticeKind::Error,
+            "Compaction failed: Nothing to compact".to_owned()
+        )]
+    );
+}
+
+/// Esc and Alt+Up give queued messages back with their images, also those pi expanded and
+/// those without text, but not those already delivered.
+#[gpui_kit::test]
+async fn queued_images_are_given_back(cx: &mut TestAppContext) {
+    let fake = Fake::ready(cx).await;
+    fake.submit("hold", &[], cx);
+    fake.until(cx, PiSession::is_running).await;
+    let queued = async |count: usize, cx: &mut TestAppContext| {
+        fake.until(cx, |session| {
+            let queue = session.transcript().queue();
+            queue.steering.len() == count && session.pending_prompts().count() == 0
+        })
+        .await;
+        cx.run_until_parked();
+    };
+    fake.submit("delivered", &[image("D")], cx);
+    queued(1, cx).await;
+    fake.submit("", &[image("A")], cx);
+    queued(2, cx).await;
+    fake.submit("/skill:x", &[image("B")], cx);
+    queued(3, cx).await;
+    fake.run_bash("deliver", cx);
+    queued(2, cx).await;
+    fake.until(cx, |session| !session.is_bash_running()).await;
+
+    fake.session.update(cx, |session, cx| session.dequeue(cx));
+    let (text, images) = fake.restored().await;
+    assert_eq!(text, "<skill>x</skill>");
+    assert_eq!(images, [image("A"), image("B")]);
+    assert!(fake.read(cx, PiSession::is_running), "not aborted");
+
+    fake.submit("again", &[image("C")], cx);
+    queued(1, cx).await;
+    fake.interrupt(cx);
+    let (text, images) = fake.restored().await;
+    assert_eq!((text.as_str(), images), ("again", vec![image("C")]));
+    fake.until(cx, |session| !session.is_busy()).await;
+    assert_eq!(fake.prompts(cx), ["hold", "delivered"]);
 }
