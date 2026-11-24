@@ -1141,11 +1141,14 @@ impl Composer {
             .child(
                 div()
                     .debug_selector(|| "web-effort-track".into())
+                    .relative()
                     .flex_none()
                     .w(px(EFFORT_STOP * effort_value(Effort::Max)))
+                    .child(effort_stops(effort, cx))
                     .child(
+                        // Only its knob: the stops are the track.
                         Slider::new(&self.effort)
-                            .bg(palette(cx).accent)
+                            .bg(transparent_black())
                             .accessibility_label(format!("Deep search effort: {}", effort.label())),
                     ),
             )
@@ -2285,6 +2288,37 @@ pub(crate) fn folder_label(
 /// Element id for a dropdown whose items depend on `key`. gpui-kit keeps a built menu per
 /// trigger id and only rebuilds it after certain dismissals, so a stale menu could be shown
 /// (e.g. the previous model's thinking levels); a content-derived id always gets a fresh one.
+/// The effort slider's track: a line with a dot per level, filled up to `effort`.
+fn effort_stops(effort: Effort, cx: &App) -> Div {
+    const DOT: f32 = 8.;
+    const LINE: f32 = 3.;
+    let colors = palette(cx);
+    let rest = cx.theme().muted_foreground.opacity(0.45);
+    let line =
+        |width: f32, color: Hsla| div().absolute().left_0().w(px(width)).h(px(LINE)).bg(color);
+    let dots = Effort::ALL.map(|level| {
+        div()
+            .absolute()
+            .left(px(EFFORT_STOP * effort_value(level) - DOT / 2.))
+            .size(px(DOT))
+            .rounded_full()
+            .map(|dot| {
+                if level <= effort {
+                    dot.bg(colors.accent)
+                } else {
+                    // Hollow: the line does not show through.
+                    dot.bg(colors.surface).border_1().border_color(rest)
+                }
+            })
+    });
+    h_flex()
+        .absolute()
+        .inset_0()
+        .child(line(EFFORT_STOP * effort_value(Effort::Max), rest))
+        .child(line(EFFORT_STOP * effort_value(effort), colors.accent))
+        .children(dots)
+}
+
 #[allow(clippy::cast_precision_loss)] // One of four.
 fn effort_value(effort: Effort) -> f32 {
     Effort::ALL
