@@ -18,9 +18,10 @@ use serde::de::DeserializeOwned;
 use crate::error::RpcError;
 use crate::framing::{JsonlReader, write_record};
 use crate::protocol::{
-    AgentMessage, BashResult, Command, CommandEnvelope, Disposition, Event, ExtensionUiAnswer,
-    ExtensionUiRequest, ExtensionUiResponse, ForkMessage, ImageContent, Incoming, Model, Response,
-    SessionState, SessionStats, SlashCommand, StreamingBehavior, ThinkingLevel,
+    AgentMessage, BashResult, ClearedQueue, Command, CommandEnvelope, Disposition, Event,
+    ExtensionUiAnswer, ExtensionUiRequest, ExtensionUiResponse, ForkMessage, ImageContent,
+    Incoming, Model, Response, SessionState, SessionStats, SlashCommand, StreamingBehavior,
+    ThinkingLevel,
 };
 
 /// Everything pi sends that is not a response to one of our commands.
@@ -120,13 +121,22 @@ impl PiClient {
         self.shared.outgoing.close();
     }
 
+    /// A new request id, for [`bash`](Self::bash): events about the command carry it.
+    pub fn next_id(&self) -> String {
+        format!(
+            "gui-{}",
+            self.shared.next_id.fetch_add(1, Ordering::Relaxed)
+        )
+    }
+
     /// Sends `command` and waits for its response. `success: false` becomes
     /// [`RpcError::Rejected`].
     pub async fn request(&self, command: Command) -> Result<Response, RpcError> {
-        let id = format!(
-            "gui-{}",
-            self.shared.next_id.fetch_add(1, Ordering::Relaxed)
-        );
+        self.request_as(self.next_id(), command).await
+    }
+
+    /// [`request`](Self::request) with an `id` from [`next_id`](Self::next_id).
+    async fn request_as(&self, id: String, command: Command) -> Result<Response, RpcError> {
         let (sender, receiver) = oneshot::channel();
         self.shared
             .pending
@@ -166,14 +176,7 @@ impl PiClient {
 
     /// Like [`request`](Self::request), decoding `data` into `T`.
     pub async fn call<T: DeserializeOwned>(&self, command: Command) -> Result<T, RpcError> {
-        let name = command.name();
-        let response = self.request(command).await?;
-        serde_json::from_value(response.data.unwrap_or_default()).map_err(|source| {
-            RpcError::Decode {
-                command: name.to_owned(),
-                source,
-            }
-        })
+        decode(self.request(command).await?)
     }
 
     /// Answers an extension dialog. Fire-and-forget: pi sends no response.
@@ -215,18 +218,9 @@ impl PiClient {
         self.request(Command::Abort).await.map(drop)
     }
 
-    /// Removes queued steering/follow-up messages and returns their text, in order.
-    pub async fn clear_queue(&self) -> Result<Vec<String>, RpcError> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Data {
-            #[serde(default)]
-            steering: Vec<String>,
-            #[serde(default)]
-            follow_up: Vec<String>,
-        }
-        let data: Data = self.call(Command::ClearQueue).await?;
-        Ok(data.steering.into_iter().chain(data.follow_up).collect())
+    /// Removes queued steering/follow-up messages and returns their texts.
+    pub async fn clear_queue(&self) -> Result<ClearedQueue, RpcError> {
+        self.call(Command::ClearQueue).await
     }
 
     pub async fn get_state(&self) -> Result<SessionState, RpcError> {
@@ -352,13 +346,34 @@ impl PiClient {
             .map(|data| !data.cancelled)
     }
 
-    pub async fn bash(&self, command: String) -> Result<BashResult, RpcError> {
-        self.call(Command::Bash {
+    /// Runs a shell command. While it runs, [`Event::BashExecutionUpdate`]s with `id` (from
+    /// [`next_id`](Self::next_id)) bring its output.
+    pub async fn bash(
+        &self,
+        id: String,
+        command: String,
+        exclude_from_context: bool,
+    ) -> Result<BashResult, RpcError> {
+        let command = Command::Bash {
             command,
-            exclude_from_context: false,
-        })
-        .await
+            exclude_from_context,
+        };
+        decode(self.request_as(id, command).await?)
     }
+
+    /// Stops the shell commands running through [`bash`](Self::bash) ([`abort`](Self::abort)
+    /// leaves them alone).
+    pub async fn abort_bash(&self) -> Result<(), RpcError> {
+        self.request(Command::AbortBash).await.map(drop)
+    }
+}
+
+/// `response`'s data as a `T`.
+fn decode<T: DeserializeOwned>(response: Response) -> Result<T, RpcError> {
+    serde_json::from_value(response.data.unwrap_or_default()).map_err(|source| RpcError::Decode {
+        command: response.command,
+        source,
+    })
 }
 
 #[derive(Deserialize)]

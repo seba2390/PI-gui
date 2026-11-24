@@ -61,10 +61,8 @@ impl ContextEstimate {
                         }
                     }
                 }
-                ItemKind::Bash {
-                    command, output, ..
-                } => {
-                    out.tool_results += tokens(command.len() + output.len());
+                ItemKind::Bash(bash) => {
+                    out.tool_results += tokens(bash.command.len() + bash.output.len());
                 }
                 ItemKind::Notice(notice) if notice.kind == NoticeKind::Compaction => {
                     out.summary += tokens(notice.text.len());
@@ -96,8 +94,8 @@ mod tests {
 
     use super::ContextEstimate;
     use crate::model::{
-        AssistantItem, Block, BlockKind, ItemId, ItemKind, Notice, NoticeKind, TextBlock,
-        ThinkingBlock, ToolBlock, ToolStatus, TranscriptItem, UserItem,
+        AssistantItem, BashItem, BashStatus, Block, BlockKind, ItemId, ItemKind, Notice,
+        NoticeKind, TextBlock, ThinkingBlock, ToolBlock, ToolStatus, TranscriptItem, UserItem,
     };
 
     fn item(kind: ItemKind) -> TranscriptItem {
@@ -164,11 +162,12 @@ mod tests {
             })),
             user("hello there", 2),
             item(ItemKind::Assistant(assistant)),
-            item(ItemKind::Bash {
+            item(ItemKind::Bash(BashItem {
                 command: "ls".to_owned(),
                 output: "b".repeat(10),
-                exit_code: Some(0),
-            }),
+                status: BashStatus::Done { exit_code: Some(0) },
+                full_output: None,
+            })),
         ];
         let estimate = ContextEstimate::of(&items);
         assert_eq!(estimate.summary, 5);

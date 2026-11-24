@@ -1,4 +1,5 @@
-//! Background saves of small settings files that never land out of order.
+//! Small settings files: loading that loses as little as possible, and background saves that
+//! never land out of order.
 //!
 //! Saves run off the UI thread, so two quick changes could otherwise finish in the wrong
 //! order (an older snapshot renamed over a newer one) or write the same temp file at once.
@@ -9,10 +10,61 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 
 use gpui_kit::App;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use serde_json::{Map, Value};
 
 static NEXT: AtomicU64 = AtomicU64::new(1);
 /// The newest save written per file. Holding the lock while writing also serializes writes.
 static WRITTEN: Mutex<Option<HashMap<PathBuf, u64>>> = Mutex::new(None);
+
+/// Reads the JSON object in `path`; a missing file gives the defaults.
+///
+/// A value that can't be read (one a newer version wrote, or a typo) only loses itself: every
+/// other key keeps its value. When something is lost, the file is kept as `<path>.corrupt`,
+/// since the next save replaces it. `T` must default its missing fields (`#[serde(default)]`).
+pub fn load<T: Default + Serialize + DeserializeOwned>(path: &Path) -> T {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                log::warn!("could not read {}: {error}", path.display());
+            }
+            return T::default();
+        }
+    };
+    match serde_json::from_slice::<T>(&bytes) {
+        Ok(value) => value,
+        Err(error) => {
+            let mut backup = path.as_os_str().to_owned();
+            backup.push(".corrupt");
+            let backup = PathBuf::from(backup);
+            let _ = std::fs::copy(path, &backup);
+            log::warn!(
+                "using defaults for what could not be read in {} (kept as {}): {error}",
+                path.display(),
+                backup.display()
+            );
+            serde_json::from_slice(&bytes).map_or_else(|_| T::default(), readable_values)
+        }
+    }
+}
+
+/// `T` from the values in `saved` that can be read, each on its own.
+fn readable_values<T: Default + DeserializeOwned>(saved: Map<String, Value>) -> T {
+    let readable: Map<String, Value> = saved
+        .into_iter()
+        .filter(|(key, value)| {
+            let alone = Map::from_iter([(key.clone(), value.clone())]);
+            let read = serde_json::from_value::<T>(Value::Object(alone));
+            if let Err(error) = &read {
+                log::warn!("ignoring the saved value of \"{key}\": {error}");
+            }
+            read.is_ok()
+        })
+        .collect();
+    serde_json::from_value(Value::Object(readable)).unwrap_or_default()
+}
 
 /// Runs `write` for `path` in the background, skipping it if a newer save of the same file
 /// already ran.

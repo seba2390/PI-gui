@@ -25,11 +25,7 @@ pub enum ItemKind {
     User(UserItem),
     Assistant(AssistantItem),
     /// A user-run shell command (`!cmd`), not an agent tool call.
-    Bash {
-        command: String,
-        output: String,
-        exit_code: Option<i32>,
-    },
+    Bash(BashItem),
     Notice(Notice),
     /// "Worked for 1m 3s" after the agent settles.
     TurnSummary(TurnSummary),
@@ -74,6 +70,61 @@ impl AssistantItem {
     pub fn is_streaming(&self) -> bool {
         self.stop_reason == StopReason::Pending
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct BashItem {
+    pub command: String,
+    /// What it printed (while it runs, at most the last part of it).
+    pub output: String,
+    pub status: BashStatus,
+    /// The file with the whole output, when `output` is only the end of it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub full_output: Option<String>,
+}
+
+/// Lines of output a running command shows.
+const LIVE_LINES: usize = 16;
+
+/// Bytes of output a running command shows (its lines may be very long).
+const LIVE_BYTES: usize = 8 * 1024;
+
+impl BashItem {
+    pub fn is_running(&self) -> bool {
+        matches!(self.status, BashStatus::Running { .. })
+    }
+
+    /// The output to show: the last lines while the command runs, all of it afterwards.
+    pub fn shown_output(&self) -> &str {
+        if !self.is_running() {
+            return &self.output;
+        }
+        let output = self.output.trim_end();
+        let mut start = output.len().saturating_sub(LIVE_BYTES);
+        while !output.is_char_boundary(start) {
+            start += 1;
+        }
+        let tail = &output[start..];
+        match tail.rmatch_indices('\n').nth(LIVE_LINES - 1) {
+            Some((newline, _)) => &tail[newline + 1..],
+            None => tail,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum BashStatus {
+    Running {
+        #[serde(skip)]
+        since: Instant,
+    },
+    Done {
+        exit_code: Option<i32>,
+    },
+    /// Stopped by the user, or because pi stopped.
+    Cancelled,
+    /// pi could not run it.
+    Failed,
 }
 
 /// One content block of an assistant message.

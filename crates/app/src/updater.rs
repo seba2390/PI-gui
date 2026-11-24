@@ -347,7 +347,8 @@ fn install_mac(
             Err(error) => log::warn!("brew upgrade failed ({error}); installing the download"),
         }
     }
-    let name = format!("Pistachio-v{version}-macos-universal.zip");
+    // Apple Silicon only since 0.4.7 (0.4.6 was the last universal build).
+    let name = format!("Pistachio-v{version}-macos-arm64.zip");
     let parent = app.parent().ok_or("The app's folder is unknown.")?;
     // Next to the app, so the swap is a rename on the same disk.
     let stage = parent.join(format!(".Pistachio-{version}.update"));

@@ -55,7 +55,7 @@ npm i -g @earendil-works/pi-coding-agent
 
 **2. Install Pistachio**
 
-- **macOS** with [Homebrew](https://brew.sh):
+- **macOS (Apple Silicon)** with [Homebrew](https://brew.sh):
 
   ```bash
   brew install --cask seba2390/tap/pistachio
@@ -66,7 +66,7 @@ npm i -g @earendil-works/pi-coding-agent
   <details>
   <summary>macOS without Homebrew</summary>
 
-  Download `Pistachio-…-macos-universal.zip` from
+  Download `Pistachio-…-macos-arm64.zip` from
   [Releases](https://github.com/seba2390/pistachio/releases), unzip it and move `Pistachio.app` to
   Applications. The app isn't notarized yet, so macOS will block the first launch. Allow it once
   with:
@@ -82,20 +82,20 @@ npm i -g @earendil-works/pi-coding-agent
   - Debian, Ubuntu:
 
     ```bash
-    curl -fLO https://github.com/seba2390/pistachio/releases/download/v0.4.6/pistachio_0.4.6-1_$(dpkg --print-architecture).deb && sudo apt install ./pistachio_0.4.6-1_$(dpkg --print-architecture).deb
+    curl -fLO https://github.com/seba2390/pistachio/releases/download/v0.4.7/pistachio_0.4.7-1_$(dpkg --print-architecture).deb && sudo apt install ./pistachio_0.4.7-1_$(dpkg --print-architecture).deb
     ```
 
   - Fedora and other RPM-based systems:
 
     ```bash
-    sudo dnf install https://github.com/seba2390/pistachio/releases/download/v0.4.6/pistachio-0.4.6-1.$(uname -m).rpm
+    sudo dnf install https://github.com/seba2390/pistachio/releases/download/v0.4.7/pistachio-0.4.7-1.$(uname -m).rpm
     ```
 
   - Any other distribution (installs for your user only, no root, and adds "Pistachio" to your
     app launcher):
 
     ```bash
-    curl -fL https://github.com/seba2390/pistachio/releases/download/v0.4.6/pistachio-v0.4.6-linux-$(uname -m).tar.gz | tar xz && pistachio-v0.4.6-linux-$(uname -m)/install.sh
+    curl -fL https://github.com/seba2390/pistachio/releases/download/v0.4.7/pistachio-v0.4.7-linux-$(uname -m).tar.gz | tar xz && pistachio-v0.4.7-linux-$(uname -m)/install.sh
     ```
 
   Or download the files yourself from [Releases](https://github.com/seba2390/pistachio/releases).

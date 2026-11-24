@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
-use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{ActiveTheme as _, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -24,6 +24,7 @@ struct HostForm {
     pi_command: Entity<InputState>,
     confirm_remove: bool,
     note: Option<(bool, SharedString)>,
+    _enter: [Subscription; 2],
 }
 
 pub struct ManageHosts {
@@ -70,16 +71,31 @@ impl ManageHosts {
         self.forms
             .retain(|id, _| saved.iter().any(|(saved, _, _)| saved == id));
         for (id, label, pi_command) in saved {
-            self.forms.entry(id).or_insert_with(|| HostForm {
-                name: cx.new(|cx| InputState::new(window, cx).default_value(label)),
-                pi_command: cx.new(|cx| {
-                    InputState::new(window, cx)
-                        .placeholder("pi (installed automatically when missing)")
-                        .default_value(pi_command)
-                }),
+            if self.forms.contains_key(&id) {
+                continue;
+            }
+            let name = cx.new(|cx| InputState::new(window, cx).default_value(label));
+            let pi_command = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder("pi (installed automatically when missing)")
+                    .default_value(pi_command)
+            });
+            let enter = [&name, &pi_command].map(|input| {
+                let id = id.clone();
+                cx.subscribe(input, move |this, _, event: &InputEvent, cx| {
+                    if matches!(event, InputEvent::PressEnter { .. }) {
+                        this.save(&id, cx);
+                    }
+                })
+            });
+            let form = HostForm {
+                name,
+                pi_command,
                 confirm_remove: false,
                 note: None,
-            });
+                _enter: enter,
+            };
+            self.forms.insert(id, form);
         }
     }
 
@@ -259,5 +275,50 @@ impl Render for ManageHosts {
                         .on_click(cx.listener(|_, _, _, cx| cx.emit(ManageHostsEvent::Add))),
                 ),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::{AppContext as _, ParentElement as _, TestAppContext};
+    use remote::{HostStore, Target};
+
+    use super::ManageHosts;
+    use crate::hosts::{Hosts, HostsHandle, hosts};
+    use crate::ui::dialog::open_form_dialog;
+    use crate::ui::dialog::testing::{draw, is_open, press, window};
+
+    /// Enter in a field saves that host, and the dialog stays.
+    #[gpui_kit::test]
+    #[allow(clippy::unused_async)] // gpui tests take an async body
+    async fn enter_saves_the_host(cx: &mut TestAppContext) {
+        let mut store = HostStore::default();
+        let ids = ["one", "two"].map(|alias| {
+            let alias = alias.to_owned();
+            store.add(alias.clone(), Target::Alias { alias })
+        });
+        cx.update(|cx| {
+            let hosts = cx.new(|_| Hosts::for_tests(store.hosts));
+            cx.set_global(HostsHandle(hosts));
+        });
+        let cx = window(cx);
+        cx.update(|window, cx| {
+            let manage = cx.new(|cx| ManageHosts::new(window, cx));
+            let name = manage.read(cx).forms[&ids[1]].name.clone();
+            let view = manage.clone();
+            open_form_dialog(None, window, cx, move |dialog, _, _| {
+                dialog.child(view.clone())
+            });
+            name.update(cx, |name, cx| {
+                name.select_all(window, cx);
+                name.focus(window, cx);
+            });
+        });
+        draw(cx);
+        cx.simulate_input("Build server");
+        press("enter", cx);
+        assert!(is_open(cx));
+        let labels = cx.update(|_, cx| ids.map(|id| hosts(cx).read(cx).label(&id)));
+        assert_eq!(labels, ["one", "Build server"]);
     }
 }

@@ -17,6 +17,8 @@ use std::io;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use crate::config::resolve_full;
@@ -135,6 +137,17 @@ cd -- "$d" && pwd -P"#;
 pub struct Ssh {
     target: Target,
     control_dir: PathBuf,
+    /// Shared by clones (see [`Ssh::close`]).
+    switch: Arc<Switch>,
+}
+
+/// Whether the user turned a connection off.
+#[derive(Debug, Default)]
+struct Switch {
+    closed: AtomicBool,
+    /// Held while the master connection is started or stopped, so that turning a connection
+    /// off ends one that was still being made, and turning it on again keeps it.
+    changing: Mutex<()>,
 }
 
 /// What [`Ssh::probe`] found on the host.
@@ -178,6 +191,7 @@ impl Ssh {
         Self {
             target,
             control_dir: dir,
+            switch: Arc::default(),
         }
     }
 
@@ -288,6 +302,7 @@ impl Ssh {
     /// a stale socket and never leaves a second, unshared connection behind when a master
     /// already runs.
     pub fn connect(&self, trust_recorded_key: bool) -> Result<(), RemoteError> {
+        let _changing = self.start_connecting()?;
         if self.is_connected() {
             return Ok(());
         }
@@ -402,6 +417,67 @@ impl Ssh {
         }
     }
 
+    /// Turns the connection off: until [`Ssh::reopen`], nothing here connects or runs scripts
+    /// (any call would quietly start a new master). Returns at once; stop the running master
+    /// with [`Ssh::disconnect_closed`].
+    pub fn close(&self) {
+        self.switch.closed.store(true, Ordering::SeqCst);
+    }
+
+    /// Allows connecting again after [`Ssh::close`].
+    pub fn reopen(&self) {
+        self.switch.closed.store(false, Ordering::SeqCst);
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.switch.closed.load(Ordering::SeqCst)
+    }
+
+    /// Stops the master connection of a closed `Ssh` (blocking), waiting for one that is still
+    /// being made. Does nothing when it was reopened meanwhile.
+    pub fn disconnect_closed(&self) {
+        let _changing = self.lock_changing();
+        if self.is_closed() {
+            self.disconnect();
+        }
+    }
+
+    fn lock_changing(&self) -> MutexGuard<'_, ()> {
+        self.switch
+            .changing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// To hold while starting the master connection; fails when it is turned off.
+    pub(crate) fn start_connecting(&self) -> Result<MutexGuard<'_, ()>, RemoteError> {
+        let guard = self.lock_changing();
+        self.check_open()?;
+        Ok(guard)
+    }
+
+    fn check_open(&self) -> Result<(), RemoteError> {
+        if self.is_closed() {
+            return Err(RemoteError::Failed(
+                "The connection is turned off.".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Options for a program the user starts on a connection that is turned off: it gets a
+    /// connection of its own, which ends with it. (ssh keeps the first value of an option, so
+    /// these go before [`Ssh::base_args`].)
+    pub(crate) fn unshared_args(&self) -> Vec<OsString> {
+        if self.is_closed() {
+            ["-o", "ControlMaster=no", "-o", "ControlPath=none"]
+                .map(OsString::from)
+                .to_vec()
+        } else {
+            Vec::new()
+        }
+    }
+
     /// Runs a POSIX `sh` script on the host (`sh -c <script>`, stdin `/dev/null`) and returns
     /// its stdout. Times out after 60 s. A failure of ssh itself (exit status 255) is
     /// classified with [`classify`]; any other non-zero exit becomes [`RemoteError::Failed`]
@@ -416,19 +492,21 @@ impl Ssh {
         script: &str,
         timeout: Duration,
     ) -> Result<Output, RemoteError> {
-        let output = process::run(self.script_command(script), None, timeout)?;
+        let output = process::run(self.script_command(script)?, None, timeout)?;
         script_result(output)
     }
 
     /// `ssh … -- sh -c <script>`: runs a POSIX script on the host whatever the login shell.
-    pub(crate) fn script_command(&self, script: &str) -> Command {
+    /// Fails when the connection is turned off.
+    pub(crate) fn script_command(&self, script: &str) -> Result<Command, RemoteError> {
+        self.check_open()?;
         let mut command = self.ssh_command();
         command
             .arg("-T")
             .args(self.base_args())
             .arg("--")
             .arg(format!("sh -c {}", remote_word(script)));
-        command
+        Ok(command)
     }
 }
 
@@ -480,6 +558,7 @@ impl Ssh {
             log::warn!("{error}");
             args.extend(["-o", "ControlMaster=no", "-o", "ControlPath=none"].map(OsString::from));
         }
+        args.extend(self.unshared_args());
         args.extend(self.base_args());
         args.push("--".into());
         args.push(remote_launch_command(cwd, env, argv).into());
@@ -970,6 +1049,40 @@ mod tests {
     }
 
     #[cfg(unix)] // Unix shells, file modes or connection sharing
+    #[test]
+    fn a_closed_connection_runs_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let ssh = Ssh::with_control_dir(
+            Target::Alias {
+                alias: "spark".into(),
+            },
+            dir.path().join("cm"),
+        );
+        assert_eq!(ssh.unshared_args(), os(&[]));
+        // Clones are the same connection.
+        ssh.clone().close();
+        assert!(ssh.is_closed());
+        let off = "The connection is turned off.";
+        assert_eq!(ssh.exec("true").unwrap_err().to_string(), off);
+        assert_eq!(ssh.connect(false).unwrap_err().to_string(), off);
+        assert_eq!(
+            ssh.connect_interactive(&[], false).unwrap_err().to_string(),
+            off
+        );
+        let shell: &dyn workspace::RemoteShell = &ssh;
+        assert_eq!(shell.run("true", None, None).unwrap_err().to_string(), off);
+        // What the user starts anyway has a connection of its own.
+        let (_, args) = ssh.command(None, &strings(&["pi"]));
+        assert_eq!(
+            &args[1..5],
+            os(&["-o", "ControlMaster=no", "-o", "ControlPath=none"]).as_slice()
+        );
+        ssh.reopen();
+        assert!(!ssh.is_closed());
+        assert!(ssh.script_command("true").is_ok());
+        assert_eq!(ssh.unshared_args(), os(&[]));
+    }
+
     #[test]
     fn command_args() {
         let dir = tempfile::tempdir().unwrap();

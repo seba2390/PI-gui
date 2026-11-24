@@ -11,8 +11,11 @@ mod images;
 mod math;
 pub(crate) mod mention;
 pub mod models_dialog;
+mod queued;
 mod rows;
 pub mod session;
+#[cfg(all(test, unix))]
+mod session_tests;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -24,7 +27,7 @@ use gpui_kit::*;
 use transcript::{BlockKind, ItemId, ItemKind};
 
 use composer::Composer;
-pub use composer::ComposerEvent;
+pub use composer::{ComposerEvent, Draft};
 use session::{PiSession, SessionEvent};
 
 use crate::theme::palette;
@@ -422,7 +425,8 @@ impl ChatView {
     fn sync(&mut self, cx: &mut Context<Self>) {
         let session = self.session.read(cx);
         let transcript = session.transcript();
-        let running = session.is_running();
+        let working = session.shows_working();
+        let ticking = session.can_stop();
         let items = transcript.items();
 
         // 1. Collect changed rows and the markdown sources inside them.
@@ -550,7 +554,7 @@ impl ChatView {
 
         // 2b. Link the files finished answers mention. When a turn ends, list the folder again
         //     first: it may have made the files it talks about.
-        if self.working_row && !running {
+        if self.working_row && !working {
             self.composer
                 .update(cx, |composer, cx| composer.refresh_file_index(cx));
         }
@@ -560,7 +564,7 @@ impl ChatView {
         let old_items = self.row_versions.len();
         let old_rows = old_items + usize::from(self.working_row);
         let new_items = new_versions.len();
-        let new_rows = new_items + usize::from(running);
+        let new_rows = new_items + usize::from(working);
         self.scroller.update(cx, |scroller, cx| {
             if new_items < old_items {
                 // A reset (history reload): rebuild the list.
@@ -581,13 +585,13 @@ impl ChatView {
             self.hovered_row = None;
         }
         self.row_versions = new_versions;
-        self.working_row = running;
+        self.working_row = working;
         // A turn under the pointer may just have ended (or the transcript was replaced).
         self.update_hovered_turn(cx);
 
         // 4. While working, repaint at the working π's frame rate so it pulses smoothly and
         //    the timers advance; nothing ticks while idle.
-        if running && self.ticker.is_none() {
+        if ticking && self.ticker.is_none() {
             self.ticker = Some(cx.spawn(async move |this, cx| {
                 loop {
                     cx.background_executor()
@@ -595,13 +599,13 @@ impl ChatView {
                         .await;
                     let keep = this
                         .update(cx, |this, cx| {
-                            let running = this.session.read(cx).is_running();
-                            if running {
+                            let ticking = this.session.read(cx).can_stop();
+                            if ticking {
                                 cx.notify();
                             } else {
                                 this.ticker = None;
                             }
-                            running
+                            ticking
                         })
                         .unwrap_or(false);
                     if !keep {
@@ -936,6 +940,8 @@ impl ChatView {
         let resumable = session.session_file().is_some();
         let text = if status.is_connected() {
             format!("pi stopped on {label}.")
+        } else if hosts.is_turned_off(host) {
+            format!("The connection to {label} is turned off.")
         } else {
             format!("The connection to {label} was lost.")
         };
@@ -1024,7 +1030,7 @@ impl Focusable for ChatView {
 impl Render for ChatView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let _timer = crate::perf::render("chat");
-        let is_empty = self.session.read(cx).is_empty() && !self.session.read(cx).is_running();
+        let is_empty = self.session.read(cx).is_empty() && !self.session.read(cx).shows_working();
         let weak = cx.weak_entity();
         let background = cx.theme().background;
         // Once faded out, the field is let go (it costs nothing either way while still).

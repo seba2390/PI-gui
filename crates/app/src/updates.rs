@@ -167,7 +167,7 @@ mod tests {
         "draft": false,
         "prerelease": false,
         "assets": [
-            {"name": "Pistachio-v0.3.0-macos-universal.zip", "browser_download_url": "https://x/mac.zip",
+            {"name": "Pistachio-v0.3.0-macos-arm64.zip", "browser_download_url": "https://x/mac.zip",
              "size": 42, "digest": "sha256:86098aca61dd6ca376252c05ece6a1ade9381a1bfa872e36953a5e9aadb0dd5e"},
             {"name": "pistachio-v0.3.0-linux-aarch64.tar.gz", "browser_download_url": "https://x/linux-arm.tgz"},
             {"name": "pistachio-v0.3.0-linux-x86_64.tar.gz", "browser_download_url": "https://x/linux.tgz"},
@@ -189,9 +189,7 @@ mod tests {
         let other = parse_latest(LATEST, "freebsd").unwrap().unwrap();
         assert_eq!(other.download_url, None);
 
-        let zip = release
-            .asset("Pistachio-v0.3.0-macos-universal.zip")
-            .unwrap();
+        let zip = release.asset("Pistachio-v0.3.0-macos-arm64.zip").unwrap();
         assert_eq!(zip.size, 42);
         assert_eq!(
             zip.sha256(),

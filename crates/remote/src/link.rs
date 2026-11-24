@@ -101,7 +101,7 @@ impl Ssh {
             sh_quote(settings),
             WRITE_SCRIPT.replace("MANAGED_AGENT_DIR", MANAGED_AGENT_DIR)
         );
-        let output = process::run(self.script_command(&script), Some(models), TIMEOUT)?;
+        let output = process::run(self.script_command(&script)?, Some(models), TIMEOUT)?;
         let path = script_result(output)?.stdout_lossy().trim().to_owned();
         if path.starts_with('/') {
             Ok(path)

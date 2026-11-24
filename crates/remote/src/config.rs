@@ -258,6 +258,35 @@ pub(crate) struct ResolvedFull {
     pub host_key_alias: Option<String>,
     /// The first `UserKnownHostsFile` (tilde not expanded).
     pub known_hosts: Option<String>,
+    /// The key file the config names (tilde not expanded). `None` with several: ssh lists its
+    /// own defaults when the config names none.
+    pub identity_file: Option<String>,
+    pub proxy_jump: Option<String>,
+}
+
+/// What the ssh config says about a `Host`, to show in a form.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigValues {
+    pub hostname: String,
+    pub user: Option<String>,
+    pub port: u16,
+    /// Tilde not expanded.
+    pub identity_file: Option<String>,
+    pub proxy_jump: Option<String>,
+}
+
+/// The connection settings of `alias` in the ssh config (`ssh -G`).
+pub fn config_values(alias: &str) -> Result<ConfigValues, RemoteError> {
+    let full = resolve_full(&Target::Alias {
+        alias: alias.to_owned(),
+    })?;
+    Ok(ConfigValues {
+        hostname: full.resolved.hostname,
+        user: full.resolved.user,
+        port: full.resolved.port,
+        identity_file: full.identity_file,
+        proxy_jump: full.proxy_jump,
+    })
 }
 
 /// Asks `ssh -G` (which evaluates the config without connecting) for the hostname, user and
@@ -284,6 +313,8 @@ pub(crate) fn parse_ssh_g(text: &str) -> Result<ResolvedFull, RemoteError> {
     let mut proxied = false;
     let mut host_key_alias = None;
     let mut known_hosts = None;
+    let mut identity_files = Vec::new();
+    let mut proxy_jump = None;
     for line in text.lines() {
         let Some((key, value)) = line.split_once(' ') else {
             continue;
@@ -293,7 +324,12 @@ pub(crate) fn parse_ssh_g(text: &str) -> Result<ResolvedFull, RemoteError> {
             "hostname" => hostname = Some(value.to_owned()),
             "user" => user = Some(value.to_owned()).filter(|user| !user.is_empty()),
             "port" => port = value.parse().unwrap_or(22),
-            "proxyjump" | "proxycommand" => proxied |= value != "none",
+            "proxycommand" => proxied |= value != "none",
+            "proxyjump" => {
+                proxied |= value != "none";
+                proxy_jump = Some(value.to_owned()).filter(|jump| jump != "none");
+            }
+            "identityfile" => identity_files.push(value.to_owned()),
             "hostkeyalias" => {
                 host_key_alias = Some(value.to_owned()).filter(|alias| alias != "none");
             }
@@ -314,6 +350,10 @@ pub(crate) fn parse_ssh_g(text: &str) -> Result<ResolvedFull, RemoteError> {
         proxied,
         host_key_alias,
         known_hosts,
+        identity_file: (identity_files.len() == 1)
+            .then(|| identity_files.remove(0))
+            .filter(|file| file != "none"),
+        proxy_jump,
     })
 }
 
@@ -432,10 +472,19 @@ Match host foo
                 proxied: false,
                 host_key_alias: None,
                 known_hosts: Some("~/.ssh/known_hosts".into()),
+                identity_file: None,
+                proxy_jump: None,
             }
         );
         let jumped = parse_ssh_g("hostname h\nport 22\nproxyjump bastion\n").unwrap();
         assert!(jumped.proxied);
+        assert_eq!(jumped.proxy_jump.as_deref(), Some("bastion"));
+        // One key file is the config's; several are ssh's defaults.
+        let one = parse_ssh_g("hostname h\nidentityfile ~/.ssh/key\n").unwrap();
+        assert_eq!(one.identity_file.as_deref(), Some("~/.ssh/key"));
+        let defaults =
+            parse_ssh_g("hostname h\nidentityfile ~/.ssh/a\nidentityfile ~/.ssh/b\n").unwrap();
+        assert_eq!(defaults.identity_file, None);
         assert_eq!(jumped.resolved.user, None);
         assert!(parse_ssh_g("port 22\n").is_err());
     }

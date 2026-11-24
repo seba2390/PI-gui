@@ -89,6 +89,8 @@ struct HostSessions {
 
 pub struct Hosts {
     store: HostStore,
+    /// Where `store` is saved (nowhere in tests).
+    path: Option<PathBuf>,
     status: HashMap<HostId, HostStatus>,
     probes: HashMap<HostId, Probe>,
     /// One `Ssh` per host, shared so remote [`workspace::Location`]s compare equal.
@@ -99,6 +101,9 @@ pub struct Hosts {
     prompts: VecDeque<Prompt>,
     /// Whether pi on each host uses this computer's models (see [`crate::relay`]).
     links: HashMap<HostId, LinkState>,
+    /// Counts each host's connection attempts and disconnects, so one that was overtaken
+    /// (turned off meanwhile) no longer changes the status.
+    attempts: HashMap<HostId, u64>,
     _tasks: Vec<Task<()>>,
 }
 
@@ -131,18 +136,49 @@ pub fn hosts(cx: &App) -> Entity<Hosts> {
 }
 
 impl Hosts {
+    /// With the given saved hosts and nothing running in the background.
+    #[cfg(test)]
+    pub fn for_tests(hosts: Vec<SavedHost>) -> Self {
+        Self {
+            store: HostStore { hosts },
+            path: None,
+            status: HashMap::new(),
+            probes: HashMap::new(),
+            ssh: HashMap::new(),
+            sessions: HashMap::new(),
+            refreshing: HashSet::new(),
+            askpass: None,
+            prompts: VecDeque::new(),
+            links: HashMap::new(),
+            attempts: HashMap::new(),
+            _tasks: Vec::new(),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn set_status_for_tests(
+        &mut self,
+        id: &HostId,
+        status: HostStatus,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_status(id, status, cx);
+    }
+
     fn new(cx: &mut Context<Self>) -> Self {
-        let store = HostStore::path()
-            .map(|path| HostStore::load(&path))
-            .unwrap_or_default();
+        let path = HostStore::path();
+        let store = path.as_deref().map(HostStore::load).unwrap_or_default();
         // Close shared connections when the app quits (they would linger for ControlPersist).
         cx.on_app_quit(|this, _| {
             let ssh: Vec<Arc<Ssh>> = this
                 .store
                 .hosts
                 .iter()
-                .filter(|host| this.status(&host.id).is_connected())
-                .filter_map(|host| this.ssh.get(&host.id).cloned())
+                .filter_map(|host| {
+                    let ssh = this.ssh.get(&host.id)?;
+                    let up = this.status(&host.id).is_connected() || ssh.is_closed();
+                    up.then(|| ssh.clone())
+                })
                 .collect();
             async move {
                 relay::stop();
@@ -207,6 +243,7 @@ impl Hosts {
 
         let mut this = Self {
             store,
+            path,
             status: HashMap::new(),
             probes: HashMap::new(),
             ssh: HashMap::new(),
@@ -215,6 +252,7 @@ impl Hosts {
             askpass,
             prompts: VecDeque::new(),
             links: HashMap::new(),
+            attempts: HashMap::new(),
             _tasks: vec![prompts, checker],
         };
         // With "Connect saved SSH connections at start" (Settings), connect them quietly in
@@ -339,11 +377,8 @@ impl Hosts {
     }
 
     pub fn remove(&mut self, id: &HostId, cx: &mut Context<Self>) {
-        if let Some(ssh) = self.ssh.remove(id).or_else(|| self.ssh(id)) {
-            cx.background_executor()
-                .spawn(async move { ssh.disconnect() })
-                .detach();
-        }
+        self.disconnect(id, cx);
+        self.ssh.remove(id);
         self.store.remove(id);
         self.status.remove(id);
         self.probes.remove(id);
@@ -387,6 +422,59 @@ impl Hosts {
         cx.notify();
     }
 
+    /// Changes what a saved host connects to. What is known about the old one (its status and
+    /// sessions) is dropped; a host that was on is connected again with the new settings.
+    pub fn set_target(&mut self, id: &HostId, target: Target, cx: &mut Context<Self>) {
+        let Some(host) = self.store.get(id) else {
+            return;
+        };
+        if host.target == target {
+            return;
+        }
+        let status = self.status(id);
+        let was_on = status.is_connected() || status.is_busy();
+        let was_turned_off = self.is_turned_off(id);
+        self.disconnect(id, cx);
+        let old = self.ssh.remove(id);
+        if let Some(host) = self.store.get_mut(id) {
+            host.target = target;
+        }
+        if was_turned_off && let Some(ssh) = self.ssh_mut(id) {
+            ssh.close();
+        }
+        self.probes.remove(id);
+        self.links.remove(id);
+        self.sessions.remove(id);
+        self.save(cx);
+        cx.emit(HostsEvent::Changed);
+        cx.emit(HostsEvent::SessionsChanged(id.clone()));
+        cx.notify();
+        let Some(old) = old.filter(|_| was_on) else {
+            return;
+        };
+        // The new settings may use the same control socket: end the old connection first.
+        let (id, attempt) = (id.clone(), self.attempt(id));
+        let task = cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .spawn(async move { old.disconnect_closed() })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.attempt(&id) == attempt {
+                    this.connect(&id, false, cx);
+                }
+            });
+        });
+        self._tasks.retain(|task| !task.is_ready());
+        self._tasks.push(task);
+    }
+
+    /// The saved host, other than `id`, that already connects to `target`.
+    pub fn other_with_target(&self, id: &HostId, target: &Target) -> Option<&SavedHost> {
+        self.hosts()
+            .iter()
+            .find(|host| host.id != *id && host.target == *target)
+    }
+
     /// Remembers `folder` as the host's most recent folder.
     pub fn touch_folder(&mut self, id: &HostId, folder: &str, cx: &mut Context<Self>) {
         self.store.touch_folder(id, folder);
@@ -394,7 +482,7 @@ impl Hosts {
     }
 
     fn save(&self, cx: &mut Context<Self>) {
-        let (Some(path), store) = (HostStore::path(), self.store.clone()) else {
+        let (Some(path), store) = (self.path.clone(), self.store.clone()) else {
             return;
         };
         crate::persist::save_in_background(cx, path, move |path| store.save(path));
@@ -420,6 +508,53 @@ impl Hosts {
             ConnectMode::Interactive
         };
         self.connect_with(id, mode, cx);
+    }
+
+    /// Turns the host's connection off, with everything running over it (also one still being
+    /// made), until [`Self::connect`] turns it on again. Its known sessions stay listed.
+    pub fn disconnect(&mut self, id: &HostId, cx: &mut Context<Self>) {
+        let Some(ssh) = self.ssh_mut(id) else { return };
+        ssh.close();
+        self.next_attempt(id);
+        // The port forward goes with the connection.
+        if let Some(LinkState::Linked(link)) = self.links.get_mut(id) {
+            link.master_pid = None;
+        }
+        cx.background_executor()
+            .spawn(async move { ssh.disconnect_closed() })
+            .detach();
+        self.set_status(id, HostStatus::Idle, cx);
+    }
+
+    /// The user turned the host's connection off (it was not lost).
+    pub fn is_turned_off(&self, id: &HostId) -> bool {
+        self.ssh.get(id).is_some_and(|ssh| ssh.is_closed())
+    }
+
+    fn attempt(&self, id: &HostId) -> u64 {
+        self.attempts.get(id).copied().unwrap_or_default()
+    }
+
+    fn next_attempt(&mut self, id: &HostId) -> u64 {
+        let attempt = self.attempts.entry(id.clone()).or_default();
+        *attempt += 1;
+        *attempt
+    }
+
+    /// Sets the status as part of connection attempt `attempt`, unless a newer one (or a
+    /// disconnect) overtook it. Returns whether it did.
+    fn set_attempt_status(
+        &mut self,
+        id: &HostId,
+        attempt: u64,
+        status: HostStatus,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let current = self.attempt(id) == attempt;
+        if current {
+            self.set_status(id, status, cx);
+        }
+        current
     }
 
     /// Checks right away whether the host's shared connection is still up (e.g. after a
@@ -454,9 +589,10 @@ impl Hosts {
             return;
         }
         let id = id.clone();
+        let attempt = self.attempt(&id);
         let task = cx.spawn(async move |this, cx| {
-            if Self::install_and_probe(this.clone(), id.clone(), ssh, cx).await {
-                Self::link_then_ready(this, id, cx).await;
+            if Self::install_and_probe(this.clone(), id.clone(), attempt, ssh, cx).await {
+                Self::link_then_ready(this, id, attempt, cx).await;
             }
         });
         self._tasks.push(task);
@@ -470,6 +606,8 @@ impl Hosts {
         if self.status(id).is_busy() {
             return;
         }
+        ssh.reopen();
+        let attempt = self.next_attempt(id);
         self.set_status(id, HostStatus::Connecting, cx);
         if matches!(self.links.get(id), Some(LinkState::Failed { .. })) {
             self.links.remove(id);
@@ -505,6 +643,9 @@ impl Hosts {
                     .await;
             let (install, link) = this
                 .update(cx, |this, cx| {
+                    if this.attempt(&id) != attempt {
+                        return (false, false);
+                    }
                     let (status, install) = match result {
                         Ok(Connected::Probe(probe)) => {
                             let found = probe.pi_path.is_some();
@@ -546,9 +687,11 @@ impl Hosts {
                     (install, link)
                 })
                 .unwrap_or((false, false));
-            if link || (install && Self::install_and_probe(this.clone(), id.clone(), ssh, cx).await)
+            if link
+                || (install
+                    && Self::install_and_probe(this.clone(), id.clone(), attempt, ssh, cx).await)
             {
-                Self::link_then_ready(this, id, cx).await;
+                Self::link_then_ready(this, id, attempt, cx).await;
             }
         });
         self._tasks.retain(|task| !task.is_ready());
@@ -561,16 +704,17 @@ impl Hosts {
     async fn install_and_probe(
         this: WeakEntity<Self>,
         id: HostId,
+        attempt: u64,
         ssh: Arc<Ssh>,
         cx: &mut AsyncApp,
     ) -> bool {
         let starting = HostStatus::Installing {
             step: "Preparing".into(),
         };
-        if this
-            .update(cx, |this, cx| this.set_status(&id, starting, cx))
-            .is_err()
-        {
+        let current = this.update(cx, |this, cx| {
+            this.set_attempt_status(&id, attempt, starting, cx)
+        });
+        if !current.unwrap_or(false) {
             return false;
         }
         let (steps, step_receiver) = async_channel::unbounded::<String>();
@@ -579,10 +723,10 @@ impl Hosts {
             cx.spawn(async move |cx| {
                 while let Ok(step) = step_receiver.recv().await {
                     let status = HostStatus::Installing { step: step.into() };
-                    if this
-                        .update(cx, |this, cx| this.set_status(&id, status, cx))
-                        .is_err()
-                    {
+                    let current = this.update(cx, |this, cx| {
+                        this.set_attempt_status(&id, attempt, status, cx)
+                    });
+                    if !current.unwrap_or(false) {
                         break;
                     }
                 }
@@ -606,6 +750,9 @@ impl Hosts {
             .await;
         drop(progress);
         this.update(cx, |this, cx| {
+            if this.attempt(&id) != attempt {
+                return false;
+            }
             let status = match result {
                 Ok(probe) if probe.pi_path.is_some() => {
                     this.probes.insert(id.clone(), probe);
@@ -632,20 +779,21 @@ impl Hosts {
 
     /// Points pi on the connected host at this computer's models, then marks it ready and
     /// lists its sessions. If that fails, pi there uses the host's own models.
-    async fn link_then_ready(this: WeakEntity<Self>, id: HostId, cx: &mut AsyncApp) {
+    async fn link_then_ready(this: WeakEntity<Self>, id: HostId, attempt: u64, cx: &mut AsyncApp) {
         let step = HostStatus::Installing {
             step: "Setting up this computer's models".into(),
         };
-        let Ok(link) = this.update(cx, |this, cx| {
-            this.set_status(&id, step, cx);
-            this.link_models(&id, cx)
+        let Ok(Some(link)) = this.update(cx, |this, cx| {
+            this.set_attempt_status(&id, attempt, step, cx)
+                .then(|| this.link_models(&id, cx))
         }) else {
             return;
         };
         link.await;
         let _ = this.update(cx, |this, cx| {
-            this.set_status(&id, HostStatus::Connected, cx);
-            this.refresh_sessions(&id, cx);
+            if this.set_attempt_status(&id, attempt, HostStatus::Connected, cx) {
+                this.refresh_sessions(&id, cx);
+            }
         });
     }
 
@@ -794,6 +942,7 @@ impl Hosts {
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.refreshing.remove(&id);
+                let connected = this.status(&id).is_connected();
                 let entry = this.sessions.entry(id.clone()).or_default();
                 match result {
                     Ok(list) => {
@@ -806,6 +955,8 @@ impl Hosts {
                             cx.notify();
                         }
                     }
+                    // Turned off (or lost) while listing: keep what is known.
+                    Err(_) if !connected => {}
                     Err(error) => {
                         log::debug!("could not list sessions on {}: {error}", id.0);
                         entry.error = Some(error.to_string().into());
@@ -894,6 +1045,108 @@ enum Connected {
 
 #[cfg(test)]
 mod tests {
+    use gpui_kit::{AppContext as _, TestAppContext};
+
+    use super::{HostStatus, Hosts};
+
+    /// Turning a host off takes effect at once, and what its connection attempt still reports
+    /// no longer counts.
+    #[gpui_kit::test]
+    #[allow(clippy::unused_async)] // gpui tests take an async body
+    async fn disconnecting_overtakes_a_connection_attempt(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let mut store = remote::HostStore::default();
+        let alias = "pistachio-test.invalid".to_owned();
+        let id = store.add(alias.clone(), remote::Target::Alias { alias });
+        let hosts = cx.new(|_| Hosts::for_tests(store.hosts));
+        hosts.update(cx, |hosts, cx| {
+            assert!(!hosts.is_turned_off(&id));
+            let attempt = hosts.next_attempt(&id);
+            assert!(hosts.set_attempt_status(&id, attempt, HostStatus::Connecting, cx));
+            hosts.disconnect(&id, cx);
+            assert!(hosts.is_turned_off(&id));
+            assert_eq!(hosts.status(&id), HostStatus::Idle);
+            assert!(!hosts.set_attempt_status(&id, attempt, HostStatus::Connected, cx));
+            assert_eq!(hosts.status(&id), HostStatus::Idle);
+        });
+    }
+
+    /// Changing what a host connects to drops everything known about the old one.
+    #[gpui_kit::test]
+    #[allow(clippy::unused_async)] // gpui tests take an async body
+    async fn a_changed_target_starts_over(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let alias = |alias: &str| remote::Target::Alias {
+            alias: alias.to_owned(),
+        };
+        let mut store = remote::HostStore::default();
+        let id = store.add("one".into(), alias("pistachio-one.invalid"));
+        let other = store.add("two".into(), alias("pistachio-two.invalid"));
+        let hosts = cx.new(|_| Hosts::for_tests(store.hosts));
+        hosts.update(cx, |hosts, cx| {
+            // Never connected: it stays off, and is not "turned off" for the new target.
+            let old = hosts.ssh_mut(&id).unwrap();
+            hosts.set_target(&id, alias("pistachio-three.invalid"), cx);
+            assert!(old.is_closed());
+            assert_eq!(hosts.status(&id), HostStatus::Idle);
+            assert!(!hosts.is_turned_off(&id));
+            let new = hosts.ssh_mut(&id).unwrap();
+            assert_eq!(new.target(), &alias("pistachio-three.invalid"));
+            assert_eq!(hosts.get(&id).unwrap().label, "one");
+            // Turned off, it stays so.
+            hosts.disconnect(&id, cx);
+            hosts.set_target(&id, alias("pistachio-four.invalid"), cx);
+            assert!(hosts.is_turned_off(&id));
+            let taken = hosts.other_with_target(&id, &alias("pistachio-two.invalid"));
+            assert_eq!(taken.map(|host| host.id.clone()), Some(other.clone()));
+            let own = hosts.get(&id).unwrap().target.clone();
+            assert!(hosts.other_with_target(&id, &own).is_none());
+        });
+    }
+
+    /// Off and on again over a real host: the shared connection ends and nothing brings it
+    /// back until it is turned on. Own control folder, so other connections are left alone.
+    /// Run with `PISTACHIO_SSH_TEST_HOST=<alias> cargo test -p pistachio -- --ignored turning_off`.
+    #[test]
+    #[ignore = "needs PISTACHIO_SSH_TEST_HOST (an ssh alias with key auth)"]
+    fn turning_off_ends_the_shared_connection() {
+        let Ok(alias) = std::env::var("PISTACHIO_SSH_TEST_HOST") else {
+            return;
+        };
+        let dir = tempfile::Builder::new()
+            .prefix("ap")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let ssh =
+            remote::Ssh::with_control_dir(remote::Target::Alias { alias }, dir.path().join("cm"));
+        ssh.connect(false).unwrap();
+        assert!(ssh.is_connected());
+        ssh.close();
+        ssh.disconnect_closed();
+        assert!(!ssh.is_connected());
+        assert!(ssh.exec("true").is_err());
+        assert!(!ssh.is_connected());
+        // Turned off while it connects: the new connection is ended too.
+        ssh.reopen();
+        let connecting = {
+            let ssh = ssh.clone();
+            std::thread::spawn(move || ssh.connect(false))
+        };
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        ssh.close();
+        ssh.disconnect_closed();
+        let _ = connecting.join().unwrap();
+        assert!(!ssh.is_connected());
+        // On again before the old connection was ended: it stays.
+        ssh.reopen();
+        ssh.connect(false).unwrap();
+        ssh.close();
+        ssh.reopen();
+        ssh.disconnect_closed();
+        assert!(ssh.is_connected());
+        ssh.disconnect();
+    }
+
     /// ssh asks for a password through the app's own askpass (this crate's binary started by
     /// ssh); the test cancels, so no password is sent. Needs a host that offers password
     /// login: `PISTACHIO_SSH_PASSWORD_HOST=<alias> cargo build && cargo test -p pistachio -- \

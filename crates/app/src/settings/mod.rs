@@ -137,6 +137,9 @@ pub struct AppSettings {
     pub namer: crate::naming::Namer,
     /// The local model that names conversations (a `naming::catalog` id).
     pub naming_model: String,
+    /// Settings this version doesn't know (a newer one wrote them), kept for the next save.
+    #[serde(flatten)]
+    pub unknown: serde_json::Map<String, serde_json::Value>,
 }
 
 impl Default for AppSettings {
@@ -161,6 +164,7 @@ impl Default for AppSettings {
             auto_names: false,
             namer: crate::naming::Namer::default(),
             naming_model: crate::naming::catalog::DEFAULT_MODEL.to_owned(),
+            unknown: serde_json::Map::new(),
         }
     }
 }
@@ -180,11 +184,10 @@ impl AppSettings {
         pi_sessions::app_dir().map(|dir| dir.join("settings.json"))
     }
 
-    /// Reads the settings; a missing or unreadable file gives the defaults.
+    /// Reads the settings, with defaults for what is missing or unreadable (see
+    /// [`crate::persist::load`]).
     pub fn load(path: Option<&Path>) -> Self {
-        path.and_then(|path| std::fs::read(path).ok())
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default()
+        path.map(crate::persist::load).unwrap_or_default()
     }
 
     fn write(&self, path: &Path) -> std::io::Result<()> {
@@ -290,6 +293,48 @@ mod tests {
             !loaded.auto_names,
             "automatic names are off unless turned on"
         );
+    }
+
+    #[test]
+    fn an_unreadable_value_loses_only_itself() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let text = r#"{"theme": "sepia", "text_size": "larger", "check_for_updates": false,
+            "auto_names": "often", "skipped_version": "0.9.0", "from_the_future": {"a": 1}}"#;
+        std::fs::write(&path, text).unwrap();
+        let loaded = AppSettings::load(Some(&path));
+        assert_eq!(loaded.theme, ThemeChoice::System);
+        assert!(!loaded.auto_names);
+        assert_eq!(loaded.text_size, TextSize::Large);
+        assert!(!loaded.check_for_updates);
+        assert_eq!(loaded.skipped_version.as_deref(), Some("0.9.0"));
+        // What the next save replaces is kept.
+        let backup = dir.path().join("settings.json.corrupt");
+        assert_eq!(std::fs::read_to_string(backup).unwrap(), text);
+        // Settings of a newer version survive that save.
+        loaded.write(&path).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["from_the_future"]["a"], 1);
+        assert_eq!(saved["theme"], "system");
+        assert_eq!(AppSettings::load(Some(&path)), loaded);
+    }
+
+    #[test]
+    fn a_file_that_is_not_json_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let backup = dir.path().join("settings.json.corrupt");
+        for text in ["{ not json", "[]", ""] {
+            std::fs::write(&path, text).unwrap();
+            assert_eq!(AppSettings::load(Some(&path)), AppSettings::default());
+            assert_eq!(std::fs::read_to_string(&backup).unwrap(), text);
+        }
+        // A readable file needs no copy, also with settings this version doesn't know.
+        std::fs::remove_file(&backup).unwrap();
+        std::fs::write(&path, r#"{"theme": "dark", "unknown": 1}"#).unwrap();
+        AppSettings::load(Some(&path));
+        assert!(!backup.exists());
     }
 
     #[test]

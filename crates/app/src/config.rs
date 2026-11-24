@@ -1,68 +1,130 @@
 //! Process-wide configuration, resolved once at startup.
 
-use std::ffi::OsString;
+use std::convert::Infallible;
+use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, OnceLock};
 
 use gpui_kit::Global;
 
+use crate::shell_env::Vars;
+
 /// Extra environment for child processes: the login shell's (see [`crate::shell_env`]),
-/// probed in the background at startup and waited for only by the first child process
-/// that starts before the probe has finished.
-#[derive(Clone, Default)]
+/// probed in the background at startup. Until then it is not [`ready`](Self::ready), and a pi
+/// process that starts waits for it; the UI never does.
+#[derive(Clone)]
 pub struct ChildEnv(Arc<ChildEnvInner>);
 
-type Vars = Vec<(OsString, OsString)>;
-
-#[derive(Default)]
 struct ChildEnvInner {
-    probe: Mutex<Option<std::thread::JoinHandle<Vars>>>,
     vars: OnceLock<Vars>,
+    /// Closes when the probe has finished (or could not run).
+    probed: async_channel::Receiver<Infallible>,
 }
+
+/// The variables a terminal's shell gets: enough to find programs. It reads the user's startup
+/// files itself, and some of those skip what their variables say was done already.
+const TERMINAL_VARS: &[&str] = &[
+    "PATH",
+    "NVM_DIR",
+    "NODE_PATH",
+    "VOLTA_HOME",
+    "FNM_DIR",
+    "LANG",
+];
 
 impl ChildEnv {
     /// Starts probing the login shell on a background thread.
     pub fn probe() -> Self {
-        let probe = std::thread::Builder::new()
-            .name("login-shell-env".into())
-            .spawn(crate::shell_env::login_shell_env)
-            .map_err(|error| log::warn!("could not probe the login shell: {error}"))
-            .ok();
-        Self(Arc::new(ChildEnvInner {
-            probe: Mutex::new(probe),
-            vars: OnceLock::new(),
-        }))
+        Self::resolve(crate::shell_env::login_shell_env)
     }
 
-    /// The variables, waiting for the probe if it is still running.
+    /// Runs `probe` on a background thread. Without its variables (the thread could not
+    /// start, or panicked) there are none.
+    pub(crate) fn resolve(probe: impl FnOnce() -> Vars + Send + 'static) -> Self {
+        // Closes when the thread drops the sender, however it ends.
+        let (sender, probed) = async_channel::bounded(1);
+        let env = Self(Arc::new(ChildEnvInner {
+            vars: OnceLock::new(),
+            probed,
+        }));
+        let inner = Arc::clone(&env.0);
+        let spawned = std::thread::Builder::new()
+            .name("login-shell-env".into())
+            .spawn(move || {
+                let _ = inner.vars.set(probe());
+                drop(sender);
+            });
+        if let Err(error) = spawned {
+            log::warn!("could not probe the login shell: {error}");
+        }
+        env
+    }
+
+    /// The variables, or `None` while the probe is still running. Never blocks.
+    pub fn ready(&self) -> Option<&[(OsString, OsString)]> {
+        self.0
+            .probed
+            .is_closed()
+            .then(|| self.0.vars.get().map(Vec::as_slice).unwrap_or_default())
+    }
+
+    /// Resolves once the variables are [`ready`](Self::ready).
+    pub async fn wait(&self) {
+        let _ = self.0.probed.recv().await;
+    }
+
+    /// The variables, waiting for the probe if it is still running (which takes seconds with
+    /// a slow shell): for background threads only.
     pub fn vars(&self) -> &[(OsString, OsString)] {
-        self.0.vars.get_or_init(|| {
-            let probe = self
-                .0
-                .probe
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .take();
-            probe
-                .and_then(|probe| probe.join().ok())
-                .unwrap_or_default()
-        })
+        let _ = self.0.probed.recv_blocking();
+        self.ready().unwrap_or_default()
+    }
+
+    /// The variables for a terminal's shell ([`TERMINAL_VARS`]). Never blocks: none of them
+    /// while the probe is still running.
+    pub fn terminal_vars(&self) -> impl Iterator<Item = &(OsString, OsString)> {
+        self.ready()
+            .unwrap_or_default()
+            .iter()
+            .filter(|(key, _)| TERMINAL_VARS.iter().any(|name| key == name))
+    }
+
+    /// What child processes see as `key`: the login shell's value or else the app's own.
+    /// Waits like [`vars`](Self::vars).
+    pub fn var(&self, key: &str) -> Option<OsString> {
+        self.vars()
+            .iter()
+            .find(|(name, _)| name == OsStr::new(key))
+            .map(|(_, value)| value.clone())
+            .or_else(|| std::env::var_os(key))
+    }
+}
+
+impl Default for ChildEnv {
+    /// No variables, ready right away.
+    fn default() -> Self {
+        Vars::new().into()
     }
 }
 
 impl From<Vars> for ChildEnv {
+    /// Ready right away.
     fn from(vars: Vars) -> Self {
         Self(Arc::new(ChildEnvInner {
-            probe: Mutex::new(None),
             vars: OnceLock::from(vars),
+            probed: async_channel::bounded(1).1,
         }))
     }
 }
 
+/// The names only: the values hold API keys and other secrets.
 impl std::fmt::Debug for ChildEnv {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.0.vars.get() {
-            Some(vars) => f.debug_tuple("ChildEnv").field(vars).finish(),
+        match self.ready() {
+            Some(vars) => {
+                let names: Vec<_> = vars.iter().map(|(name, _)| name).collect();
+                f.debug_tuple("ChildEnv").field(&names).finish()
+            }
             None => f.write_str("ChildEnv(probing)"),
         }
     }
@@ -214,4 +276,55 @@ fn dirs_home() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AppConfig, ChildEnv};
+
+    #[test]
+    fn the_environment_is_ready_once_probed() {
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let env = ChildEnv::resolve(move || {
+            let _ = held.recv();
+            vec![("API_KEY".into(), "secret".into())]
+        });
+        assert_eq!(env.ready(), None);
+        assert_eq!(env.terminal_vars().count(), 0);
+        assert_eq!(format!("{env:?}"), "ChildEnv(probing)");
+        release.send(()).unwrap();
+        futures::executor::block_on(env.wait());
+        assert_eq!(
+            env.ready(),
+            Some(&[("API_KEY".into(), "secret".into())][..])
+        );
+        assert_eq!(env.vars().len(), 1);
+        assert_eq!(env.var("API_KEY"), Some("secret".into()));
+    }
+
+    #[test]
+    fn a_probe_that_fails_leaves_no_variables() {
+        let env = ChildEnv::resolve(|| std::panic::resume_unwind(Box::new(())));
+        assert_eq!(env.vars(), []);
+        assert_eq!(ChildEnv::default().ready(), Some(&[][..]));
+    }
+
+    #[test]
+    fn debug_shows_no_values() {
+        let mut config = AppConfig::for_tests("pi".into());
+        config.child_env = vec![("API_KEY".into(), "secret".into())].into();
+        let shown = format!("{config:?}");
+        assert!(shown.contains("API_KEY") && !shown.contains("secret"));
+    }
+
+    #[test]
+    fn terminals_get_only_what_finds_programs() {
+        let env: ChildEnv = vec![
+            ("PATH".into(), "/bin".into()),
+            ("API_KEY".into(), "secret".into()),
+        ]
+        .into();
+        let names: Vec<_> = env.terminal_vars().map(|(name, _)| name).collect();
+        assert_eq!(names, ["PATH"]);
+    }
 }

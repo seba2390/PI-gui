@@ -28,7 +28,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use pi_rpc::protocol::ImageContent;
 
-use super::commands::{self, CommandOutcome};
+use super::commands::{self, CommandOutcome, Suggestion, SuggestionList};
 use super::file_picker::{self, FilePicker, Pick};
 use super::mention::{self, History};
 use super::session::{Lifecycle, PiSession, WebMode};
@@ -89,6 +89,50 @@ enum InlineText {
     Skipped(&'static str),
 }
 
+/// Local files being read to attach, which the composer may be emptied before.
+struct Loading {
+    id: u64,
+    paths: Vec<PathBuf>,
+}
+
+/// What is typed and attached in a composer but not sent.
+pub struct Draft {
+    text: String,
+    attachments: Vec<Attachment>,
+    /// Files whose attachments were still being read.
+    unread: Vec<PathBuf>,
+    /// The SSH host of the session it was written in.
+    host: Option<HostId>,
+}
+
+impl Draft {
+    pub fn is_empty(&self) -> bool {
+        self.text.trim().is_empty() && self.attachments.is_empty() && self.unread.is_empty()
+    }
+
+    /// Adds a later draft of the same session after this one.
+    pub fn append(&mut self, later: Self) {
+        self.text = merge_restored(&self.text, &later.text, false);
+        self.attachments.extend(later.attachments);
+        self.unread.extend(later.unread);
+    }
+
+    #[cfg(test)]
+    pub fn for_tests(text: &str) -> Self {
+        Self {
+            text: text.to_owned(),
+            attachments: Vec::new(),
+            unread: Vec::new(),
+            host: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+}
+
 /// Text attachments larger than this are not pasted into a chat prompt.
 const MAX_INLINE_BYTES: u64 = 256 * 1024;
 
@@ -96,6 +140,9 @@ pub struct Composer {
     session: Entity<PiSession>,
     input: Entity<TextareaState>,
     attachments: Vec<Attachment>,
+    /// Attachments still being read.
+    loading: Vec<Loading>,
+    next_loading: u64,
     /// The attach popover's file list (searchable, indexed in the background).
     picker: Entity<ListState<FilePicker>>,
     picker_open: bool,
@@ -103,6 +150,9 @@ pub struct Composer {
     context_open: bool,
     /// Inline `@file` completion for the mention being typed.
     mention: Option<Mention>,
+    /// The `/` list: its highlighted row, and whether Esc closed it.
+    suggestions: SuggestionList,
+    suggestions_scroll: ScrollHandle,
     /// ↑ / ↓ through earlier prompts.
     history: History,
     /// Dictation: microphone, local recognizer and the live transcript.
@@ -132,6 +182,8 @@ struct Mention {
 
 /// Files offered for an `@` mention at once.
 const MENTION_RESULTS: usize = 8;
+/// The `/` list's height: about 8 rows, then it scrolls.
+const SUGGESTIONS_HEIGHT: Rems = rems(16.5);
 
 impl EventEmitter<ComposerEvent> for Composer {}
 
@@ -167,7 +219,7 @@ impl Composer {
                         InputEvent::PressEnter { shift: false, .. } => {
                             if this.mention.is_some() {
                                 this.accept_mention(window, cx);
-                            } else {
+                            } else if !this.enter_suggestion(window, cx) {
                                 this.submit(false, window, cx);
                             }
                         }
@@ -206,10 +258,14 @@ impl Composer {
             session,
             input,
             attachments: Vec::new(),
+            loading: Vec::new(),
+            next_loading: 0,
             picker,
             picker_open: false,
             context_open: false,
             mention: None,
+            suggestions: SuggestionList::default(),
+            suggestions_scroll: ScrollHandle::new(),
             history: History::default(),
             speech,
             dictation: None,
@@ -480,6 +536,98 @@ impl Composer {
         cx.notify();
     }
 
+    /// Whether anything is typed or attached but not sent.
+    pub fn has_draft(&self, cx: &App) -> bool {
+        !self.input.read(cx).value().trim().is_empty()
+            || !self.attachments.is_empty()
+            || !self.loading.is_empty()
+            || self
+                .dictation
+                .as_ref()
+                .is_some_and(|dictation| !dictation.transcript.trim().is_empty())
+    }
+
+    #[cfg(test)]
+    pub fn text(&self, cx: &App) -> String {
+        self.input.read(cx).value().to_string()
+    }
+
+    /// Takes what is typed and attached but not sent, leaving the composer empty: its chat is
+    /// let go, or the draft moves to another one. A dictation ends, and what it heard so far
+    /// is part of the draft.
+    pub fn take_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Draft {
+        let mut text = self.input.read(cx).value().to_string();
+        if let Some(dictation) = self.dictation.take() {
+            text = append_dictation(&text, &dictation.transcript);
+        }
+        self.speech.update(cx, |speech, cx| speech.cancel(cx));
+        let draft = Draft {
+            text,
+            attachments: std::mem::take(&mut self.attachments),
+            unread: std::mem::take(&mut self.loading)
+                .into_iter()
+                .flat_map(|loading| loading.paths)
+                .collect(),
+            host: self.session.read(cx).host().cloned(),
+        };
+        self.clear(window, cx);
+        draft
+    }
+
+    /// Puts a draft taken from another composer into this one, before anything typed here.
+    /// Attached files are read or referenced the way this session needs them; files on the
+    /// draft's SSH host cannot come along to another machine.
+    pub fn set_draft(&mut self, draft: Draft, window: &mut Window, cx: &mut Context<Self>) {
+        if draft.is_empty() {
+            return;
+        }
+        let typed = self.input.read(cx).value().to_string();
+        let text = if typed.trim().is_empty() {
+            draft.text
+        } else {
+            merge_restored(&draft.text, &typed, false)
+        };
+        self.input.update(cx, |input, cx| {
+            let end = text.len();
+            input.set_value(text, window, cx);
+            input.set_selected_range(end..end, cx);
+        });
+        let (inline, moved) = {
+            let session = self.session.read(cx);
+            (
+                !session.is_local_code(),
+                draft.host.as_ref() != session.host(),
+            )
+        };
+        let mut local = draft.unread;
+        let mut left_behind = Vec::new();
+        for attachment in draft.attachments {
+            let on_host = draft.host.is_some() && attachment.inline.is_none();
+            if attachment.image.is_some() {
+                self.attachments.push(attachment);
+            } else if on_host && moved {
+                left_behind.push(attachment.name);
+            } else if on_host || attachment.inline.is_some() == inline {
+                self.attachments.push(attachment);
+            } else {
+                local.push(attachment.path);
+            }
+        }
+        if !local.is_empty() {
+            self.attach_paths(local, cx);
+        }
+        if !left_behind.is_empty() {
+            window.push_notification(
+                format!(
+                    "Not attached here, because they are on the SSH host: {}",
+                    left_behind.join(", ")
+                ),
+                cx,
+            );
+        }
+        cx.notify();
+    }
+
     /// Inserts `text` at the cursor (e.g. an `@path` mention from the Files tab) and focuses
     /// the input.
     pub fn insert_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -564,6 +712,7 @@ impl Composer {
         self.attachments.clear();
         self.history.reset();
         self.mention = None;
+        self.suggestions = SuggestionList::default();
         self.input
             .update(cx, |input, cx| input.set_value("", window, cx));
         cx.notify();
@@ -731,6 +880,12 @@ impl Composer {
     fn attach_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
         // Without local file access (chat, or pi on another machine) text files are pasted in.
         let inline = !self.session.read(cx).is_local_code();
+        let id = self.next_loading;
+        self.next_loading += 1;
+        self.loading.push(Loading {
+            id,
+            paths: paths.clone(),
+        });
         cx.spawn(async move |this, cx| {
             let attachments = cx
                 .background_executor()
@@ -742,6 +897,11 @@ impl Composer {
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
+                // Taken with the draft meanwhile: they are read again where it went.
+                let Some(index) = this.loading.iter().position(|loading| loading.id == id) else {
+                    return;
+                };
+                this.loading.remove(index);
                 this.attachments.extend(attachments);
                 cx.notify();
             });
@@ -965,6 +1125,13 @@ impl Composer {
     fn toolbar_layout(&self, left: Div, cx: &mut Context<Self>) -> Div {
         let session = self.session.read(cx);
         let running = session.is_running();
+        let stop_label = session.can_stop().then_some(if running {
+            "Interrupt (esc)"
+        } else if session.is_compacting() {
+            "Cancel compaction (esc)"
+        } else {
+            "Stop the command (esc)"
+        });
         let ready = matches!(session.lifecycle(), Lifecycle::Ready | Lifecycle::Starting);
         let has_input =
             !self.input.read(cx).value().trim().is_empty() || !self.attachments.is_empty();
@@ -975,14 +1142,14 @@ impl Composer {
             .child(self.render_context_ring(cx))
             .child(crate::demo::mark(
                 "send",
-                if running && !has_input {
+                if let Some(label) = stop_label.filter(|_| !has_input) {
                     Button::new("stop")
                         .primary()
                         .small()
                         .icon(IconName::Square)
                         .rounded(cx.theme().radius_full())
-                        .accessibility_label("Interrupt (esc)")
-                        .tooltip("Interrupt (esc)")
+                        .accessibility_label(label)
+                        .tooltip(label)
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.interrupt(&Interrupt, window, cx);
                         }))
@@ -1218,65 +1385,159 @@ impl Composer {
         h_flex().flex_wrap().gap_1().px_3().pt_2().children(chips)
     }
 
-    fn render_suggestions(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+    /// The commands that complete what is typed, best first; none after Esc, or while the
+    /// text is an earlier prompt or is being dictated.
+    fn suggested(&self, cx: &App) -> Vec<Suggestion> {
+        if self.dictation.is_some() || self.history.is_browsing() {
+            return Vec::new();
+        }
+        let text = self.input.read(cx).value();
+        self.suggestions
+            .rows(&text, self.session.read(cx).commands())
+    }
+
+    /// The `/` list's rows. A fully typed command with no other match needs no list.
+    fn suggestion_rows(&self, cx: &App) -> Vec<Suggestion> {
+        let rows = self.suggested(cx);
+        match rows.as_slice() {
+            [only] if only.text() == *self.input.read(cx).value() => Vec::new(),
+            _ => rows,
+        }
+    }
+
+    fn move_suggestion(&mut self, rows: &[Suggestion], down: bool, cx: &mut Context<Self>) {
+        let index = self.suggestions.move_selection(rows, down);
+        self.suggestions_scroll.scroll_to_item(index);
+        cx.notify();
+    }
+
+    /// Replaces the text with `suggestion`, ready for its arguments.
+    fn accept_suggestion(
+        &mut self,
+        suggestion: &Suggestion,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let completion = format!("{} ", suggestion.text());
+        self.input.update(cx, |input, cx| {
+            let end = input.value().len();
+            input.set_selected_range(0..end, cx);
+            input.replace(completion, window, cx);
+        });
+        let focus = self.focus_handle(cx);
+        focus.focus(window, cx);
+        cx.notify();
+    }
+
+    /// Enter with the `/` list open: completes the highlighted row, and runs it right away when
+    /// it takes no arguments. Returns `false` when the text is to be sent as it is (no list, or
+    /// the row is what is typed).
+    fn enter_suggestion(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let rows = self.suggestion_rows(cx);
+        let Some(row) = rows.get(self.suggestions.selected(&rows)) else {
+            return false;
+        };
+        let typed = self.input.read(cx).value().to_string();
+        if row.text() == typed {
+            return false;
+        }
+        self.accept_suggestion(row, window, cx);
+        // With attachments the text is a message, not a command.
+        if self.attachments.is_empty() && row.runs_at_once(&typed) {
+            self.submit(false, window, cx);
+        }
+        true
+    }
+
+    /// Esc: closes the `/` list. Returns whether it was open.
+    fn close_suggestions(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.suggestion_rows(cx).is_empty() {
+            return false;
+        }
         let text = self.input.read(cx).value().to_string();
-        let found = commands::suggestions(&text, self.session.read(cx).commands());
-        if found.is_empty()
-            || found
-                .iter()
-                .any(|suggestion| text == format!("/{}", suggestion.name))
-        {
+        self.suggestions.close(&text);
+        cx.notify();
+        true
+    }
+
+    fn render_suggestions(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let found = self.suggestion_rows(cx);
+        if found.is_empty() {
             return None;
         }
-        let (muted, hover) = (cx.theme().muted_foreground, cx.theme().secondary_hover);
+        let selected = self.suggestions.selected(&found);
+        let theme = cx.theme();
+        let (muted, hover, selected_bg) = (
+            theme.muted_foreground,
+            theme.secondary_hover,
+            theme.secondary_active,
+        );
         let rows = found.into_iter().enumerate().map(|(index, suggestion)| {
-            let completion = format!("/{} ", suggestion.name);
+            let (name, description) = (suggestion.text(), suggestion.description.clone());
             h_flex()
                 .id(("suggestion", index))
+                .flex_none()
                 .gap_3()
                 .px_3()
                 .py_1()
                 .rounded_md()
                 .cursor_pointer()
+                .role(Role::ListBoxOption)
+                .aria_label(SharedString::from(name.clone()))
+                .aria_selected(index == selected)
+                .when(index == selected, |this| this.bg(selected_bg))
                 .hover(move |style| style.bg(hover))
-                .on_click(
-                    cx.listener(move |this, _, window, cx| this.set_text(&completion, window, cx)),
-                )
-                .child(
-                    div()
-                        .flex_none()
-                        .text_sm()
-                        .child(format!("/{}", suggestion.name)),
-                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.accept_suggestion(&suggestion, window, cx);
+                }))
+                .child(div().flex_none().text_sm().child(name))
                 .child(
                     div()
                         .min_w_0()
                         .truncate()
                         .text_xs()
                         .text_color(muted)
-                        .child(suggestion.description),
+                        .child(description),
                 )
         });
-        Some(v_flex().px_1().pt_1().gap_0p5().children(rows))
+        Some(
+            v_flex()
+                .id("suggestion-list")
+                .role(Role::ListBox)
+                .aria_label("Commands")
+                .max_h(SUGGESTIONS_HEIGHT)
+                .overflow_y_scroll()
+                .track_scroll(&self.suggestions_scroll)
+                .px_1()
+                .pt_1()
+                .gap_0p5()
+                .children(rows),
+        )
     }
 
-    fn complete_first(&mut self, _: &Complete, window: &mut Window, cx: &mut Context<Self>) {
+    /// Tab: the highlighted file or command.
+    fn complete(&mut self, _: &Complete, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.complete_selected(window, cx) {
+            cx.propagate();
+        }
+    }
+
+    /// Accepts the highlighted row of the `@` or `/` list. Returns whether there was one.
+    fn complete_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if self.mention.is_some() {
             self.accept_mention(window, cx);
-            return;
+            return true;
         }
-        let text = self.input.read(cx).value().to_string();
-        match commands::suggestions(&text, self.session.read(cx).commands()).first() {
-            Some(first) => {
-                let completion = format!("/{} ", first.name);
-                self.set_text(&completion, window, cx);
-            }
-            None => cx.propagate(),
-        }
+        let rows = self.suggested(cx);
+        let Some(row) = rows.get(self.suggestions.selected(&rows)) else {
+            return false;
+        };
+        self.accept_suggestion(row, window, cx);
+        true
     }
 
-    /// The input changed: follow the `@` mention at the cursor, and stop browsing history
-    /// once the shown entry is edited.
+    /// The input changed: follow the `@` mention at the cursor and the `/` list, and stop
+    /// browsing history once the shown entry is edited.
     fn on_input_changed(&mut self, cx: &mut Context<Self>) {
         let (text, cursor) = {
             let input = self.input.read(cx);
@@ -1285,6 +1546,10 @@ impl Composer {
         if self.history.is_browsing() && !self.history_entries(cx).contains(&text) {
             self.history.reset();
         }
+        let rows = commands::suggestions(&text, self.session.read(cx).commands());
+        self.suggestions.text_changed(&text, &rows);
+        self.suggestions_scroll
+            .scroll_to_item(self.suggestions.selected(&rows));
         let query = self
             .session
             .read(cx)
@@ -1354,11 +1619,17 @@ impl Composer {
         }))
     }
 
-    /// ↑ in the input: the `@` list, or an earlier prompt when the composer is empty (or
+    /// ↑ in the input: the `@` or `/` list, or an earlier prompt when the composer is empty (or
     /// shows one) and the cursor is on the first line. Otherwise the cursor moves as usual.
     fn on_move_up(&mut self, _: &MoveUp, window: &mut Window, cx: &mut Context<Self>) {
         if self.mention.is_some() {
             self.move_mention(false, cx);
+            cx.stop_propagation();
+            return;
+        }
+        let rows = self.suggestion_rows(cx);
+        if !rows.is_empty() {
+            self.move_suggestion(&rows, false, cx);
             cx.stop_propagation();
             return;
         }
@@ -1379,11 +1650,17 @@ impl Composer {
         }
     }
 
-    /// ↓ in the input: the `@` list, or the next prompt while browsing history (the cursor on
-    /// the last line).
+    /// ↓ in the input: the `@` or `/` list, or the next prompt while browsing history (the
+    /// cursor on the last line).
     fn on_move_down(&mut self, _: &MoveDown, window: &mut Window, cx: &mut Context<Self>) {
         if self.mention.is_some() {
             self.move_mention(true, cx);
+            cx.stop_propagation();
+            return;
+        }
+        let rows = self.suggestion_rows(cx);
+        if !rows.is_empty() {
+            self.move_suggestion(&rows, true, cx);
             cx.stop_propagation();
             return;
         }
@@ -1585,7 +1862,7 @@ impl Render for Composer {
             .on_action(cx.listener(Self::interrupt))
             .on_action(cx.listener(Self::dequeue))
             .on_action(cx.listener(Self::cycle_thinking))
-            .on_action(cx.listener(Self::complete_first))
+            .on_action(cx.listener(Self::complete))
             .capture_key_down(cx.listener(Self::on_dictation_key_down))
             .on_key_up(cx.listener(|this, event: &KeyUpEvent, _, cx| {
                 if event.keystroke.key == "space" {
@@ -1599,16 +1876,23 @@ impl Render for Composer {
             }))
             .capture_action(cx.listener(Self::on_move_up))
             .capture_action(cx.listener(Self::on_move_down))
-            // The input binds Tab and Esc itself; with the `@` list open they act on it.
+            // The input binds Tab and Esc itself; with the `@` or `/` list open they act on it.
             .capture_action(cx.listener(|this, _: &IndentInline, window, cx| {
-                if this.mention.is_some() {
-                    this.accept_mention(window, cx);
+                if this.complete_selected(window, cx) {
                     cx.stop_propagation();
                 }
             }))
             .capture_action(cx.listener(|this, _: &Escape, _, cx| {
                 if this.mention.take().is_some() {
                     cx.notify();
+                    cx.stop_propagation();
+                } else if this.close_suggestions(cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            // Esc with the focus on one of the composer's buttons.
+            .capture_action(cx.listener(|this, _: &Interrupt, _, cx| {
+                if this.close_suggestions(cx) {
                     cx.stop_propagation();
                 }
             }))
@@ -2020,5 +2304,366 @@ mod inline_tests {
             inline_file_block("b.md", "```rust\nx\n```"),
             "`b.md`:\n````\n```rust\nx\n```\n````"
         );
+    }
+}
+
+#[cfg(test)]
+mod suggestion_tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use gpui_kit::component::Root;
+    use gpui_kit::component::input::Enter;
+    use gpui_kit::{AppContext as _, Entity, TestAppContext, VisualTestContext};
+    use pi_sessions::Mode;
+
+    use super::Composer;
+    use crate::chat::session::PiSession;
+
+    /// A composer in a window, over a Code session without a pi.
+    fn composer(cx: &mut TestAppContext) -> (Entity<Composer>, &mut VisualTestContext) {
+        composer_in(Mode::Code, cx)
+    }
+
+    fn composer_in(
+        mode: Mode,
+        cx: &mut TestAppContext,
+    ) -> (Entity<Composer>, &mut VisualTestContext) {
+        cx.update(|cx| {
+            gpui_kit::component::init(cx);
+            super::init(cx);
+            cx.set_global(crate::config::AppConfig::for_tests("pi".into()));
+            cx.set_global(crate::settings::AppSettings::default());
+            let hosts = cx.new(|_| crate::hosts::Hosts::for_tests(Vec::new()));
+            cx.set_global(crate::hosts::HostsHandle(hosts));
+            crate::stt::models::init(cx);
+        });
+        let mut composer = None;
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let session = cx.new(|_| PiSession::idle(std::env::temp_dir(), mode));
+            let view = cx.new(|cx| Composer::new(session, window, cx));
+            composer = Some(view.clone());
+            Root::new(view, window, cx)
+        });
+        let composer = composer.unwrap();
+        cx.update(|window, cx| {
+            let focus = composer.read(cx).focus_handle(cx);
+            focus.focus(window, cx);
+        });
+        (composer, cx)
+    }
+
+    /// Enter in the input. (A simulated keystroke would also type a newline first: the test
+    /// platform inserts the text of a key its action lets through.)
+    fn press_enter(cx: &mut VisualTestContext) {
+        cx.dispatch_action(Enter {
+            secondary: false,
+            shift: false,
+        });
+        cx.run_until_parked();
+    }
+
+    fn text(composer: &Entity<Composer>, cx: &VisualTestContext) -> String {
+        cx.read(|cx| composer.read(cx).input.read(cx).value().to_string())
+    }
+
+    fn rows(composer: &Entity<Composer>, cx: &VisualTestContext) -> Vec<String> {
+        cx.read(|cx| {
+            let rows = composer.read(cx).suggestion_rows(cx);
+            rows.into_iter().map(|row| row.name).collect()
+        })
+    }
+
+    #[gpui_kit::test]
+    fn arrows_and_enter_complete_the_highlighted_command(cx: &mut TestAppContext) {
+        let (composer, cx) = composer(cx);
+        cx.simulate_input("/co");
+        assert_eq!(rows(&composer, cx), ["compact", "copy"]);
+        cx.simulate_keystrokes("down down up");
+        press_enter(cx);
+        // Completed, not sent; the caret is after it, ready for arguments.
+        assert_eq!(text(&composer, cx), "/compact ");
+        assert_eq!(rows(&composer, cx), Vec::<String>::new());
+        cx.simulate_input("keep it");
+        assert_eq!(text(&composer, cx), "/compact keep it");
+    }
+
+    #[gpui_kit::test]
+    fn tab_completes_and_esc_closes_the_list(cx: &mut TestAppContext) {
+        let (composer, cx) = composer(cx);
+        cx.simulate_input("/th");
+        cx.simulate_keystrokes("tab");
+        assert_eq!(text(&composer, cx), "/thinking ");
+        cx.update(|window, cx| {
+            composer.update(cx, |composer, cx| composer.clear(window, cx));
+        });
+        cx.simulate_input("/comp");
+        cx.simulate_keystrokes("escape");
+        assert_eq!(rows(&composer, cx), Vec::<String>::new());
+        assert_eq!(text(&composer, cx), "/comp");
+        // It opens again for other text.
+        cx.simulate_input("a");
+        assert_eq!(rows(&composer, cx), ["compact"]);
+    }
+
+    #[gpui_kit::test]
+    fn enter_runs_a_named_command_and_one_without_arguments(cx: &mut TestAppContext) {
+        let (composer, cx) = composer(cx);
+        let opened = Rc::new(Cell::new(0));
+        cx.update(|_, cx| {
+            let opened = opened.clone();
+            cx.on_action(move |_: &crate::actions::NewChat, _| opened.set(opened.get() + 1));
+        });
+        // Fully typed: no list, Enter runs it.
+        cx.simulate_input("/new");
+        assert_eq!(rows(&composer, cx), Vec::<String>::new());
+        press_enter(cx);
+        assert_eq!((text(&composer, cx).as_str(), opened.get()), ("", 1));
+        // Its highlighted row: Enter runs it as well.
+        cx.simulate_input("/ne");
+        press_enter(cx);
+        assert_eq!((text(&composer, cx).as_str(), opened.get()), ("", 2));
+    }
+
+    #[gpui_kit::test]
+    fn the_whole_list_is_reachable_and_stays_in_view(cx: &mut TestAppContext) {
+        let (composer, cx) = composer(cx);
+        cx.simulate_input("/");
+        let all = rows(&composer, cx);
+        assert_eq!(all.len(), crate::chat::commands::SUPPORTED.len());
+        for _ in 0..all.len() + 3 {
+            cx.simulate_keystrokes("down");
+        }
+        cx.run_until_parked();
+        cx.read(|cx| {
+            let composer = composer.read(cx);
+            let rows = composer.suggestion_rows(cx);
+            assert_eq!(composer.suggestions.selected(&rows), rows.len() - 1);
+            let scroll = &composer.suggestions_scroll;
+            let last = scroll.bounds_for_item(rows.len() - 1).unwrap();
+            let list = scroll.bounds();
+            assert!(list.size.height < gpui_kit::px(320.), "{list:?}");
+            assert!(
+                last.bottom() + scroll.offset().y <= list.bottom() + gpui_kit::px(1.),
+                "{last:?} {list:?} {:?}",
+                scroll.offset()
+            );
+        });
+        press_enter(cx);
+        assert_eq!(text(&composer, cx), "/quit ");
+    }
+
+    /// `/login` asks the window for a terminal in a Code session, and says what to do in a chat.
+    #[gpui_kit::test]
+    fn login_leads_somewhere(cx: &mut TestAppContext) {
+        use crate::actions::OpenLogin;
+
+        let opened = Rc::new(std::cell::RefCell::new(Vec::new()));
+        for mode in [Mode::Code, Mode::Chat] {
+            let (composer, cx) = composer_in(mode, cx);
+            cx.update(|_, cx| {
+                let opened = opened.clone();
+                cx.on_action(move |login: &OpenLogin, _| opened.borrow_mut().push(login.clone()));
+            });
+            cx.simulate_input("/login anthropic");
+            press_enter(cx);
+            assert_eq!(text(&composer, cx), "");
+            let notices = cx.read(|cx| {
+                let session = composer.read(cx).session.read(cx);
+                session.transcript().items().len()
+            });
+            assert_eq!(notices, usize::from(mode == Mode::Chat));
+        }
+        let login = OpenLogin {
+            logout: false,
+            provider: Some("anthropic".into()),
+        };
+        assert_eq!(*opened.borrow(), [login]);
+    }
+}
+
+#[cfg(test)]
+mod draft_tests {
+    use std::path::{Path, PathBuf};
+
+    use gpui_kit::component::{Root, WindowExt as _};
+    use gpui_kit::{AppContext as _, Entity, TestAppContext, VisualTestContext, Window};
+    use pi_rpc::protocol::ImageContent;
+    use pi_sessions::Mode;
+
+    use super::{Attachment, Composer, Dictation, Draft, InlineText, PiSession};
+    use crate::config::AppConfig;
+    use crate::hosts::{Hosts, HostsHandle};
+
+    /// `N` composers (of sessions without a pi) in one window.
+    fn composers<const N: usize>(
+        sessions: [PiSession; N],
+        cx: &mut TestAppContext,
+    ) -> ([Entity<Composer>; N], &mut VisualTestContext) {
+        cx.executor().allow_parking();
+        cx.update(|cx| {
+            gpui_kit::component::init(cx);
+            cx.set_global(AppConfig::for_tests("pi".into()));
+            cx.set_global(crate::settings::AppSettings::default());
+            crate::stt::init(cx);
+            let hosts = cx.new(|_| Hosts::for_tests(Vec::new()));
+            cx.set_global(HostsHandle(hosts));
+        });
+        let mut built = None;
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let composers = sessions.map(|session| {
+                let session = cx.new(|_| session);
+                cx.new(|cx| Composer::new(session, window, cx))
+            });
+            let first = composers[0].clone();
+            built = Some(composers);
+            Root::new(first, window, cx)
+        });
+        (built.unwrap(), cx)
+    }
+
+    fn code() -> PiSession {
+        PiSession::idle(std::env::temp_dir(), Mode::Code)
+    }
+
+    fn on_host() -> PiSession {
+        PiSession::idle_on_host(remote::HostId("box".into()))
+    }
+
+    fn file(path: &Path, inline: Option<&str>) -> Attachment {
+        Attachment {
+            path: path.to_path_buf(),
+            name: path.to_string_lossy().into_owned().into(),
+            image: None,
+            inline: inline.map(|text| InlineText::Text(text.to_owned())),
+        }
+    }
+
+    fn names(composer: &Entity<Composer>, cx: &VisualTestContext) -> Vec<String> {
+        cx.read(|cx| {
+            let attachments = &composer.read(cx).attachments;
+            attachments.iter().map(|a| a.name.to_string()).collect()
+        })
+    }
+
+    fn act<R>(
+        composer: &Entity<Composer>,
+        cx: &mut VisualTestContext,
+        f: impl FnOnce(&mut Composer, &mut Window, &mut gpui_kit::Context<Composer>) -> R,
+    ) -> R {
+        let result = cx.update(|window, cx| composer.update(cx, |this, cx| f(this, window, cx)));
+        cx.run_until_parked();
+        result
+    }
+
+    /// Lets files be read on the background threads.
+    fn settle(composer: &Entity<Composer>, cx: &mut VisualTestContext) {
+        for _ in 0..500 {
+            cx.run_until_parked();
+            if cx.read(|cx| composer.read(cx).loading.is_empty()) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("the attachments were not read");
+    }
+
+    #[gpui_kit::test]
+    fn a_draft_moves_with_its_attachments(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.txt");
+        std::fs::write(&path, "text").unwrap();
+        let ([from, to], cx) = composers([code(), code()], cx);
+        assert!(act(&from, cx, |from, window, cx| from.take_draft(window, cx)).is_empty());
+        assert!(!cx.read(|cx| from.read(cx).has_draft(cx)));
+
+        let draft = act(&from, cx, |from, window, cx| {
+            from.set_text("fix this ", window, cx);
+            from.attachments.push(Attachment {
+                path: "pasted.png".into(),
+                name: "pasted.png".into(),
+                image: Some(ImageContent::new("AAAA", "image/png")),
+                inline: None,
+            });
+            // Still being read when the draft is taken.
+            from.attach_paths(vec![path.clone()], cx);
+            assert!(from.has_draft(cx));
+            from.take_draft(window, cx)
+        });
+        settle(&from, cx);
+        assert!(!cx.read(|cx| from.read(cx).has_draft(cx)));
+        assert_eq!(names(&from, cx), [""; 0]);
+        assert_eq!(draft.unread, [path]);
+
+        act(&to, cx, |to, window, cx| to.set_draft(draft, window, cx));
+        settle(&to, cx);
+        assert_eq!(names(&to, cx), ["pasted.png", "notes.txt"]);
+        cx.read(|cx| {
+            let to = to.read(cx);
+            assert_eq!(to.text(cx), "fix this ");
+            assert_eq!(to.input.read(cx).cursor(), "fix this ".len());
+            assert!(to.attachments[0].image.is_some());
+        });
+    }
+
+    #[gpui_kit::test]
+    fn a_draft_goes_before_what_is_typed_meanwhile(cx: &mut TestAppContext) {
+        let ([composer], cx) = composers([code()], cx);
+        act(&composer, cx, |composer, window, cx| {
+            composer.set_text("later", window, cx);
+            composer.set_draft(Draft::for_tests("earlier"), window, cx);
+        });
+        assert_eq!(cx.read(|cx| composer.read(cx).text(cx)), "earlier\n\nlater");
+    }
+
+    /// What was heard so far is part of the draft.
+    #[gpui_kit::test]
+    fn a_draft_includes_the_dictation(cx: &mut TestAppContext) {
+        let ([composer], cx) = composers([code()], cx);
+        let draft = act(&composer, cx, |composer, window, cx| {
+            composer.set_text("Fix", window, cx);
+            composer.dictation = Some(Dictation {
+                draft: "Fix".into(),
+                transcript: "the tests".into(),
+            });
+            composer.take_draft(window, cx)
+        });
+        assert_eq!(draft.text(), "Fix the tests");
+        assert!(!cx.read(|cx| composer.read(cx).has_draft(cx)));
+    }
+
+    /// Files are referenced or read as the machine the draft moves to needs them.
+    #[gpui_kit::test]
+    fn attachments_follow_to_another_machine(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.txt");
+        std::fs::write(&path, "text").unwrap();
+        let ([local, host], cx) = composers([code(), on_host()], cx);
+        let draft = act(&local, cx, |local, window, cx| {
+            local.attachments.push(file(&path, None));
+            local.take_draft(window, cx)
+        });
+        act(&host, cx, |host, window, cx| {
+            host.set_draft(draft, window, cx);
+        });
+        settle(&host, cx);
+        cx.read(|cx| {
+            let attachment = &host.read(cx).attachments[0];
+            assert!(matches!(&attachment.inline, Some(InlineText::Text(text)) if text == "text"));
+        });
+
+        // Back, with a file picked on the host, which stays behind.
+        let draft = act(&host, cx, |host, window, cx| {
+            host.attachments
+                .push(file(&PathBuf::from("/srv/remote.txt"), None));
+            host.take_draft(window, cx)
+        });
+        act(&local, cx, |local, window, cx| {
+            local.set_draft(draft, window, cx);
+        });
+        settle(&local, cx);
+        assert_eq!(names(&local, cx), ["notes.txt"]);
+        assert!(cx.read(|cx| local.read(cx).attachments[0].inline.is_none()));
+        assert_eq!(cx.update(|window, cx| window.notifications(cx).len()), 1);
     }
 }

@@ -4,23 +4,22 @@
 use std::path::{Path, PathBuf};
 
 use deepsearch::config::{BackendKind, Config as WebConfig, Mode as WebMode};
-use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::button::Button;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::setting::{
     NumberFieldOptions, RenderOptions, SelectIndex, SettingField, SettingGroup, SettingItem,
     SettingPage, Settings,
 };
-use gpui_kit::component::switch::Switch;
-use gpui_kit::component::{ActiveTheme as _, IconName, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, IconName, Sizable as _, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use pi_config::settings::{StartupDefaults, THINKING_LEVELS};
-use remote::HostId;
 
 use super::{AppSettings, StartMode, TextSize, ThemeChoice};
 use crate::code_colors::CodeColors;
 use crate::config::AppConfig;
+use crate::remote_ui::SavedHostAction;
 use crate::ui::AppIcon;
 use crate::ui::spinner::IndicatorStyle;
 
@@ -29,9 +28,7 @@ use crate::ui::spinner::IndicatorStyle;
 pub enum SettingsEvent {
     AddModel,
     EditModels,
-    AddHost,
-    ManageHosts,
-    ConnectHost(HostId),
+    Host(SavedHostAction),
     CheckForUpdates,
 }
 
@@ -714,104 +711,26 @@ impl SettingsView {
                 SettingGroup::new()
                     .title("Saved connections")
                     .item(SettingItem::render(move |_, _, cx| {
-                        let hosts = crate::hosts::hosts(cx);
-                        let hosts = hosts.read(cx);
-                        let muted = cx.theme().muted_foreground;
-                        let rows: Vec<AnyElement> = hosts
-                            .hosts()
-                            .iter()
-                            .enumerate()
-                            .map(|(index, host)| {
-                                let status = hosts.status(&host.id);
-                                let connected = status.is_connected();
-                                let (weak, id) = (weak.clone(), host.id.clone());
-                                h_flex()
-                                    .w_full()
-                                    .gap_2()
-                                    .py_1()
-                                    .child(crate::remote_ui::status_dot(Some(&status), cx))
-                                    .child(
-                                        v_flex()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .truncate()
-                                                    .child(host.label.clone()),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(muted)
-                                                    .truncate()
-                                                    .child(crate::remote_ui::status_text(&status)),
-                                            ),
-                                    )
-                                    .when(!connected, |this| {
-                                        this.child(
-                                            Button::new(("settings-connect", index))
-                                                .small()
-                                                .label("Connect")
-                                                .on_click(move |_, _, cx| {
-                                                    let id = id.clone();
-                                                    let _ = weak.update(cx, |_, cx| {
-                                                        cx.emit(SettingsEvent::ConnectHost(id));
-                                                    });
-                                                }),
-                                        )
-                                    })
-                                    .into_any_element()
-                            })
-                            .collect();
-                        let empty = rows.is_empty();
-                        let (weak_add, weak_manage) = (weak.clone(), weak.clone());
-                        v_flex()
-                            .w_full()
-                            .gap_1()
-                            .children(rows)
-                            .when(empty, |this| {
-                                this.child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(muted)
-                                        .child("No saved connections yet."),
-                                )
-                            })
-                            .child(
-                                h_flex()
-                                    .pt_2()
-                                    .gap_2()
-                                    .child(
-                                        Button::new("settings-add-host")
-                                            .small()
-                                            .primary()
-                                            .label("Add SSH connection…")
-                                            .on_click(move |_, _, cx| {
-                                                let _ = weak_add.update(cx, |_, cx| {
-                                                    cx.emit(SettingsEvent::AddHost);
-                                                });
-                                            }),
-                                    )
-                                    .when(!empty, |this| {
-                                        this.child(
-                                            Button::new("settings-manage-hosts")
-                                                .small()
-                                                .label("Rename, remove or change…")
-                                                .on_click(move |_, _, cx| {
-                                                    let _ = weak_manage.update(cx, |_, cx| {
-                                                        cx.emit(SettingsEvent::ManageHosts);
-                                                    });
-                                                }),
-                                        )
-                                    }),
-                            )
+                        let weak = weak.clone();
+                        crate::remote_ui::saved_hosts(
+                            move |action, _, cx| {
+                                let _ = weak.update(cx, |_, cx| {
+                                    cx.emit(SettingsEvent::Host(action));
+                                });
+                            },
+                            cx,
+                        )
                     })),
             )
     }
 }
 
 impl SettingsView {
+    /// Opens on the SSH connections page (before the first render).
+    pub fn start_on_ssh(&mut self) {
+        self.start_page = 3;
+    }
+
     /// Opens on the Speech to text page (before the first render).
     pub fn start_on_speech(&mut self) {
         self.start_page = 4;
@@ -996,18 +915,13 @@ fn hover_switch(
     let set_value = std::rc::Rc::new(set_value);
     SettingField::render(move |_, _, cx| {
         let set_value = set_value.clone();
-        let hover = cx.theme().secondary_hover;
-        div()
-            .id(id)
-            .p(px(3.))
-            .rounded_full()
-            .cursor_pointer()
-            .hover(move |style| style.bg(hover))
-            .child(
-                Switch::new(id)
-                    .checked(value(cx))
-                    .on_click(move |checked: &bool, _, cx| set_value(*checked, cx)),
-            )
+        crate::ui::hover_switch(
+            id,
+            value(cx),
+            move |checked, _, cx| set_value(checked, cx),
+            None,
+            cx,
+        )
     })
 }
 

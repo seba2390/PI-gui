@@ -21,6 +21,9 @@ pub struct UiState {
     pub last_sessions: HashMap<Mode, LastSession>,
     /// The terminal panel's height in pixels, as last dragged.
     pub terminal_height: Option<u16>,
+    /// State this version doesn't know (a newer one wrote it), kept for the next save.
+    #[serde(flatten)]
+    pub unknown: serde_json::Map<String, serde_json::Value>,
 }
 
 /// A conversation to come back to.
@@ -49,16 +52,19 @@ pub fn remote_key(host: &str, folder: Option<&Path>) -> PathBuf {
 impl Global for UiState {}
 
 impl UiState {
-    /// Where the state lives, or `None` if pi's agent dir is unknown.
+    /// Where the state lives, or `None` if pi's agent dir is unknown (or in tests, which never
+    /// write there).
     pub fn path() -> Option<PathBuf> {
+        if cfg!(test) {
+            return None;
+        }
         pi_sessions::app_dir().map(|dir| dir.join("state.json"))
     }
 
-    /// Reads the saved state; a missing or unreadable file yields the defaults.
+    /// Reads the saved state, with defaults for what is missing or unreadable (see
+    /// [`crate::persist::load`]).
     pub fn load(path: Option<&Path>) -> Self {
-        path.and_then(|path| std::fs::read(path).ok())
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default()
+        path.map(crate::persist::load).unwrap_or_default()
     }
 
     /// Changes the global state with `f` and saves it in the background if it changed.
@@ -121,12 +127,21 @@ mod tests {
             )]
             .into_iter()
             .collect(),
+            ..UiState::default()
         };
         state.write(&path).unwrap();
         assert_eq!(UiState::load(Some(&path)), state);
 
         std::fs::write(&path, r#"{"mode":"chat"}"#).unwrap();
         assert_eq!(UiState::load(Some(&path)).mode, Mode::Chat);
+        // One unreadable value keeps the rest, and what a newer version wrote.
+        let text = r#"{"mode":"canvas","terminal_height":300,"collapsed":["/a"],"zoom":2}"#;
+        std::fs::write(&path, text).unwrap();
+        let loaded = UiState::load(Some(&path));
+        assert_eq!(loaded.mode, Mode::default());
+        assert_eq!(loaded.terminal_height, Some(300));
+        assert!(loaded.collapsed.contains(Path::new("/a")));
+        assert_eq!(loaded.unknown["zoom"], 2);
         std::fs::write(&path, "not json").unwrap();
         assert_eq!(UiState::load(Some(&path)), UiState::default());
     }

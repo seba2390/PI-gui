@@ -201,18 +201,30 @@ impl ConnectFlow {
 
     fn start_new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let input = cx.new(|cx| InputState::new(window, cx).placeholder("Folder name"));
-        self._subscriptions
-            .push(cx.subscribe(&input, |this, _, event: &InputEvent, cx| {
+        self._subscriptions.push(cx.subscribe_in(
+            &input,
+            window,
+            |this, _, event: &InputEvent, window, cx| {
                 if matches!(event, InputEvent::PressEnter { .. }) {
-                    this.create_folder(cx);
+                    this.create_folder(window, cx);
                 }
-            }));
+            },
+        ));
         input.update(cx, |input, cx| input.focus(window, cx));
         self.new_folder = Some(input);
         cx.notify();
     }
 
-    fn create_folder(&mut self, cx: &mut Context<Self>) {
+    /// Closes the "New folder" field; the keyboard goes to the path field, as a focused field
+    /// that is gone would leave it nowhere (Esc would not close the dialog).
+    fn close_new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.new_folder = None;
+        self.path_input
+            .update(cx, |input, cx| input.focus(window, cx));
+        cx.notify();
+    }
+
+    fn create_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (Some(input), Some(parent)) = (self.new_folder.clone(), self.current_path()) else {
             return;
         };
@@ -223,14 +235,14 @@ impl ConnectFlow {
         let Some(ssh) = self.hosts.read(cx).ssh(&self.host) else {
             return;
         };
-        self._load = cx.spawn(async move |this, cx| {
+        self._load = cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move { ssh.make_dir(&parent, &name) })
                 .await;
-            let _ = this.update(cx, |this, cx| match result {
+            let _ = this.update_in(cx, |this, window, cx| match result {
                 Ok(path) => {
-                    this.new_folder = None;
+                    this.close_new_folder(window, cx);
                     this.load(path, cx);
                 }
                 Err(error) => {
@@ -596,16 +608,17 @@ impl ConnectFlow {
                             Button::new("create-folder")
                                 .small()
                                 .label("Create")
-                                .on_click(cx.listener(|this, _, _, cx| this.create_folder(cx))),
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.create_folder(window, cx);
+                                })),
                         )
                         .child(
                             Button::new("cancel-folder")
                                 .quiet(cx)
                                 .small()
                                 .label("Cancel")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.new_folder = None;
-                                    cx.notify();
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.close_new_folder(window, cx);
                                 })),
                         ),
                 )
@@ -650,5 +663,69 @@ impl Render for ConnectFlow {
             _ => self.render_status(&status, cx),
         };
         v_flex().w_full().gap_3().child(body)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::{AppContext as _, Focusable as _, ParentElement as _, TestAppContext};
+    use remote::{DirListing, HostId};
+
+    use super::{Browse, ConnectFlow};
+    use crate::hosts::{HostStatus, Hosts, HostsHandle};
+    use crate::ui::dialog::open_form_dialog;
+    use crate::ui::dialog::testing::{click, draw, is_open, press, window};
+
+    /// Enter in the path and "New folder" fields keeps the dialog, and closing the "New
+    /// folder" field leaves the keyboard in the dialog.
+    #[gpui_kit::test]
+    #[allow(clippy::unused_async)] // gpui tests take an async body
+    async fn enter_keeps_the_folder_browser(cx: &mut TestAppContext) {
+        // Not a saved host: nothing connects anywhere.
+        let id = HostId("none".into());
+        cx.update(|cx| {
+            let hosts = cx.new(|_| Hosts::for_tests(Vec::new()));
+            hosts.update(cx, |hosts, cx| {
+                hosts.set_status_for_tests(&id, HostStatus::Connected, cx);
+            });
+            cx.set_global(HostsHandle(hosts));
+        });
+        let cx = window(cx);
+        let flow = cx.update(|window, cx| {
+            let flow = cx.new(|cx| {
+                let mut flow = ConnectFlow::new(id, false, window, cx);
+                flow.browse = Some(Browse::Ready(DirListing {
+                    path: "/home/u".into(),
+                    parent: Some("/home".into()),
+                    dirs: vec!["project".into()],
+                }));
+                flow
+            });
+            let view = flow.clone();
+            open_form_dialog(None, window, cx, move |dialog, _, _| {
+                dialog.title("Open a folder").child(view.clone())
+            });
+            flow
+        });
+        draw(cx);
+        let path = cx.update(|_, cx| flow.read(cx).path_input.focus_handle(cx));
+        cx.update(|window, cx| path.focus(window, cx));
+        draw(cx);
+        cx.simulate_input("/srv");
+        press("enter", cx);
+        assert!(is_open(cx));
+
+        click("new-folder", cx);
+        cx.simulate_input("src");
+        press("enter", cx);
+        assert!(is_open(cx));
+        cx.update(|_, cx| {
+            let name = flow.read(cx).new_folder.as_ref().unwrap().read(cx).value();
+            assert_eq!(name, "src");
+        });
+        click("cancel-folder", cx);
+        cx.update(|window, _| assert!(path.is_focused(window)));
+        press("escape", cx);
+        assert!(!is_open(cx));
     }
 }

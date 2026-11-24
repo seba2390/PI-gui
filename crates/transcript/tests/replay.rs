@@ -117,7 +117,7 @@ fn describe(transcript: &Transcript, with_timing: bool) -> String {
                     }
                 }
             }
-            ItemKind::Bash { command, .. } => writeln!(out, "BASH: {command}").unwrap(),
+            ItemKind::Bash(bash) => writeln!(out, "BASH: {}", bash.command).unwrap(),
             ItemKind::Notice(notice) => {
                 writeln!(out, "NOTICE {:?}: {}", notice.kind, notice.text).unwrap();
             }
@@ -244,5 +244,54 @@ fn nested_tool_activity_attaches_to_its_parent_call() {
     assert_eq!(
         steps,
         ["read Done fn a() {}", "bash Failed x", "text Found it."]
+    );
+}
+
+/// Compaction shows as the status while it lasts, in a run and between runs, and one notice
+/// says how it ended.
+#[test]
+fn compaction_is_a_status_and_one_notice() {
+    let now = Instant::now();
+    let apply = |live: &mut Transcript, lines: &[&str]| {
+        for line in lines {
+            match Incoming::from_slice(line.as_bytes()).unwrap() {
+                Incoming::Event(event) => live.apply(&event, now),
+                other => panic!("not an event: {other:?}"),
+            }
+        }
+    };
+    let mut live = Transcript::new();
+    apply(
+        &mut live,
+        &[r#"{"type":"compaction_start","reason":"manual"}"#],
+    );
+    assert_eq!(*live.status(), RunStatus::Compacting);
+    assert!(!live.is_running());
+    apply(
+        &mut live,
+        &[
+            r#"{"type":"compaction_end","reason":"manual","aborted":false,"willRetry":false,"errorMessage":"Compaction failed: Nothing to compact"}"#,
+        ],
+    );
+    assert_eq!(*live.status(), RunStatus::Idle);
+
+    apply(
+        &mut live,
+        &[
+            r#"{"type":"agent_start"}"#,
+            r#"{"type":"compaction_start","reason":"threshold"}"#,
+        ],
+    );
+    assert_eq!(*live.status(), RunStatus::Compacting);
+    assert!(live.is_running());
+    apply(
+        &mut live,
+        &[r#"{"type":"compaction_end","reason":"threshold","aborted":true,"willRetry":false}"#],
+    );
+    assert!(matches!(live.status(), RunStatus::Working { .. }));
+    assert_eq!(
+        describe(&live, false),
+        "NOTICE Error: Compaction failed: Nothing to compact\n\
+         NOTICE Warning: Compaction cancelled\n"
     );
 }

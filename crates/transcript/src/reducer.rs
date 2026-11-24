@@ -4,17 +4,21 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use pi_rpc::protocol::{
-    AgentMessage, AssistantMessage, AssistantMessageEvent, ContentBlock, Event, MessageContent,
-    ThinkingLevel, ToolResultMessage, Usage,
+    AgentMessage, AssistantMessage, AssistantMessageEvent, BashResult, ContentBlock, Event,
+    MessageContent, ThinkingLevel, ToolResultMessage, Usage,
 };
 use serde_json::Value;
 
 use crate::format::format_tokens;
 use crate::model::{
-    AssistantItem, Block, BlockKind, Image, ItemId, ItemKind, NestedEntry, Notice, NoticeKind,
-    Queue, RunStatus, TextBlock, ThinkingBlock, ToolBlock, ToolStatus, TranscriptItem, TurnSummary,
-    UserItem,
+    AssistantItem, BashItem, BashStatus, Block, BlockKind, Image, ItemId, ItemKind, NestedEntry,
+    Notice, NoticeKind, Queue, RunStatus, TextBlock, ThinkingBlock, ToolBlock, ToolStatus,
+    TranscriptItem, TurnSummary, UserItem,
 };
+
+/// A running command's output is cut to its last `LIVE_OUTPUT` bytes whenever it gets twice as
+/// long; pi's result then replaces it.
+const LIVE_OUTPUT: usize = 64 * 1024;
 
 /// The live transcript of one pi session.
 #[derive(Debug, Clone)]
@@ -32,6 +36,8 @@ pub struct Transcript {
     /// Nested tool call id → the top-level call it runs inside (deeper nesting is
     /// flattened onto that call).
     nested_owner: HashMap<String, String>,
+    /// Running shell commands: request id and item index.
+    running_bash: Vec<(String, usize)>,
     queue: Queue,
     session_name: Option<String>,
     thinking_level: Option<ThinkingLevel>,
@@ -56,6 +62,7 @@ impl Transcript {
             current_assistant: None,
             tools: HashMap::new(),
             nested_owner: HashMap::new(),
+            running_bash: Vec::new(),
             queue: Queue::default(),
             session_name: None,
             thinking_level: None,
@@ -87,6 +94,11 @@ impl Transcript {
         self.run_started
     }
 
+    /// Whether a user-run shell command is running.
+    pub fn is_bash_running(&self) -> bool {
+        !self.running_bash.is_empty()
+    }
+
     pub fn queue(&self) -> &Queue {
         &self.queue
     }
@@ -114,13 +126,41 @@ impl Transcript {
         }));
     }
 
-    /// Adds the result of a user-run shell command (`!cmd`).
-    pub fn push_bash(&mut self, command: String, output: String, exit_code: Option<i32>) {
-        self.push(ItemKind::Bash {
+    /// Adds a shell command the user runs (`!cmd`). `id` is its request id: output that pi
+    /// streams for it goes to its row, until [`Self::finish_bash`] or [`Self::stop_bash`].
+    pub fn start_bash(&mut self, id: &str, command: String, now: Instant) {
+        let index = self.push(ItemKind::Bash(BashItem {
             command,
-            output,
-            exit_code,
+            output: String::new(),
+            status: BashStatus::Running { since: now },
+            full_output: None,
+        }));
+        self.running_bash.push((id.to_owned(), index));
+    }
+
+    /// Ends the command `id` with pi's `result`.
+    pub fn finish_bash(&mut self, id: &str, result: BashResult) {
+        self.end_bash(id, |bash| {
+            *bash = BashItem {
+                command: std::mem::take(&mut bash.command),
+                output: result.output,
+                status: bash_status(result.cancelled, result.exit_code),
+                full_output: result.full_output_path.filter(|_| result.truncated),
+            };
         });
+    }
+
+    /// Ends the command `id` without a result, keeping the output it printed so far.
+    pub fn stop_bash(&mut self, id: &str, status: BashStatus) {
+        self.end_bash(id, |bash| bash.status = status);
+    }
+
+    fn end_bash(&mut self, id: &str, end: impl FnOnce(&mut BashItem)) {
+        let Some(running) = self.running_bash.iter().position(|(known, _)| known == id) else {
+            return;
+        };
+        let (_, index) = self.running_bash.remove(running);
+        self.edit_bash(index, end);
     }
 
     pub fn set_session_name(&mut self, name: Option<String>) {
@@ -128,8 +168,11 @@ impl Transcript {
         self.revision += 1;
     }
 
-    /// Ends any in-flight run as aborted, e.g. when the pi process died.
+    /// Ends any in-flight run and shell command as aborted, e.g. when the pi process died.
     pub fn force_settle(&mut self, now: Instant) {
+        for (_, index) in std::mem::take(&mut self.running_bash) {
+            self.edit_bash(index, |bash| bash.status = BashStatus::Cancelled);
+        }
         self.settle(true, now);
     }
 
@@ -228,6 +271,15 @@ impl Transcript {
                 };
                 self.revision += 1;
             }
+            Event::BashExecutionUpdate {
+                id: Some(id),
+                delta,
+            } => {
+                let running = self.running_bash.iter().find(|(known, _)| known == id);
+                if let Some(&(_, index)) = running {
+                    self.edit_bash(index, |bash| append_output(&mut bash.output, delta));
+                }
+            }
             Event::SessionInfoChanged { name } => self.set_session_name(name.clone()),
             Event::ThinkingLevelChanged { level } => {
                 self.thinking_level = Some(*level);
@@ -246,7 +298,13 @@ impl Transcript {
                 if let Some(result) = result {
                     self.push_notice(NoticeKind::Compaction, compaction_text(result));
                 } else if let Some(error) = error_message {
-                    self.push_notice(NoticeKind::Error, format!("Compaction failed: {error}"));
+                    // pi's message says what failed ("Compaction failed: Nothing to compact").
+                    let text = if error.contains("failed") {
+                        error.clone()
+                    } else {
+                        format!("Compaction failed: {error}")
+                    };
+                    self.push_notice(NoticeKind::Error, text);
                 } else if *aborted {
                     self.push_notice(NoticeKind::Warning, "Compaction cancelled");
                 }
@@ -412,11 +470,12 @@ impl Transcript {
             }
             AgentMessage::ToolResult(result) => self.apply_tool_result(result),
             AgentMessage::BashExecution(bash) => {
-                self.push(ItemKind::Bash {
+                self.push(ItemKind::Bash(BashItem {
                     command: bash.command.clone(),
                     output: bash.output.clone(),
-                    exit_code: bash.exit_code,
-                });
+                    status: bash_status(bash.cancelled, bash.exit_code),
+                    full_output: bash.full_output_path.clone().filter(|_| bash.truncated),
+                }));
             }
             AgentMessage::Custom(custom) if custom.display => {
                 self.push_notice(NoticeKind::Info, custom.content.text());
@@ -824,6 +883,13 @@ impl Transcript {
         });
     }
 
+    fn edit_bash(&mut self, index: usize, edit: impl FnOnce(&mut BashItem)) {
+        if let ItemKind::Bash(bash) = &mut self.items[index].kind {
+            edit(bash);
+            self.touch(index);
+        }
+    }
+
     fn edit_tool(&mut self, index: usize, block: usize, edit: impl FnOnce(&mut ToolBlock)) {
         if let ItemKind::Assistant(item) = &mut self.items[index].kind
             && let Some(Block {
@@ -834,6 +900,28 @@ impl Transcript {
             edit(tool);
             self.touch(index);
         }
+    }
+}
+
+/// How a shell command that pi ran ended.
+fn bash_status(cancelled: bool, exit_code: Option<i32>) -> BashStatus {
+    if cancelled {
+        BashStatus::Cancelled
+    } else {
+        BashStatus::Done { exit_code }
+    }
+}
+
+/// Adds `delta` to a running command's output, keeping its last [`LIVE_OUTPUT`] bytes or a
+/// little more.
+fn append_output(output: &mut String, delta: &str) {
+    output.push_str(delta);
+    if output.len() > 2 * LIVE_OUTPUT {
+        let mut start = output.len() - LIVE_OUTPUT;
+        while !output.is_char_boundary(start) {
+            start += 1;
+        }
+        output.drain(..start);
     }
 }
 
