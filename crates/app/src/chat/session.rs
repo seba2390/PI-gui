@@ -20,7 +20,7 @@ use pi_rpc::protocol::{
 use pi_rpc::{ClientEvent, PiClient, PiProcess, RpcError, SpawnOptions};
 use transcript::{NoticeKind, Transcript};
 
-use crate::config::AppConfig;
+use crate::config::{AppConfig, ChildEnv};
 
 /// Where the pi process is in its life.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,13 +119,10 @@ fn fork_entry(
 }
 
 /// Runs `gh gist create` (secret) for `path`; returns pi's viewer link and the gist URL.
-fn create_gist(
-    path: &str,
-    env: &[(std::ffi::OsString, std::ffi::OsString)],
-) -> Result<(String, String), String> {
+fn create_gist(path: &str, env: &ChildEnv) -> Result<(String, String), String> {
     let output = std::process::Command::new("gh")
         .args(["gist", "create", "--public=false", path])
-        .envs(env.iter().cloned())
+        .envs(env.vars().iter().cloned())
         .output()
         .map_err(|_| {
             "Sharing needs the GitHub CLI (gh): https://cli.github.com, then `gh auth login`."
@@ -140,8 +137,10 @@ fn create_gist(
     if id.is_empty() {
         return Err(format!("Unexpected answer from gh: {gist}"));
     }
-    let base = std::env::var("PI_SHARE_VIEWER_URL")
-        .unwrap_or_else(|_| "https://pi.dev/session/".to_owned());
+    let base = env
+        .var("PI_SHARE_VIEWER_URL")
+        .and_then(|url| url.into_string().ok())
+        .unwrap_or_else(|| "https://pi.dev/session/".to_owned());
     Ok((format!("{base}#{id}"), gist))
 }
 
@@ -196,7 +195,8 @@ pub struct PiSession {
     /// Where automatic naming is (see [`crate::naming`]).
     naming: Naming,
     _naming_task: Task<()>,
-    /// Starts pi on a host once its settings for this computer's models are written.
+    /// Starts pi once the login shell's environment is known and, on a host, its settings for
+    /// this computer's models are written.
     _start_task: Task<()>,
 }
 
@@ -245,9 +245,11 @@ impl PiSession {
             (Some(id), Some(hosts)) => hosts.update(cx, |hosts, cx| hosts.session_env(id, cx)),
             _ => Ok(Vec::new()),
         };
-        let env = remote_env.as_ref().map_or(&[][..], Vec::as_slice);
-        let (options, mode) =
-            spawn_options(&config, &cwd, session_file.as_deref(), saved.as_ref(), env);
+        // Remote sessions are always Code (see `spawn_options`).
+        let mode = match saved {
+            Some(_) => Mode::Code,
+            None => config.mode_of(&cwd),
+        };
         if mode == Mode::Chat
             && let Err(error) = std::fs::create_dir_all(&cwd)
         {
@@ -286,27 +288,39 @@ impl PiSession {
             _naming_task: Task::ready(()),
             _start_task: Task::ready(()),
         };
+        this.show_preview(cx);
         match remote_env {
-            Ok(_) => this.start_process(&options, cx),
-            Err(link) => {
+            Ok(env) if config.child_env.ready().is_some() => this.start(&env, cx),
+            remote_env => {
                 this._start_task = cx.spawn(async move |this, cx| {
-                    let env = link.await;
+                    let env = match remote_env {
+                        Ok(env) => env,
+                        Err(link) => link.await,
+                    };
+                    config.child_env.wait().await;
                     let _ = this.update(cx, |this, cx| {
-                        let config = cx.global::<AppConfig>().clone();
-                        let saved = saved_host(this.host.as_ref(), cx);
-                        let (options, _) = spawn_options(
-                            &config,
-                            &this.cwd,
-                            this.resumed_from.as_deref(),
-                            saved.as_ref(),
-                            &env,
-                        );
-                        this.start_process(&options, cx);
+                        this.start(&env, cx);
+                        cx.emit(SessionEvent::MetaChanged);
                     });
                 });
             }
         }
         this
+    }
+
+    /// Starts pi (on a host with `remote_env`) with the login shell's environment, which must
+    /// be ready.
+    fn start(&mut self, remote_env: &[(String, String)], cx: &mut Context<Self>) {
+        let config = cx.global::<AppConfig>().clone();
+        let saved = saved_host(self.host.as_ref(), cx);
+        let (options, _) = spawn_options(
+            &config,
+            &self.cwd,
+            self.resumed_from.as_deref(),
+            saved.as_ref(),
+            remote_env,
+        );
+        self.start_process(&options, cx);
     }
 
     /// Starts pi with `options` and follows its events.
@@ -345,16 +359,20 @@ impl PiSession {
                     }
                 });
                 this.initialize(cx);
-                this.show_preview(cx);
             }
             Err(error) => {
-                this.lifecycle = Lifecycle::Exited {
-                    message: format!(
-                        "Could not start `{}`: {error}. Is pi installed and on your PATH? \
-                         (Set PISTACHIO_PI_BIN to override.)",
-                        options.program.display()
-                    ),
-                };
+                let message = format!(
+                    "Could not start `{}`: {error}. Is pi installed and on your PATH? \
+                     (Set PISTACHIO_PI_BIN to override.)",
+                    options.program.display()
+                );
+                // An empty chat shows the message itself; a preview shown meanwhile hides it.
+                this._preview_task = Task::ready(());
+                if !this.transcript.items().is_empty() {
+                    this.push_notice(NoticeKind::Error, message.clone(), cx);
+                }
+                this.lifecycle = Lifecycle::Exited { message };
+                this.return_outbox(cx);
                 cx.notify();
             }
         }
@@ -1167,7 +1185,7 @@ impl PiSession {
         let Some(client) = self.client.clone() else {
             return;
         };
-        let env = cx.global::<AppConfig>().child_env.vars().to_vec();
+        let env = cx.global::<AppConfig>().child_env.clone();
         let dir = std::env::temp_dir().join(format!("pistachio-share-{}", std::process::id()));
         let file = dir.join("session.html");
         self.push_notice(NoticeKind::Info, "Creating a secret gist…", cx);
@@ -1584,7 +1602,11 @@ fn spawn_options(
 ) -> (SpawnOptions, Mode) {
     let mut options = SpawnOptions::new(cwd);
     options.program.clone_from(&config.pi_program);
-    config.child_env.vars().clone_into(&mut options.env);
+    config
+        .child_env
+        .ready()
+        .unwrap_or_default()
+        .clone_into(&mut options.env);
     options.session = session_file.map(Path::to_path_buf);
     let Some(host) = host else {
         let mode = config.mode_of(cwd);
@@ -2323,6 +2345,100 @@ mod tests {
                 })
                 .collect();
             assert_eq!(prompts, ["first", "second"]);
+        });
+    }
+
+    /// While the login shell is still being asked for its environment, a new session opens at
+    /// once, shows its history and takes prompts; pi starts with the environment when it is
+    /// there.
+    #[cfg(unix)]
+    #[gpui_kit::test]
+    async fn pi_starts_once_the_environment_is_known(cx: &mut TestAppContext) {
+        use std::os::unix::fs::PermissionsExt as _;
+        cx.executor().allow_parking();
+        let dir = tempfile::tempdir().unwrap();
+        let fake = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../pi-rpc/tests/fake_pi.py");
+        let script = dir.path().join("pi");
+        let seen = dir.path().join("seen");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\necho \"$FAKE_API_KEY\" > '{}'\nexec '{}' \"$@\"\n",
+                seen.display(),
+                fake.display(),
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let mut config = AppConfig::for_tests(script);
+        config.child_env = crate::config::ChildEnv::resolve(move || {
+            let _ = held.recv();
+            vec![("FAKE_API_KEY".into(), "from the shell".into())]
+        });
+        cx.update(|cx| cx.set_global(config));
+
+        let session = cx.new(|cx| PiSession::new(std::env::temp_dir(), None, None, cx));
+        let (sender, events) = async_channel::unbounded();
+        let _subscription = cx.update(|cx| {
+            cx.subscribe(&session, move |_, event: &SessionEvent, _| {
+                let _ = sender.try_send(event.clone());
+            })
+        });
+        session.update(cx, |session, cx| {
+            session.submit("early".into(), Vec::new(), false, cx);
+            assert!(session.is_busy());
+        });
+        cx.run_until_parked();
+        assert!(!seen.exists(), "pi must not start yet");
+        cx.read(|cx| assert_eq!(session.read(cx).lifecycle(), &Lifecycle::Starting));
+
+        release.send(()).unwrap();
+        while !matches!(
+            events.recv().await.expect("session alive"),
+            SessionEvent::Settled
+        ) {}
+        assert_eq!(
+            std::fs::read_to_string(&seen).unwrap().trim(),
+            "from the shell"
+        );
+        cx.read(|cx| assert_eq!(session.read(cx).lifecycle(), &Lifecycle::Ready));
+    }
+
+    /// Prompts typed while pi could not start yet go back to the composer when it can't.
+    #[gpui_kit::test]
+    async fn prompts_come_back_when_a_delayed_pi_cannot_start(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let mut config = AppConfig::for_tests("/nonexistent/pi".into());
+        config.child_env = crate::config::ChildEnv::resolve(move || {
+            let _ = held.recv();
+            Vec::new()
+        });
+        cx.update(|cx| cx.set_global(config));
+        let session = cx.new(|cx| PiSession::new(std::env::temp_dir(), None, None, cx));
+        let (sender, events) = async_channel::unbounded();
+        let _subscription = cx.update(|cx| {
+            cx.subscribe(&session, move |_, event: &SessionEvent, _| {
+                let _ = sender.try_send(event.clone());
+            })
+        });
+        session.update(cx, |session, cx| {
+            session.submit("early".into(), Vec::new(), false, cx);
+        });
+        release.send(()).unwrap();
+        loop {
+            if let SessionEvent::RestoreToEditor { text, .. } =
+                events.recv().await.expect("session alive")
+            {
+                assert_eq!(text, "early");
+                break;
+            }
+        }
+        cx.read(|cx| {
+            let session = session.read(cx);
+            assert!(matches!(session.lifecycle(), Lifecycle::Exited { .. }));
+            assert!(!session.is_busy());
         });
     }
 

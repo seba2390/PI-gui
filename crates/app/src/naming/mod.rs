@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use titles::local::Arch;
 use titles::print::Invocation;
 
-use crate::config::AppConfig;
+use crate::config::{AppConfig, ChildEnv};
 use crate::model_store::{ModelStore, StoreEvent};
 use crate::settings::AppSettings;
 
@@ -134,7 +134,7 @@ pub fn active_model(cx: &App) -> Option<&'static catalog::Model> {
 #[derive(Debug, Clone)]
 pub struct PiLaunch {
     pub program: PathBuf,
-    pub env: Vec<(OsString, OsString)>,
+    pub env: ChildEnv,
     /// The conversation's folder (on the host, for a remote conversation): project settings
     /// there may define the model's provider.
     pub cwd: PathBuf,
@@ -147,21 +147,22 @@ impl PiLaunch {
     pub fn new(config: &AppConfig, cwd: PathBuf, host: Option<remote::SavedHost>) -> Self {
         Self {
             program: config.pi_program.clone(),
-            env: config.child_env.vars().to_vec(),
+            env: config.child_env.clone(),
             cwd,
             host,
             local_dir: config.home.clone().unwrap_or_else(std::env::temp_dir),
         }
     }
 
-    /// The naming call for `provider`'s `model` (with pi's extensions or not).
+    /// The naming call for `provider`'s `model` (with pi's extensions or not). Blocks until
+    /// the environment is known.
     pub fn invocation(&self, provider: &str, model: &str, extensions: bool) -> Invocation {
         let args = titles::print::pi_args(provider, model, extensions);
         match &self.host {
             None => Invocation {
                 program: self.program.clone(),
                 args: args.into_iter().map(OsString::from).collect(),
-                env: self.env.clone(),
+                env: self.env.vars().to_vec(),
                 cwd: self.cwd.clone(),
             },
             Some(host) => {
@@ -173,7 +174,7 @@ impl PiLaunch {
                 Invocation {
                     program,
                     args,
-                    env: self.env.clone(),
+                    env: self.env.vars().to_vec(),
                     cwd: self.local_dir.clone(),
                 }
             }
