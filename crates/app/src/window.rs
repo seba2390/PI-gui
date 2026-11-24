@@ -22,7 +22,8 @@ use crate::actions::{
     ResumeSession, ShowChatMode, ShowCodeMode, ShowDiff, ShowFiles, ToggleRightPanel,
     ToggleSidebar, ToggleTerminal, WINDOW_CONTEXT,
 };
-use crate::chat::{ChatEvent, ChatView, ComposerEvent};
+use crate::chat::session::PiSession;
+use crate::chat::{ChatEvent, ChatView, ComposerEvent, Draft};
 use crate::config::AppConfig;
 use crate::hosts::HostsEvent;
 use crate::panels::{RightPanel, RightPanelEvent, RightTab, TerminalPanel, TerminalPanelEvent};
@@ -39,7 +40,12 @@ use crate::ui::{AppIcon, TOP_BAR_HEIGHT, TRAFFIC_LIGHT_INSET, WindowDrag};
 use crate::ui_state::{LastSession, UiState};
 use remote::HostId;
 
+mod drafts;
+#[cfg(test)]
+mod tests;
 mod update_prompt;
+
+use drafts::{DraftKey, Drafts};
 
 /// Registers the window's key bindings and global models, once per process.
 pub fn init(cx: &mut App) {
@@ -177,6 +183,17 @@ struct RemoteTarget {
     file: Option<PathBuf>,
 }
 
+/// The conversation last shown in a mode, to come back to when switching to that mode.
+#[derive(Debug, Clone)]
+struct LastShown {
+    chat: EntityId,
+    /// Where it was, if nothing was sent in it yet: a new session there takes its place.
+    new: Option<(Option<HostId>, PathBuf)>,
+}
+
+/// How long pi may take to start and rename a session that is not open.
+const RENAME_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 #[allow(clippy::struct_excessive_bools)] // independent layout flags
 pub struct MainWindow {
     sidebar: Entity<Sidebar>,
@@ -184,6 +201,16 @@ pub struct MainWindow {
     /// Chats switched away from while busy (a run, or messages not yet started) or waiting
     /// for an answer; kept alive until they settle so work is never lost to navigation.
     background: Vec<(Entity<ChatView>, Subscription)>,
+    /// What was typed but not sent in chats that were let go.
+    drafts: Drafts,
+    /// Each mode's conversation when it was last switched away from (in this run only;
+    /// [`UiState`] remembers the sessions pi has written).
+    last_shown: HashMap<Mode, LastShown>,
+    /// The new session whose composer opened the connect (or "Add SSH connection") dialog:
+    /// its draft moves to the session started there.
+    moving: Option<EntityId>,
+    /// Renames on their way to pi.
+    renames: HashMap<(Option<HostId>, PathBuf), Task<()>>,
     /// Sessions that finished in the background and have not been looked at since.
     finished: HashSet<(Option<HostId>, PathBuf)>,
     right_panel: Entity<RightPanel>,
@@ -375,6 +402,10 @@ impl MainWindow {
             sidebar,
             chat,
             background: Vec::new(),
+            drafts: Drafts::default(),
+            last_shown: HashMap::new(),
+            moving: None,
+            renames: HashMap::new(),
             right_panel,
             terminal: None,
             parked_terminals: Vec::new(),
@@ -668,12 +699,18 @@ impl MainWindow {
     fn new_in_default_folder(&mut self, mode: Mode, window: &mut Window, cx: &mut Context<Self>) {
         match self.default_folder(mode, cx) {
             Some(folder) => self.new_chat_in(folder, window, cx),
-            None => self.choose_folder(window, cx),
+            None => self.choose_folder(None, window, cx),
         }
     }
 
-    /// The system folder dialog; a new Code session starts in the chosen folder.
-    fn choose_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// The system folder dialog; a new Code session starts in the chosen folder, with the
+    /// draft of `moving` (a new session) if that is still shown.
+    fn choose_folder(
+        &mut self,
+        moving: Option<EntityId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let paths = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
@@ -684,7 +721,10 @@ impl MainWindow {
             if let Ok(Ok(Some(mut paths))) = paths.await
                 && let Some(folder) = paths.pop()
             {
-                let _ = this.update_in(cx, |this, window, cx| this.new_chat_in(folder, window, cx));
+                let _ = this.update_in(cx, |this, window, cx| {
+                    let draft = this.take_moving_draft(moving, window, cx);
+                    this.show_new(None, folder, draft, window, cx);
+                });
             }
         })
         .detach();
@@ -727,6 +767,9 @@ impl MainWindow {
                 self.close_skills(cx);
             }
         }
+        if self.show_last_shown(mode, window, cx) {
+            return;
+        }
         let last = cx
             .default_global::<UiState>()
             .last_sessions
@@ -760,6 +803,38 @@ impl MainWindow {
         }
     }
 
+    /// Shows the conversation last shown in `mode` if only this run knows it: one still
+    /// working in the background, or a new one nothing was sent in. Returns whether it did.
+    fn show_last_shown(&mut self, mode: Mode, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(last) = self.last_shown.get(&mode).cloned() else {
+            return false;
+        };
+        let working = self
+            .background
+            .iter()
+            .find(|(chat, _)| chat.entity_id() == last.chat);
+        if let Some((chat, _)) = working {
+            self.show_chat(chat.clone(), window, cx);
+            return true;
+        }
+        match last.new {
+            Some((Some(host), folder)) if crate::hosts::hosts(cx).read(cx).get(&host).is_some() => {
+                let target = RemoteTarget {
+                    host,
+                    folder,
+                    file: None,
+                };
+                self.open_remote(target, window, cx);
+                true
+            }
+            Some((None, folder)) if mode == Mode::Chat || folder.is_dir() => {
+                self.new_chat_in(folder, window, cx);
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn show_chat_mode(&mut self, _: &ShowChatMode, window: &mut Window, cx: &mut Context<Self>) {
         self.switch_to_mode(Mode::Chat, window, cx);
     }
@@ -768,7 +843,8 @@ impl MainWindow {
         self.switch_to_mode(Mode::Code, window, cx);
     }
 
-    /// Replaces the visible chat, keeping the old one alive if it is still working.
+    /// Replaces the visible chat, keeping the old one alive if it is still working. Otherwise
+    /// only its draft is kept, until its session is shown again.
     fn show_chat(&mut self, chat: Entity<ChatView>, window: &mut Window, cx: &mut Context<Self>) {
         let previous = std::mem::replace(&mut self.chat, chat.clone());
         self.welcome = false;
@@ -802,20 +878,25 @@ impl MainWindow {
                 self.set_right_open(false, cx);
             }
         }
-        if previous.entity_id() != chat.entity_id()
-            && keeps_working(&previous, cx)
-            && !self
+        if previous.entity_id() != chat.entity_id() {
+            self.remember_last_shown(&previous, cx);
+            if !keeps_working(&previous, cx) {
+                self.keep_draft(&previous, window, cx);
+            } else if !self
                 .background
                 .iter()
                 .any(|(background, _)| background.entity_id() == previous.entity_id())
-        {
-            // Keep it alive until it settles, then let it (and its pi process) go.
-            let subscription = cx.subscribe_in(&previous, window, Self::on_background_event);
-            self.background.push((previous, subscription));
+            {
+                // Keep it alive until it settles, then let it (and its pi process) go.
+                let subscription = cx.subscribe_in(&previous, window, Self::on_background_event);
+                self.background.push((previous, subscription));
+            }
         }
         self.background
             .retain(|(background, _)| background.entity_id() != chat.entity_id());
-        self.prune_background(cx);
+        self.let_replaced_go(&chat, window, cx);
+        self.prune_background(window, cx);
+        self.restore_draft(&chat, window, cx);
         self.chat_subscription = cx.subscribe_in(&chat, window, Self::on_chat_event);
 
         let cwd = self.cwd(cx);
@@ -841,6 +922,81 @@ impl MainWindow {
         cx.notify();
     }
 
+    /// Remembers where `previous` was, as its mode's conversation to come back to.
+    fn remember_last_shown(&mut self, previous: &Entity<ChatView>, cx: &App) {
+        let session = previous.read(cx).session().read(cx);
+        if session.is_idle() {
+            self.last_shown.remove(&session.mode());
+            return;
+        }
+        let new = session
+            .is_new()
+            .then(|| (session.host().cloned(), session.cwd().to_path_buf()));
+        let last = LastShown {
+            chat: previous.entity_id(),
+            new,
+        };
+        self.last_shown.insert(session.mode(), last);
+    }
+
+    /// Keeps the draft of `chat`, which is let go, for its session.
+    fn keep_draft(&mut self, chat: &Entity<ChatView>, window: &mut Window, cx: &mut Context<Self>) {
+        if chat.read(cx).session().read(cx).is_idle() {
+            return;
+        }
+        let key = DraftKey::of(chat.read(cx).session().read(cx));
+        self.drafts.put(key, take_draft(chat, window, cx));
+    }
+
+    /// Gives `chat` the draft kept for its session, unless something is typed there already.
+    fn restore_draft(
+        &mut self,
+        chat: &Entity<ChatView>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (session, composer) = (chat.read(cx).session(), chat.read(cx).composer());
+        if session.read(cx).is_idle() || composer.read(cx).has_draft(cx) {
+            return;
+        }
+        let key = DraftKey::of(session.read(cx));
+        if let Some(draft) = self.drafts.take(&key) {
+            set_draft(chat, draft, window, cx);
+        }
+    }
+
+    /// The visible chat's draft, if that is the new session `moving`.
+    fn take_moving_draft(
+        &self,
+        moving: Option<EntityId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Draft> {
+        let moves =
+            moving == Some(self.chat.entity_id()) && self.chat.read(cx).session().read(cx).is_new();
+        moves.then(|| take_draft(&self.chat, window, cx))
+    }
+
+    /// Lets background chats of the session `chat` shows go: it was opened anew because its
+    /// pi had stopped there.
+    fn let_replaced_go(
+        &mut self,
+        chat: &Entity<ChatView>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(key) = session_key(chat, cx) else {
+            return;
+        };
+        let (replaced, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.background)
+            .into_iter()
+            .partition(|(background, _)| session_key(background, cx).as_ref() == Some(&key));
+        self.background = kept;
+        for (replaced, _) in &replaced {
+            self.keep_draft(replaced, window, cx);
+        }
+    }
+
     /// Where the visible conversation's folder lives.
     fn location(&self, cx: &mut Context<Self>) -> workspace::Location {
         match self.host(cx) {
@@ -849,9 +1005,15 @@ impl MainWindow {
         }
     }
 
-    /// Drops background chats with nothing left to do.
-    fn prune_background(&mut self, cx: &mut Context<Self>) {
-        self.background.retain(|(chat, _)| keeps_working(chat, cx));
+    /// Drops background chats with nothing left to do (but not what was typed in them).
+    fn prune_background(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (working, done): (Vec<_>, Vec<_>) = std::mem::take(&mut self.background)
+            .into_iter()
+            .partition(|(chat, _)| keeps_working(chat, cx));
+        self.background = working;
+        for (chat, _) in &done {
+            self.keep_draft(chat, window, cx);
+        }
         // A chat that was let go starts a fresh pi when opened again: nothing to restart.
         let visible = self.chat.entity_id();
         let background = &self.background;
@@ -930,7 +1092,7 @@ impl MainWindow {
                 if attention && !window.is_window_active() {
                     window.request_attention();
                 }
-                self.prune_background(cx);
+                self.prune_background(window, cx);
                 self.sidebar.update(cx, |sidebar, cx| sidebar.refresh(cx));
             }
             ChatEvent::NeedsAttention => {
@@ -981,7 +1143,35 @@ impl MainWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let chat = cx.new(|cx| ChatView::new(cwd, None, None, window, cx));
+        self.show_new(None, cwd, None, window, cx);
+    }
+
+    /// Shows a new session in `folder` (on `host`, or this computer): with `draft`, else with
+    /// the one left behind in a new session there.
+    fn show_new(
+        &mut self,
+        host: Option<HostId>,
+        folder: PathBuf,
+        draft: Option<Draft>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // A new session whose pi stopped in the background has no row in the sidebar; what it
+        // could not send is in its composer.
+        let key = DraftKey::New {
+            host: host.clone(),
+            folder: folder.clone(),
+        };
+        let stopped = self
+            .background
+            .iter()
+            .find(|(chat, _)| DraftKey::of(chat.read(cx).session().read(cx)) == key)
+            .map(|(chat, _)| chat.clone());
+        let chat =
+            stopped.unwrap_or_else(|| cx.new(|cx| ChatView::new(folder, None, host, window, cx)));
+        if let Some(draft) = draft {
+            set_draft(&chat, draft, window, cx);
+        }
         self.show_chat(chat, window, cx);
     }
 
@@ -1103,7 +1293,11 @@ impl MainWindow {
         if status.is_ready() && loaded {
             self.pending_remote = None;
             // Only if the user has not started something else meanwhile.
-            if exists && self.chat.read(cx).session().read(cx).is_empty() {
+            let chat = self.chat.read(cx);
+            if exists
+                && chat.session().read(cx).is_empty()
+                && !chat.composer().read(cx).has_draft(cx)
+            {
                 self.open_remote_now(target, window, cx);
             }
         } else if !status.is_ready()
@@ -1119,7 +1313,10 @@ impl MainWindow {
         let (host, folder, file) = {
             let session = self.chat.read(cx).session().read(cx);
             match session.host().cloned() {
-                Some(host) => (host, session.cwd().to_path_buf(), session.session_file()),
+                Some(host) => {
+                    let file = session.session_file().filter(|_| !session.is_new());
+                    (host, session.cwd().to_path_buf(), file)
+                }
                 None => {
                     // A local pi: start it again on the same session file.
                     self.reload_models(None, ReloadReason::Models, window, cx);
@@ -1219,16 +1416,32 @@ impl MainWindow {
                 self.update_activity(cx);
             }
             ChatEvent::Composer(event) => match event {
-                ComposerEvent::ChangeFolder(folder) => self.new_chat_in(folder.clone(), window, cx),
+                // A new session moves: what is typed in it comes along.
+                ComposerEvent::ChangeFolder(folder) => {
+                    let moving = Some(self.chat.entity_id());
+                    let draft = self.take_moving_draft(moving, window, cx);
+                    self.show_new(None, folder.clone(), draft, window, cx);
+                }
                 ComposerEvent::ChooseHost(None) => {
                     if self.chat.read(cx).session().read(cx).host().is_some() {
-                        self.new_in_default_folder(Mode::Code, window, cx);
+                        let moving = Some(self.chat.entity_id());
+                        match self.default_folder(Mode::Code, cx) {
+                            Some(folder) => {
+                                let draft = self.take_moving_draft(moving, window, cx);
+                                self.show_new(None, folder, draft, window, cx);
+                            }
+                            None => self.choose_folder(moving, window, cx),
+                        }
                     }
                 }
                 ComposerEvent::ChooseHost(Some(host)) | ComposerEvent::BrowseRemote(host) => {
                     self.open_connect_flow(host.clone(), window, cx);
+                    self.moving = Some(self.chat.entity_id());
                 }
-                ComposerEvent::AddHost => self.open_add_host(window, cx),
+                ComposerEvent::AddHost => {
+                    self.open_add_host(window, cx);
+                    self.moving = Some(self.chat.entity_id());
+                }
                 ComposerEvent::ManageHosts => self.open_manage_hosts(window, cx),
                 ComposerEvent::AddModel { edit_json } => {
                     drop(self.open_models_dialog(*edit_json, window, cx));
@@ -1239,13 +1452,16 @@ impl MainWindow {
 
     /// "Add SSH connection": on success continues straight to connecting.
     fn open_add_host(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.moving = None;
         let add = cx.new(AddHost::new);
         self.dialog_subscription =
             Some(
                 cx.subscribe_in(&add, window, |this, _, event: &AddHostEvent, window, cx| {
                     let AddHostEvent::Added(host) = event;
                     window.close_dialog(cx);
+                    let moving = this.moving;
                     this.open_connect_flow(host.clone(), window, cx);
+                    this.moving = moving;
                 }),
             );
         open_form_dialog(None, window, cx, move |dialog, _, _| {
@@ -1272,6 +1488,7 @@ impl MainWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.moving = None;
         let label = crate::hosts::hosts(cx).read(cx).label(&host);
         let title = if auto_open {
             format!("Connecting to {label}")
@@ -1285,7 +1502,9 @@ impl MainWindow {
             |this, _, event: &ConnectFlowEvent, window, cx| match event {
                 ConnectFlowEvent::Open { host, folder } => {
                     window.close_dialog(cx);
-                    this.new_remote_chat(host.clone(), folder.clone(), window, cx);
+                    let moving = this.moving.take();
+                    let draft = this.take_moving_draft(moving, window, cx);
+                    this.show_new_remote(host.clone(), folder.clone(), draft, window, cx);
                 }
                 ConnectFlowEvent::OpenTerminal { host } => {
                     window.close_dialog(cx);
@@ -1390,11 +1609,14 @@ impl MainWindow {
             let session = self.chat.read(cx).session().read(cx);
             (
                 session.cwd().to_path_buf(),
-                session.session_file(),
+                // pi has not written a new session's file: there is nothing to resume.
+                session.session_file().filter(|_| !session.is_new()),
                 session.host().cloned(),
             )
         };
         let chat = cx.new(|cx| ChatView::new(cwd, file, host, window, cx));
+        let draft = take_draft(&self.chat, window, cx);
+        set_draft(&chat, draft, window, cx);
         if let Some((provider, id)) = select {
             let session = chat.read(cx).session().clone();
             session.update(cx, |session, cx| {
@@ -1773,9 +1995,19 @@ impl MainWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.show_new_remote(host, folder, None, window, cx);
+    }
+
+    fn show_new_remote(
+        &mut self,
+        host: HostId,
+        folder: String,
+        draft: Option<Draft>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         crate::hosts::hosts(cx).update(cx, |hosts, cx| hosts.touch_folder(&host, &folder, cx));
-        let chat = cx.new(|cx| ChatView::new(PathBuf::from(folder), None, Some(host), window, cx));
-        self.show_chat(chat, window, cx);
+        self.show_new(Some(host), PathBuf::from(folder), draft, window, cx);
     }
 
     pub(crate) fn confirm_delete(
@@ -1901,6 +2133,10 @@ impl MainWindow {
             self.show_welcome(Mode::Code, window, cx);
         }
         self.background.retain(|(chat, _)| !in_folder(chat, cx));
+        for path in &paths {
+            self.drafts.forget(host.as_ref(), path);
+            self.renames.remove(&(host.clone(), path.clone()));
+        }
         match host {
             Some(host) => {
                 let task = crate::hosts::hosts(cx)
@@ -1960,6 +2196,8 @@ impl MainWindow {
             }
         }
         self.background.retain(|(chat, _)| !matches(chat, cx));
+        self.drafts.forget(host.as_ref(), &summary.path);
+        self.renames.remove(&(host.clone(), summary.path.clone()));
         if let Some(host) = host {
             let task = crate::hosts::hosts(cx).update(cx, |hosts, cx| {
                 hosts.trash_session(&host, summary.path.clone(), cx)
@@ -2009,20 +2247,12 @@ impl MainWindow {
         });
         let weak = cx.weak_entity();
         let submit = on_submit(&input, window, cx, move |name, window, cx| {
-            // First: showing the chat can open a question it held.
             window.close_dialog(cx);
             let name = name.trim().to_owned();
             if !name.is_empty() {
-                let summary = summary.clone();
-                let host = host.clone();
+                let (host, summary) = (host.clone(), summary.clone());
                 let _ = weak.update(cx, |this, cx| {
-                    // Renames go through pi so the session file stays pi's
-                    // (on the host, for remote sessions).
-                    let chat = this.open_session(host, &summary, window, cx);
-                    chat.read(cx)
-                        .session()
-                        .clone()
-                        .update(cx, |session, cx| session.rename(name, cx));
+                    this.rename_session(host, &summary, name, window, cx);
                 });
             }
         });
@@ -2051,6 +2281,83 @@ impl MainWindow {
                         ),
                 )
         });
+    }
+
+    /// The pi of an open (visible or background) chat showing this session, unless it ended.
+    fn open_pi(&self, key: &(Option<HostId>, PathBuf), cx: &App) -> Option<Entity<PiSession>> {
+        use crate::chat::session::Lifecycle;
+        std::iter::once(&self.chat)
+            .chain(self.background.iter().map(|(chat, _)| chat))
+            .find(|chat| {
+                session_key(chat, cx).as_ref() == Some(key)
+                    && matches!(
+                        chat.read(cx).session().read(cx).lifecycle(),
+                        Lifecycle::Starting | Lifecycle::Ready
+                    )
+            })
+            .map(|chat| chat.read(cx).session().clone())
+    }
+
+    /// Renames a session without showing it. Renames go through pi so the session file stays
+    /// pi's (on the host, for remote sessions): the pi of its open chat, else one started just
+    /// for this.
+    fn rename_session(
+        &mut self,
+        host: Option<HostId>,
+        summary: &SessionSummary,
+        name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use gpui_kit::component::notification::Notification;
+        let key = (host, summary.path.clone());
+        let session = match (self.open_pi(&key, cx), &key.0) {
+            (Some(session), _) => session,
+            (None, Some(host)) if !crate::hosts::hosts(cx).read(cx).status(host).is_ready() => {
+                let label = crate::hosts::hosts(cx).read(cx).label(host);
+                window.push_notification(
+                    Notification::info(format!("Connect to {label} to rename its sessions.")),
+                    cx,
+                );
+                return;
+            }
+            (None, host) => {
+                let (cwd, file) = (summary.cwd.clone(), summary.path.clone());
+                cx.new(|cx| PiSession::new(cwd, Some(file), host.clone(), cx))
+            }
+        };
+        let renamed = session.update(cx, |session, cx| {
+            session.rename_when_ready(name.clone(), cx)
+        });
+        let renamed = renamed.with_timeout(RENAME_TIMEOUT, cx.background_executor());
+        let session_key = key.clone();
+        let task = cx.spawn_in(window, async move |this, cx| {
+            let result = renamed
+                .await
+                .unwrap_or_else(|_| Err("pi did not answer.".to_owned()));
+            let _ = this.update_in(cx, |this, window, cx| {
+                let open = this.open_pi(&key, cx);
+                match (result, open) {
+                    (Ok(()), Some(open)) if open != session => {
+                        // Opened meanwhile: its pi may have read the file before.
+                        open.update(cx, |open, cx| open.rename(name, cx));
+                    }
+                    (Ok(()), _) => {}
+                    (Err(error), _) => window.push_notification(
+                        Notification::error(format!("Could not rename the session: {error}")),
+                        cx,
+                    ),
+                }
+                if let Some(host) = &key.0 {
+                    crate::hosts::hosts(cx)
+                        .update(cx, |hosts, cx| hosts.refresh_sessions(host, cx));
+                }
+                // Lets the pi started for this go.
+                drop(session);
+                this.renames.remove(&key);
+            });
+        });
+        self.renames.insert(session_key, task);
     }
 
     // ---- actions -------------------------------------------------------------
@@ -2636,6 +2943,17 @@ fn session_key(chat: &Entity<ChatView>, cx: &App) -> Option<(Option<HostId>, Pat
     Some((session.host().cloned(), session.session_file()?))
 }
 
+/// Empties `chat`'s composer (see [`crate::chat::composer::Composer::take_draft`]).
+fn take_draft(chat: &Entity<ChatView>, window: &mut Window, cx: &mut App) -> Draft {
+    let composer = chat.read(cx).composer().clone();
+    composer.update(cx, |composer, cx| composer.take_draft(window, cx))
+}
+
+fn set_draft(chat: &Entity<ChatView>, draft: Draft, window: &mut Window, cx: &mut App) {
+    let composer = chat.read(cx).composer().clone();
+    composer.update(cx, |composer, cx| composer.set_draft(draft, window, cx));
+}
+
 fn remember(chat: &Entity<ChatView>, cx: &mut App) {
     let (mode, last) = {
         let session = chat.read(cx).session().read(cx);
@@ -2818,7 +3136,7 @@ fn welcome_menu(
         component::menu::PopupMenuItem::new("Choose a folder…")
             .icon(IconName::FolderOpen)
             .on_click(move |_, window, cx| {
-                let _ = view.update(cx, |this, cx| this.choose_folder(window, cx));
+                let _ = view.update(cx, |this, cx| this.choose_folder(None, window, cx));
             }),
     );
     let hosts: Vec<(HostId, String, crate::hosts::HostStatus)> = {

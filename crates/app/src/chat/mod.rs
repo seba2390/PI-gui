@@ -26,7 +26,7 @@ use gpui_kit::*;
 use transcript::{BlockKind, ItemId, ItemKind};
 
 use composer::Composer;
-pub use composer::ComposerEvent;
+pub use composer::{ComposerEvent, Draft};
 use session::{PiSession, SessionEvent};
 
 use crate::theme::palette;

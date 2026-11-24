@@ -89,6 +89,50 @@ enum InlineText {
     Skipped(&'static str),
 }
 
+/// Local files being read to attach, which the composer may be emptied before.
+struct Loading {
+    id: u64,
+    paths: Vec<PathBuf>,
+}
+
+/// What is typed and attached in a composer but not sent.
+pub struct Draft {
+    text: String,
+    attachments: Vec<Attachment>,
+    /// Files whose attachments were still being read.
+    unread: Vec<PathBuf>,
+    /// The SSH host of the session it was written in.
+    host: Option<HostId>,
+}
+
+impl Draft {
+    pub fn is_empty(&self) -> bool {
+        self.text.trim().is_empty() && self.attachments.is_empty() && self.unread.is_empty()
+    }
+
+    /// Adds a later draft of the same session after this one.
+    pub fn append(&mut self, later: Self) {
+        self.text = merge_restored(&self.text, &later.text, false);
+        self.attachments.extend(later.attachments);
+        self.unread.extend(later.unread);
+    }
+
+    #[cfg(test)]
+    pub fn for_tests(text: &str) -> Self {
+        Self {
+            text: text.to_owned(),
+            attachments: Vec::new(),
+            unread: Vec::new(),
+            host: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+}
+
 /// Text attachments larger than this are not pasted into a chat prompt.
 const MAX_INLINE_BYTES: u64 = 256 * 1024;
 
@@ -96,6 +140,9 @@ pub struct Composer {
     session: Entity<PiSession>,
     input: Entity<TextareaState>,
     attachments: Vec<Attachment>,
+    /// Attachments still being read.
+    loading: Vec<Loading>,
+    next_loading: u64,
     /// The attach popover's file list (searchable, indexed in the background).
     picker: Entity<ListState<FilePicker>>,
     picker_open: bool,
@@ -211,6 +258,8 @@ impl Composer {
             session,
             input,
             attachments: Vec::new(),
+            loading: Vec::new(),
+            next_loading: 0,
             picker,
             picker_open: false,
             context_open: false,
@@ -487,6 +536,98 @@ impl Composer {
         cx.notify();
     }
 
+    /// Whether anything is typed or attached but not sent.
+    pub fn has_draft(&self, cx: &App) -> bool {
+        !self.input.read(cx).value().trim().is_empty()
+            || !self.attachments.is_empty()
+            || !self.loading.is_empty()
+            || self
+                .dictation
+                .as_ref()
+                .is_some_and(|dictation| !dictation.transcript.trim().is_empty())
+    }
+
+    #[cfg(test)]
+    pub fn text(&self, cx: &App) -> String {
+        self.input.read(cx).value().to_string()
+    }
+
+    /// Takes what is typed and attached but not sent, leaving the composer empty: its chat is
+    /// let go, or the draft moves to another one. A dictation ends, and what it heard so far
+    /// is part of the draft.
+    pub fn take_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Draft {
+        let mut text = self.input.read(cx).value().to_string();
+        if let Some(dictation) = self.dictation.take() {
+            text = append_dictation(&text, &dictation.transcript);
+        }
+        self.speech.update(cx, |speech, cx| speech.cancel(cx));
+        let draft = Draft {
+            text,
+            attachments: std::mem::take(&mut self.attachments),
+            unread: std::mem::take(&mut self.loading)
+                .into_iter()
+                .flat_map(|loading| loading.paths)
+                .collect(),
+            host: self.session.read(cx).host().cloned(),
+        };
+        self.clear(window, cx);
+        draft
+    }
+
+    /// Puts a draft taken from another composer into this one, before anything typed here.
+    /// Attached files are read or referenced the way this session needs them; files on the
+    /// draft's SSH host cannot come along to another machine.
+    pub fn set_draft(&mut self, draft: Draft, window: &mut Window, cx: &mut Context<Self>) {
+        if draft.is_empty() {
+            return;
+        }
+        let typed = self.input.read(cx).value().to_string();
+        let text = if typed.trim().is_empty() {
+            draft.text
+        } else {
+            merge_restored(&draft.text, &typed, false)
+        };
+        self.input.update(cx, |input, cx| {
+            let end = text.len();
+            input.set_value(text, window, cx);
+            input.set_selected_range(end..end, cx);
+        });
+        let (inline, moved) = {
+            let session = self.session.read(cx);
+            (
+                !session.is_local_code(),
+                draft.host.as_ref() != session.host(),
+            )
+        };
+        let mut local = draft.unread;
+        let mut left_behind = Vec::new();
+        for attachment in draft.attachments {
+            let on_host = draft.host.is_some() && attachment.inline.is_none();
+            if attachment.image.is_some() {
+                self.attachments.push(attachment);
+            } else if on_host && moved {
+                left_behind.push(attachment.name);
+            } else if on_host || attachment.inline.is_some() == inline {
+                self.attachments.push(attachment);
+            } else {
+                local.push(attachment.path);
+            }
+        }
+        if !local.is_empty() {
+            self.attach_paths(local, cx);
+        }
+        if !left_behind.is_empty() {
+            window.push_notification(
+                format!(
+                    "Not attached here, because they are on the SSH host: {}",
+                    left_behind.join(", ")
+                ),
+                cx,
+            );
+        }
+        cx.notify();
+    }
+
     /// Inserts `text` at the cursor (e.g. an `@path` mention from the Files tab) and focuses
     /// the input.
     pub fn insert_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -739,6 +880,12 @@ impl Composer {
     fn attach_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
         // Without local file access (chat, or pi on another machine) text files are pasted in.
         let inline = !self.session.read(cx).is_local_code();
+        let id = self.next_loading;
+        self.next_loading += 1;
+        self.loading.push(Loading {
+            id,
+            paths: paths.clone(),
+        });
         cx.spawn(async move |this, cx| {
             let attachments = cx
                 .background_executor()
@@ -750,6 +897,11 @@ impl Composer {
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
+                // Taken with the draft meanwhile: they are read again where it went.
+                let Some(index) = this.loading.iter().position(|loading| loading.id == id) else {
+                    return;
+                };
+                this.loading.remove(index);
                 this.attachments.extend(attachments);
                 cx.notify();
             });
@@ -2285,5 +2437,191 @@ mod suggestion_tests {
         });
         press_enter(cx);
         assert_eq!(text(&composer, cx), "/quit ");
+    }
+}
+
+#[cfg(test)]
+mod draft_tests {
+    use std::path::{Path, PathBuf};
+
+    use gpui_kit::component::{Root, WindowExt as _};
+    use gpui_kit::{AppContext as _, Entity, TestAppContext, VisualTestContext, Window};
+    use pi_rpc::protocol::ImageContent;
+    use pi_sessions::Mode;
+
+    use super::{Attachment, Composer, Dictation, Draft, InlineText, PiSession};
+    use crate::config::AppConfig;
+    use crate::hosts::{Hosts, HostsHandle};
+
+    /// `N` composers (of sessions without a pi) in one window.
+    fn composers<const N: usize>(
+        sessions: [PiSession; N],
+        cx: &mut TestAppContext,
+    ) -> ([Entity<Composer>; N], &mut VisualTestContext) {
+        cx.executor().allow_parking();
+        cx.update(|cx| {
+            gpui_kit::component::init(cx);
+            cx.set_global(AppConfig::for_tests("pi".into()));
+            cx.set_global(crate::settings::AppSettings::default());
+            crate::stt::init(cx);
+            let hosts = cx.new(|_| Hosts::for_tests(Vec::new()));
+            cx.set_global(HostsHandle(hosts));
+        });
+        let mut built = None;
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let composers = sessions.map(|session| {
+                let session = cx.new(|_| session);
+                cx.new(|cx| Composer::new(session, window, cx))
+            });
+            let first = composers[0].clone();
+            built = Some(composers);
+            Root::new(first, window, cx)
+        });
+        (built.unwrap(), cx)
+    }
+
+    fn code() -> PiSession {
+        PiSession::idle(std::env::temp_dir(), Mode::Code)
+    }
+
+    fn on_host() -> PiSession {
+        PiSession::idle_on_host(remote::HostId("box".into()))
+    }
+
+    fn file(path: &Path, inline: Option<&str>) -> Attachment {
+        Attachment {
+            path: path.to_path_buf(),
+            name: path.to_string_lossy().into_owned().into(),
+            image: None,
+            inline: inline.map(|text| InlineText::Text(text.to_owned())),
+        }
+    }
+
+    fn names(composer: &Entity<Composer>, cx: &VisualTestContext) -> Vec<String> {
+        cx.read(|cx| {
+            let attachments = &composer.read(cx).attachments;
+            attachments.iter().map(|a| a.name.to_string()).collect()
+        })
+    }
+
+    fn act<R>(
+        composer: &Entity<Composer>,
+        cx: &mut VisualTestContext,
+        f: impl FnOnce(&mut Composer, &mut Window, &mut gpui_kit::Context<Composer>) -> R,
+    ) -> R {
+        let result = cx.update(|window, cx| composer.update(cx, |this, cx| f(this, window, cx)));
+        cx.run_until_parked();
+        result
+    }
+
+    /// Lets files be read on the background threads.
+    fn settle(composer: &Entity<Composer>, cx: &mut VisualTestContext) {
+        for _ in 0..500 {
+            cx.run_until_parked();
+            if cx.read(|cx| composer.read(cx).loading.is_empty()) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("the attachments were not read");
+    }
+
+    #[gpui_kit::test]
+    fn a_draft_moves_with_its_attachments(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.txt");
+        std::fs::write(&path, "text").unwrap();
+        let ([from, to], cx) = composers([code(), code()], cx);
+        assert!(act(&from, cx, |from, window, cx| from.take_draft(window, cx)).is_empty());
+        assert!(!cx.read(|cx| from.read(cx).has_draft(cx)));
+
+        let draft = act(&from, cx, |from, window, cx| {
+            from.set_text("fix this ", window, cx);
+            from.attachments.push(Attachment {
+                path: "pasted.png".into(),
+                name: "pasted.png".into(),
+                image: Some(ImageContent::new("AAAA", "image/png")),
+                inline: None,
+            });
+            // Still being read when the draft is taken.
+            from.attach_paths(vec![path.clone()], cx);
+            assert!(from.has_draft(cx));
+            from.take_draft(window, cx)
+        });
+        settle(&from, cx);
+        assert!(!cx.read(|cx| from.read(cx).has_draft(cx)));
+        assert_eq!(names(&from, cx), [""; 0]);
+        assert_eq!(draft.unread, [path]);
+
+        act(&to, cx, |to, window, cx| to.set_draft(draft, window, cx));
+        settle(&to, cx);
+        assert_eq!(names(&to, cx), ["pasted.png", "notes.txt"]);
+        cx.read(|cx| {
+            let to = to.read(cx);
+            assert_eq!(to.text(cx), "fix this ");
+            assert_eq!(to.input.read(cx).cursor(), "fix this ".len());
+            assert!(to.attachments[0].image.is_some());
+        });
+    }
+
+    #[gpui_kit::test]
+    fn a_draft_goes_before_what_is_typed_meanwhile(cx: &mut TestAppContext) {
+        let ([composer], cx) = composers([code()], cx);
+        act(&composer, cx, |composer, window, cx| {
+            composer.set_text("later", window, cx);
+            composer.set_draft(Draft::for_tests("earlier"), window, cx);
+        });
+        assert_eq!(cx.read(|cx| composer.read(cx).text(cx)), "earlier\n\nlater");
+    }
+
+    /// What was heard so far is part of the draft.
+    #[gpui_kit::test]
+    fn a_draft_includes_the_dictation(cx: &mut TestAppContext) {
+        let ([composer], cx) = composers([code()], cx);
+        let draft = act(&composer, cx, |composer, window, cx| {
+            composer.set_text("Fix", window, cx);
+            composer.dictation = Some(Dictation {
+                draft: "Fix".into(),
+                transcript: "the tests".into(),
+            });
+            composer.take_draft(window, cx)
+        });
+        assert_eq!(draft.text(), "Fix the tests");
+        assert!(!cx.read(|cx| composer.read(cx).has_draft(cx)));
+    }
+
+    /// Files are referenced or read as the machine the draft moves to needs them.
+    #[gpui_kit::test]
+    fn attachments_follow_to_another_machine(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.txt");
+        std::fs::write(&path, "text").unwrap();
+        let ([local, host], cx) = composers([code(), on_host()], cx);
+        let draft = act(&local, cx, |local, window, cx| {
+            local.attachments.push(file(&path, None));
+            local.take_draft(window, cx)
+        });
+        act(&host, cx, |host, window, cx| {
+            host.set_draft(draft, window, cx);
+        });
+        settle(&host, cx);
+        cx.read(|cx| {
+            let attachment = &host.read(cx).attachments[0];
+            assert!(matches!(&attachment.inline, Some(InlineText::Text(text)) if text == "text"));
+        });
+
+        // Back, with a file picked on the host, which stays behind.
+        let draft = act(&host, cx, |host, window, cx| {
+            host.attachments
+                .push(file(&PathBuf::from("/srv/remote.txt"), None));
+            host.take_draft(window, cx)
+        });
+        act(&local, cx, |local, window, cx| {
+            local.set_draft(draft, window, cx);
+        });
+        settle(&local, cx);
+        assert_eq!(names(&local, cx), ["notes.txt"]);
+        assert!(cx.read(|cx| local.read(cx).attachments[0].inline.is_none()));
+        assert_eq!(cx.update(|window, cx| window.notifications(cx).len()), 1);
     }
 }
