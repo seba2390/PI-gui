@@ -10,14 +10,19 @@ All notable changes to PI-gui are listed here. The format follows
 
 - Deep search has an effort slider next to it in the message box: Light, Standard, Thorough or Max.
   More effort is more searches, pages and results per search, and a stricter check of the report.
-  Each chat remembers its own; Settings → Web search has the one new chats start with.
+  Each chat remembers its own; Settings → Web search has the one new chats start with. Effort is
+  also a floor: the question is split into sub-questions, and a model that wants to report before
+  it has searched and read enough for them, on enough different sites, is sent back to its research.
 - Deep search checks its reports: whether the links work and were read, what the sources say about
-  the claims (the key ones in Standard, all of them from Thorough on), and whether a part of the
-  question was left out. What it finds goes back to the model once or more, and a note says how
-  the report did.
+  the claims (the key ones in Standard, all of them from Thorough on), and which claims, also in
+  tables and bullets, have no source that was read. What it finds goes back to the model once or
+  more, and a note says how the report did. A check that fails or is stopped says so.
+- Only deep search's final report is written into the chat as the answer. Until then the chat shows
+  the work: what was planned, searched, read and checked, and drafts as rows that open. If it is
+  stopped, the latest complete draft is the answer, marked as not checked.
 - Deep search reads PDF files.
 - Long research no longer fills up the context: older pages are cut down to their key passages, and
-  nothing is shown to the model twice. A line below the message box says how far it is.
+  nothing is shown to the model twice. The “Working…” line says what it is doing.
 - SearXNG can run on this computer, with one click and without Docker (macOS and Linux). Choosing
   it in Settings → Web search checks whether one answers at the address. If not, it shows what is
   missing and asks: Download and run gets SearXNG, a Python of its own and the packages it needs

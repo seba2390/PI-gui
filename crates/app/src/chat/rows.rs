@@ -15,7 +15,8 @@ use transcript::search::Field;
 use transcript::tool::{self, DiffKind, PathContext, ToolKind};
 use transcript::{
     AssistantItem, BashItem, BashStatus, BlockKind, ItemId, ItemKind, NestedEntry, NoticeKind,
-    RunStatus, ThinkingBlock, ToolBlock, ToolStatus, TranscriptItem, format_duration,
+    RunStatus, Standing, StepItem, TextBlock, ThinkingBlock, ToolBlock, ToolStatus, TranscriptItem,
+    format_duration,
 };
 
 use super::images;
@@ -100,7 +101,7 @@ pub fn render_row(
         (Some(_), Some(RowRole::Hidden)) => return div().into_any_element(),
         (Some(_), Some(RowRole::Group(group))) => render_group(group, &context),
         (Some(item), _) => render_item(item, &context, theme.muted, cx),
-        (None, _) => render_working(&session.working_status(), &context),
+        (None, _) => render_working(&session.working_status(), session.web_progress(), &context),
     };
     // Rows of only activity (and "Explored" groups) sit on one continuous rail; text gets more
     // room where it meets them.
@@ -118,7 +119,7 @@ pub fn render_row(
         activity(previous) != on_rail
             && matches!(
                 items.get(previous).map(|item| &item.kind),
-                Some(ItemKind::Assistant(_))
+                Some(ItemKind::Assistant(_) | ItemKind::Step(_))
             )
     });
     // Tight spacing inside a turn, more air around prompts and turn ends.
@@ -209,6 +210,7 @@ fn render_item(item: &TranscriptItem, cx: &RowContext<'_>, bubble: Hsla, app: &A
             .child(user_actions(item.id.0, &user.text, cx, app))
             .into_any_element(),
         ItemKind::Assistant(assistant) => render_assistant(item, assistant, cx),
+        ItemKind::Step(step) => render_step(item.id, step, cx),
         ItemKind::Bash(bash) => render_bash(item.id, bash, cx),
         ItemKind::Notice(notice) => {
             let (icon, color): (Icon, Hsla) = match notice.kind {
@@ -465,19 +467,15 @@ fn users_after(items: &[TranscriptItem], row: usize) -> usize {
 
 /// The answer text of a turn's assistant items.
 fn turn_text(items: &[TranscriptItem]) -> String {
-    let mut parts = Vec::new();
-    for item in items {
-        if let ItemKind::Assistant(assistant) = &item.kind {
-            for block in &assistant.blocks {
-                if let BlockKind::Text(text) = &block.kind
-                    && !text.text.trim().is_empty()
-                {
-                    parts.push(text.text.trim());
-                }
-            }
-        }
-    }
-    parts.join("\n\n")
+    items
+        .iter()
+        .filter_map(|item| match &item.kind {
+            ItemKind::Assistant(assistant) => assistant.answer(),
+            _ => None,
+        })
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 fn render_assistant(
@@ -509,8 +507,24 @@ fn render_assistant(
         match &block.kind {
             BlockKind::Thinking(thinking) => run.push(render_thinking(key, thinking, cx)),
             BlockKind::Tool(tool) => run.push(render_tool(key, tool, cx)),
+            // Work on the way to the answer, not the answer.
+            BlockKind::Text(text) if !assistant.standing.is_shown() => {
+                if !text.text.trim().is_empty() {
+                    run.push(render_working_text(key, text, assistant, cx));
+                }
+            }
             BlockKind::Text(text) => {
                 column = flush(column, &mut run);
+                if assistant.standing == Standing::Unchecked && !text.text.trim().is_empty() {
+                    column = column.child(
+                        h_flex()
+                            .gap_1p5()
+                            .text_size(ACTIVITY_TEXT)
+                            .text_color(cx.palette.warning)
+                            .child(Icon::new(IconName::TriangleAlert).small())
+                            .child("Not checked"),
+                    );
+                }
                 column = column.child(match cx.chat.markdown(key) {
                     Some(state) => div()
                         .w_full()
@@ -549,18 +563,22 @@ fn rail(content: impl IntoElement, cx: &RowContext<'_>) -> Div {
         .child(content)
 }
 
-/// Whether a transcript item shows only activity: an assistant message with tool calls or
-/// thinking but no text (and no error). Such rows join one continuous rail.
+/// Whether a transcript item shows only activity: an assistant message with tool calls, thinking
+/// or drafts but no answer (and no error), or an extension's step. Such rows join one continuous
+/// rail.
 fn is_activity(item: &TranscriptItem) -> bool {
     match &item.kind {
         ItemKind::Assistant(assistant) => {
             assistant.error.is_none()
                 && !assistant.blocks.is_empty()
                 && assistant.blocks.iter().all(|block| match &block.kind {
-                    BlockKind::Text(text) => text.text.trim().is_empty(),
+                    BlockKind::Text(text) => {
+                        text.text.trim().is_empty() || !assistant.standing.is_shown()
+                    }
                     BlockKind::Thinking(_) | BlockKind::Tool(_) => true,
                 })
         }
+        ItemKind::Step(_) => true,
         _ => false,
     }
 }
@@ -651,6 +669,136 @@ fn render_thinking(key: BlockKey, thinking: &ThinkingBlock, cx: &RowContext<'_>)
             )
         })
         .into_any_element()
+}
+
+/// Remarks up to this long are shown as they are; longer ones open on a click, like drafts.
+const REMARK_CHARS: usize = 600;
+
+/// Text of deep search that is not its answer: a remark between its steps, or a draft of its
+/// report, as a row that opens.
+fn render_working_text(
+    key: BlockKey,
+    text: &TextBlock,
+    assistant: &AssistantItem,
+    cx: &RowContext<'_>,
+) -> AnyElement {
+    let body = || match cx.chat.markdown(key) {
+        Some(state) => markdown_view(state).into_any_element(),
+        None => div().child(text.text.clone()).into_any_element(),
+    };
+    let muted = || {
+        div()
+            .w_full()
+            .text_size(ACTIVITY_TEXT)
+            .text_color(cx.muted)
+            .child(body())
+    };
+    let remark = assistant.standing == Standing::Remark;
+    if remark && text.text.trim().chars().count() <= REMARK_CHARS {
+        return muted().into_any_element();
+    }
+    let words = plural(text.text.split_whitespace().count(), "word");
+    let status = if text.done {
+        ToolStatus::Done
+    } else {
+        ToolStatus::Running
+    };
+    let title = match (remark, text.done) {
+        (true, true) => "Noted",
+        (false, true) => "Wrote a draft",
+        (_, false) => "Writing…",
+    };
+    let expanded = cx.chat.is_expanded(key, false);
+    activity_row(key, ToolKind::Write, status, title.into(), words, cx)
+        .when(expanded, |this| {
+            this.child(
+                div()
+                    .ml(px(15.))
+                    .p_3()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(cx.border)
+                    .child(muted()),
+            )
+        })
+        .into_any_element()
+}
+
+/// What an extension did for the answer, with the lines behind it once opened.
+fn render_step(id: ItemId, step: &StepItem, cx: &RowContext<'_>) -> AnyElement {
+    let key = BlockKey { item: id, block: 0 };
+    let expanded = cx.chat.is_expanded(key, false);
+    activity_row(
+        key,
+        step.kind(),
+        ToolStatus::Done,
+        step.title.clone().into(),
+        step.detail.clone(),
+        cx,
+    )
+    .when(expanded, |this| {
+        this.child(
+            v_flex()
+                .ml(px(15.))
+                .gap_1()
+                .text_size(ACTIVITY_TEXT)
+                .text_color(cx.muted)
+                .children(step.lines.iter().map(|line| {
+                    h_flex()
+                        .items_start()
+                        .gap_2()
+                        .child(div().flex_none().child("•"))
+                        .child(div().flex_1().min_w_0().child(line.clone()))
+                })),
+        )
+    })
+    .into_any_element()
+}
+
+/// A row of activity that opens: icon, title and detail, like a tool call's.
+fn activity_row(
+    key: BlockKey,
+    kind: ToolKind,
+    status: ToolStatus,
+    title: SharedString,
+    detail: String,
+    cx: &RowContext<'_>,
+) -> Div {
+    let expanded = cx.chat.is_expanded(key, false);
+    v_flex().w_full().gap_1().child(
+        h_flex()
+            .id(element_id("activity", key))
+            .role(Role::Button)
+            .aria_label(SharedString::from(format!("{title} {detail}")))
+            .aria_expanded(expanded)
+            .items_start()
+            .gap_2()
+            .cursor_pointer()
+            .on_click(toggle_handler(cx, key))
+            .child(tool_marker(kind, status, px(13.), cx).mt(px(2.)))
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_1p5()
+                    .text_size(ACTIVITY_TEXT)
+                    .child(
+                        div()
+                            .flex_none()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(cx.muted)
+                            .child(title),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(cx.palette.subtle)
+                            .child(detail),
+                    )
+                    .child(chevron(expanded).text_color(cx.palette.subtle)),
+            ),
+    )
 }
 
 /// A run of exploration calls as one row: "Explored · 5 steps" and a line per call;
@@ -1309,9 +1457,10 @@ fn working_style(cx: &RowContext<'_>) -> crate::ui::spinner::IndicatorStyle {
         .working_indicator
 }
 
-fn render_working(status: &RunStatus, cx: &RowContext<'_>) -> AnyElement {
+/// `doing`: what deep search is doing right now.
+fn render_working(status: &RunStatus, doing: Option<&str>, cx: &RowContext<'_>) -> AnyElement {
     let (label, since): (String, Option<Instant>) = match status {
-        RunStatus::Working { since } => ("Working…".to_owned(), Some(*since)),
+        RunStatus::Working { since } => (format!("{}…", doing.unwrap_or("Working")), Some(*since)),
         RunStatus::Compacting => ("Compacting conversation…".to_owned(), None),
         RunStatus::Retrying {
             attempt,

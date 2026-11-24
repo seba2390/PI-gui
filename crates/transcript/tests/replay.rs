@@ -121,6 +121,7 @@ fn describe(transcript: &Transcript, with_timing: bool) -> String {
             ItemKind::Notice(notice) => {
                 writeln!(out, "NOTICE {:?}: {}", notice.kind, notice.text).unwrap();
             }
+            ItemKind::Step(step) => writeln!(out, "STEP {} {}", step.title, step.detail).unwrap(),
             ItemKind::TurnSummary(summary) => {
                 let timing = if with_timing {
                     format_duration(summary.duration)

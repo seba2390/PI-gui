@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::{App, ClipboardItem, Entity, Window};
 use pi_rpc::protocol::{Model, ThinkingLevel};
-use transcript::{BlockKind, ItemKind, NoticeKind};
+use transcript::{ItemKind, NoticeKind};
 
 use super::dialogs::{PickerItem, open_picker};
 use super::session::{AfterFork, Lifecycle, PiSession};
@@ -648,18 +648,7 @@ fn last_assistant_text(session: &PiSession) -> Option<String> {
         .iter()
         .rev()
         .find_map(|item| match &item.kind {
-            ItemKind::Assistant(assistant) => {
-                let text = assistant
-                    .blocks
-                    .iter()
-                    .filter_map(|block| match &block.kind {
-                        BlockKind::Text(text) => Some(text.text.as_str()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n\n");
-                (!text.trim().is_empty()).then_some(text)
-            }
+            ItemKind::Assistant(assistant) => assistant.answer().filter(|text| !text.is_empty()),
             _ => None,
         })
 }

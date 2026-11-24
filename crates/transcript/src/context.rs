@@ -67,7 +67,7 @@ impl ContextEstimate {
                 ItemKind::Notice(notice) if notice.kind == NoticeKind::Compaction => {
                     out.summary += tokens(notice.text.len());
                 }
-                ItemKind::Notice(_) | ItemKind::TurnSummary(_) => {}
+                ItemKind::Notice(_) | ItemKind::Step(_) | ItemKind::TurnSummary(_) => {}
             }
         }
         out
@@ -153,6 +153,7 @@ mod tests {
             model: "m".to_owned(),
             stop_reason: StopReason::Stop,
             error: None,
+            standing: crate::model::Standing::Answer,
         };
         let items = vec![
             user(&"x".repeat(4000), 0),

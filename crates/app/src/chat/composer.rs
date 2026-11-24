@@ -1855,14 +1855,19 @@ impl Composer {
     }
 
     fn render_status(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        // Deep search's status drives its toolbar button instead.
+        // Deep search's status drives its toolbar button and the "Working…" line instead.
         let statuses = self
             .session
             .read(cx)
             .extension_status()
             .iter()
             .filter(|(key, _)| {
-                ![deepsearch::STATUS_KEY, deepsearch::EFFORT_KEY].contains(&key.as_str())
+                ![
+                    deepsearch::STATUS_KEY,
+                    deepsearch::EFFORT_KEY,
+                    deepsearch::PROGRESS_KEY,
+                ]
+                .contains(&key.as_str())
             })
             .map(|(_, text)| text.clone())
             .collect::<Vec<_>>();

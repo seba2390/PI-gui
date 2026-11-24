@@ -611,6 +611,13 @@ impl PiSession {
             .unwrap_or_default()
     }
 
+    /// What deep search is doing right now.
+    pub fn web_progress(&self) -> Option<&str> {
+        self.extension_status
+            .get(deepsearch::PROGRESS_KEY)
+            .map(String::as_str)
+    }
+
     /// Whether this chat's pi loaded web search (it offers the `/websearch` command).
     pub fn web_search_available(&self) -> bool {
         self.mode == Mode::Chat

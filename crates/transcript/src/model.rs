@@ -4,8 +4,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use pi_rpc::protocol::StopReason;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use crate::tool::ToolKind;
 
 /// Stable identity of one transcript item, for UI state such as "expanded".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
@@ -27,6 +29,8 @@ pub enum ItemKind {
     /// A user-run shell command (`!cmd`), not an agent tool call.
     Bash(BashItem),
     Notice(Notice),
+    /// What an extension did for the answer besides the model's own steps.
+    Step(StepItem),
     /// "Worked for 1m 3s" after the agent settles.
     TurnSummary(TurnSummary),
 }
@@ -64,11 +68,86 @@ pub struct AssistantItem {
     pub model: String,
     pub stop_reason: StopReason,
     pub error: Option<String>,
+    /// What its text is.
+    #[serde(skip_serializing_if = "Standing::is_answer")]
+    pub standing: Standing,
 }
 
 impl AssistantItem {
     pub fn is_streaming(&self) -> bool {
         self.stop_reason == StopReason::Pending
+    }
+
+    /// Its text, if it is an answer (and not a step on the way to one).
+    pub fn answer(&self) -> Option<String> {
+        self.standing.is_shown().then(|| self.text())
+    }
+
+    /// All of its text.
+    pub fn text(&self) -> String {
+        self.blocks
+            .iter()
+            .filter_map(|block| match &block.kind {
+                BlockKind::Text(text) => Some(text.text.trim()),
+                _ => None,
+            })
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+
+    pub fn has_tools(&self) -> bool {
+        self.blocks
+            .iter()
+            .any(|block| matches!(block.kind, BlockKind::Tool(_)))
+    }
+}
+
+/// What the text of an assistant message is. Outside deep search it is always the answer; a
+/// report of deep search is only once it was checked (see [`crate::research`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+pub enum Standing {
+    #[default]
+    Answer,
+    /// The answer, but it was not checked.
+    Unchecked,
+    /// Being written or checked.
+    Held,
+    /// A report that another one replaces.
+    Draft,
+    /// Said along the way, between steps.
+    Remark,
+}
+
+impl Standing {
+    #[allow(clippy::trivially_copy_pass_by_ref)] // How serde calls it.
+    fn is_answer(&self) -> bool {
+        *self == Self::Answer
+    }
+
+    /// Whether the text is for the user to read, not part of the work.
+    pub fn is_shown(self) -> bool {
+        matches!(self, Self::Answer | Self::Unchecked)
+    }
+}
+
+/// A step of an extension: what it did, and the lines behind it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StepItem {
+    pub title: String,
+    pub detail: String,
+    pub lines: Vec<String>,
+}
+
+impl StepItem {
+    pub fn kind(&self) -> ToolKind {
+        match self.title.as_str() {
+            "Planned" => ToolKind::List,
+            "Checked" => ToolKind::Search,
+            "Continuing research" => ToolKind::Web,
+            _ => ToolKind::Write,
+        }
     }
 }
 

@@ -18,6 +18,7 @@ impl Transcript {
 
         for message in messages {
             if let AgentMessage::User(user) = message {
+                transcript.end_interrupted_research();
                 if let Some(summary) = turn.finish() {
                     transcript.push_turn_summary(summary);
                 }
@@ -30,6 +31,7 @@ impl Transcript {
             }
             transcript.push_message(message, now);
         }
+        transcript.end_research();
         if let Some(summary) = turn.finish() {
             transcript.push_turn_summary(summary);
         }

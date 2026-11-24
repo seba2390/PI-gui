@@ -44,15 +44,31 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
       several angles, reads many pages (also PDFs), cross-checks key facts and reports back with a
       structured, sourced report. A slider next to it sets the effort (`/websearch effort
       light|standard|thorough|max` too): from 10 searches and pages to 160, with more results per
-      search. Once the report is written it is checked: links are tried, and from Standard on the
-      model judges, from the sources' own passages and without the conversation, whether they back
-      its claims (the key ones; all of them from Thorough on; one by one in Max) and what the
-      question still lacks. Quotes it gives as proof are looked up on the page. The report goes back
-      to be corrected with what was found, and a note below it says how it did.
+      search. Effort is a soft floor too. The question is split into sub-questions (a simple one
+      is only one), and for each of them the effort level asks for a number of searches and pages,
+      and for different sites. A model that wants to report before that, or leaves a sub-question
+      open, is sent back to its research with what is missing: until it is done, the budget is used
+      up, nothing new turns up, or it was sent back a set number of times (once in Light, up to 8
+      times in Max).
+
+      Then the report is checked: links are tried, and from Standard on the model judges, from the
+      sources' own passages and without the conversation, whether they back its claims (the key
+      ones; all of them from Thorough on; one by one in Max). Quotes it gives as proof are looked up
+      on the page. Table rows and bullets are claims too, ones without a source are problems, and a
+      page that was not read is no source. The report goes back to be corrected with what was found.
+      These questions to the model have time and token limits (`check` in `config.json`); a check
+      that fails or is stopped ends the run with a note that says so.
+
+      Until the report is final it is not shown as an answer. The chat shows the work instead:
+      searches, pages, the plan, the checks, and drafts as rows that open. The “Working…” line says
+      what is going on (“Checking the report: 12 of 40 claims”). Then the final report is written
+      into the chat once, with a note about the check below it. If the check fails or you press Esc,
+      the latest complete draft is the answer, marked as not checked. The session keeps every
+      draft, so other programs (pi's terminal) may show them.
 
       Long research stays within the context: older pages are cut down to the passages that
-      mattered, results and passages the model has seen are not shown again, and a line below the
-      message box says how far it is.
+      mattered, replaced drafts are left out, and results and passages the model has seen are not
+      shown again.
 
     The model searches (`web_search`) and reads pages (`web_fetch`); the work is done in Rust
     by the app itself, and a small embedded pi extension only connects the tools to pi. Pages
@@ -66,7 +82,8 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
       `searxng.local` the one Pistachio runs on this computer;
       `brave` or `tavily` with an API key or `api_key_env`), `default_mode` for new chats,
       `default_effort`, `modes.search` limits (`max_searches`, `max_fetches` per message), `deep`
-      (what each effort level may do: searches, pages, results, checked claims, revisions),
+      (what each effort level may and has to do: searches, pages, results, checked claims, revisions,
+      sub-questions, sites),
       results per search, page text per read (`fetch.max_chars`; lower it for small context
       windows), `fetch.allow_private_networks` and timeouts. Settings added in later versions
       are filled in automatically.
