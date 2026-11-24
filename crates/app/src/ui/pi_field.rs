@@ -60,6 +60,8 @@ pub struct PiField {
     last_tick: Instant,
     /// Painted since the last tick: when the field is not on screen, animation stops.
     painted: bool,
+    /// A headline in the middle, which the glyphs are kept faint behind.
+    headline: bool,
 }
 
 impl PiField {
@@ -74,6 +76,15 @@ impl PiField {
             ticker: None,
             last_tick: Instant::now(),
             painted: false,
+            headline: true,
+        }
+    }
+
+    /// A field without a headline in its middle.
+    pub fn plain() -> Self {
+        Self {
+            headline: false,
+            ..Self::new()
         }
     }
 
@@ -264,7 +275,11 @@ impl PiField {
             // Fade behind the headline and button so they stay readable.
             let dx = (position.x - center.x) / 300.;
             let dy = (position.y - center.y) / 160.;
-            let clear = smoothstep(0.55, 1.15, dx.hypot(dy));
+            let clear = if self.headline {
+                smoothstep(0.55, 1.15, dx.hypot(dy))
+            } else {
+                1.
+            };
             // Glow near the mouse and while displaced.
             let near = self.mouse.map_or(0., |mouse| {
                 let away = position - mouse;

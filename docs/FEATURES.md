@@ -15,7 +15,8 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   transcripts: `cargo run --release -p transcript --example label_corpus -- <session.jsonl…>`.
 - Tools that run other tools (subagents, code mode) show that work inside their own row: a
   live step count while running, and every nested call and reply when expanded.
-- Composer: attachments, working-folder picker, model and thinking pickers, context-window wheel,
+- Composer: attachments, working-folder picker (a long name fades out), model and thinking
+  pickers, context-window wheel,
   `/` command completion, inline `@file` completion (paths with spaces are quoted like pi does),
   ↑ / ↓ through earlier prompts, and `!cmd` shell commands (with live output; Esc stops them).
   Messages typed while pi starts, compacts or is busy sending are listed above the input as
@@ -120,13 +121,14 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   - Limits: csh/tcsh login shells are not supported (bash, zsh, dash, ksh and fish are; fish
     is untested on a real host). Windows clients are untested: Windows' OpenSSH cannot share
     connections, so every command opens its own connection there.
-- **Skills** (Code mode): a Skills button under the Chat | Code switch shows the skills pi loaded
-  for the session (personal ones from `~/.pi/agent/skills` and `~/.agents/skills`, project ones
-  from `.pi/skills` and `.agents/skills`), as pi itself reports them, here or on the SSH host.
-  "New skill" writes a `SKILL.md` (name checked against pi's rules, description, instructions,
-  optionally "only when I call it" via `disable-model-invocation`) into your personal skills or
-  the project's `.pi/skills`; existing skills open in an editor, with the toggle and move to
-  trash. pi loads project resources only for trusted folders, and in RPC mode it cannot ask, so
+- **Skills** (Code mode): a Skills button under the Chat | Code switch shows all skills: the
+  ones that come with Pistachio, your own library (`~/.pi/agent/skills` and `~/.agents/skills`)
+  and those of your projects (`.pi/skills` and `.agents/skills`), here or on the SSH host. With a
+  session open, what pi itself reports for it counts.
+  "+" below them writes a `SKILL.md` (name checked against pi's rules, description, instructions
+  from a template, optionally "only when I call it" via `disable-model-invocation`) into your
+  personal skills or the `.pi/skills` of a project you choose; existing skills open in an editor,
+  with the toggle and move to trash. pi loads project resources only for trusted folders, and in RPC mode it cannot ask, so
   the page shows whether the project is trusted and can trust it, saved in pi's own
   `trust.json` like the terminal's `/trust`. pi reads skills when it starts, so changes restart
   it on the same session.
@@ -137,7 +139,8 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
 - **Built-in skills**: Code sessions on this computer also load the skills that come with
   Pistachio, written to `~/.pi/agent/pistachio/skills` and passed with `--skill` (pi's own
   skill folders are not touched). They show read-only on the Skills page under "Comes with
-  Pistachio". So far there is one, `add-skill`, which walks pi through adding a new skill.
+  Pistachio", also before a session is open. So far there is one, `add-skill`, which walks pi
+  through adding a new skill.
 - **Add model**: the model picker under the composer ends with "Add model…" and "Edit
   models.json…". The form adds a custom model to pi's `models.json`, to a provider already in
   the file or a new one (presets for Ollama, LM Studio, vLLM, llama.cpp and OpenRouter; any
@@ -238,7 +241,8 @@ All three are Apache 2.0 licensed. Models live in `~/.pi/agent/pistachio/naming/
 ## Settings and updates
 
 Settings opens from the Pistachio menu (⌘,) or the button at the bottom of the sidebar. Every
-change is saved right away.
+change is saved right away. Small π signs drift behind its pages and move out of the way of the
+mouse.
 
 - **General:** theme (follow the system, light or dark), code colors (the syntax palette for
   code in chat, diffs, skills and `models.json`, with a live preview), the working indicator's

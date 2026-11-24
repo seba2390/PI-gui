@@ -1,7 +1,7 @@
 //! The "Add SSH connection" dialog: hosts found in the user's OpenSSH config (indexed when the
 //! dialog opens), or a custom connection entered by hand.
 
-use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::button::Button;
 use gpui_kit::component::input::InputEvent;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -11,7 +11,7 @@ use remote::{HostId, Target};
 use super::host_form::{HostFields, HostForm};
 use crate::config::AppConfig;
 use crate::hosts::{self, Hosts};
-use crate::ui::QuietButton as _;
+use crate::ui::{QuietButton as _, buttons};
 
 #[derive(Debug, Clone)]
 pub enum AddHostEvent {
@@ -245,9 +245,10 @@ impl AddHost {
             .gap_2()
             .child(form.render(cx))
             .child(
-                h_flex().justify_end().child(
+                buttons().pt_1().child(
                     Button::new("add-custom-host")
-                        .primary()
+                        .form_action(cx)
+                        .icon(IconName::Plus)
                         .label("Add connection")
                         .on_click(cx.listener(|this, _, _, cx| this.add_custom(cx))),
                 ),

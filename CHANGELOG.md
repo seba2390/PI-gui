@@ -6,6 +6,36 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.4.9] - 2026-11-24
+
+### Changed
+
+- The Skills page is an overview of all your skills, also without a session open: the ones that come
+  with Pistachio, your own library, and each project's, beside each other, with "+" below them to
+  add one. Skills are cards with an icon and color of their own; ones pi only loads when you call
+  them say so. Opening or adding one expands beside the list.
+- A new skill is for all projects or for one, chosen from a menu of your projects (also without a
+  session open). Its instructions start with a template.
+- An open skill has Move to trash, Discard and Save centered below it. Save is there when something
+  was changed, and opening another skill no longer drops changes that are not saved.
+- Text fields are as tall as the search field everywhere, and the focused one has a thin white
+  outline (dark in the light theme) instead of a green glow.
+- Switches in Settings have an outline and a light knob, and a brighter green when on. In the dark
+  theme one that was off looked like it could not be clicked.
+- The drifting π signs are behind every Settings page too.
+- Settings → pi & models has Add model… and Edit models.json… centered below the text, as tall as
+  the fields and with icons. Add connection in the SSH dialog is centered too, with an icon and
+  the brighter green.
+- A folder name too long for the message box's toolbar fades out instead of being cut off, then
+  the machine's does. Pointing at the folder shows its path.
+
+### Fixed
+
+- A skill opened while another window was active came up empty, and Save would have emptied it.
+- Clicking a file in a conversation while the Files tab is open shows the file. It closed the
+  panel.
+- The Skills page lists skills also when no session is open. It said "No skills yet".
+
 ## [0.4.8] - 2026-11-24
 
 ### Fixed
@@ -419,7 +449,8 @@ chats, skills and model management. Changes since the last private build:
 - A corrupt `hosts.json` is kept as a backup.
 - A remembered terminal height can no longer squeeze out the chat.
 
-[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.4.8...HEAD
+[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.4.9...HEAD
+[0.4.9]: https://github.com/seba2390/pistachio/compare/v0.4.8...v0.4.9
 [0.4.8]: https://github.com/seba2390/pistachio/compare/v0.4.7...v0.4.8
 [0.4.7]: https://github.com/seba2390/pistachio/compare/v0.4.6...v0.4.7
 [0.4.6]: https://github.com/seba2390/pistachio/compare/v0.4.5...v0.4.6

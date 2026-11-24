@@ -32,7 +32,6 @@ type OnAction = Rc<dyn Fn(SavedHostAction, &mut Window, &mut App)>;
 
 pub fn saved_hosts(
     on_action: impl Fn(SavedHostAction, &mut Window, &mut App) + 'static,
-    window: &Window,
     cx: &App,
 ) -> AnyElement {
     let on_action: OnAction = Rc::new(on_action);
@@ -44,7 +43,7 @@ pub fn saved_hosts(
         .iter()
         .map(|host| {
             let status = hosts.status(&host.id);
-            host_row(&host.id, &host.label, &status, &on_action, window, cx)
+            host_row(&host.id, &host.label, &status, &on_action, cx)
         })
         .collect();
     v_flex()
@@ -81,7 +80,6 @@ fn host_row(
     label: &str,
     status: &crate::hosts::HostStatus,
     on_action: &OnAction,
-    window: &Window,
     cx: &App,
 ) -> AnyElement {
     // On while it connects too, so an attempt can be stopped.
@@ -120,7 +118,6 @@ fn host_row(
                     toggle(action, window, cx);
                 },
                 Some(format!("Connect {label}").into()),
-                window,
                 cx,
             )
             .flex_none()
@@ -262,11 +259,10 @@ mod tests {
     struct List(Rc<RefCell<Vec<SavedHostAction>>>);
 
     impl Render for List {
-        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             let actions = self.0.clone();
             div().w(px(600.)).child(super::saved_hosts(
                 move |action, _, _| actions.borrow_mut().push(action),
-                window,
                 cx,
             ))
         }

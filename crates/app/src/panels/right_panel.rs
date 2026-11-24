@@ -146,6 +146,13 @@ impl RightPanel {
         cx.notify();
     }
 
+    /// The file in the viewer.
+    #[cfg(all(test, unix))]
+    pub fn open_path(&self, cx: &App) -> Option<PathBuf> {
+        let (viewer, _) = self.viewer.as_ref()?;
+        Some(viewer.read(cx).path().to_path_buf())
+    }
+
     /// Back from the viewer to the tree.
     fn close_file(&mut self, cx: &mut Context<Self>) {
         self.viewer = None;

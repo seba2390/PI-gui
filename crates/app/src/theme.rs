@@ -28,6 +28,8 @@ pub fn init(cx: &mut App) {
         cx.set_global(BaseThemes { light, dark });
         set_code_colors(cx);
     }
+    // What is focused has a thin outline, without a glow around it.
+    Theme::global_mut(cx).focus_ring = false;
     Theme::sync_system_appearance(None, cx);
 }
 
@@ -128,6 +130,12 @@ pub struct Palette {
     pub success: Hsla,
     pub error: Hsla,
     pub warning: Hsla,
+    /// A switch that is on: its track and outline.
+    pub switch_on: Hsla,
+    pub switch_on_edge: Hsla,
+    /// The outline of a switch that is off (its track is the theme's).
+    pub switch_edge: Hsla,
+    pub switch_thumb: Hsla,
 }
 
 pub fn palette(cx: &App) -> Palette {
@@ -146,6 +154,10 @@ pub fn palette(cx: &App) -> Palette {
             success: rgb(0x007F_B069).into(),
             error: rgb(0x00E5_675B).into(),
             warning: rgb(0x00D9_A63C).into(),
+            switch_on: rgb(0x001F_7A3C).into(),
+            switch_on_edge: rgb(0x005C_C45E).into(),
+            switch_edge: rgb(0x008B_877E).into(),
+            switch_thumb: rgb(0x00F5_F3EC).into(),
         }
     } else {
         Palette {
@@ -162,6 +174,75 @@ pub fn palette(cx: &App) -> Palette {
             success: rgb(0x004E_8A3A).into(),
             error: rgb(0x00C2_463A).into(),
             warning: rgb(0x00A8_7A16).into(),
+            switch_on: rgb(0x001B_7A3A).into(),
+            switch_on_edge: rgb(0x000F_5225).into(),
+            switch_edge: rgb(0x008F_8B80).into(),
+            switch_thumb: rgb(0x00FF_FFFF).into(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::component::input::{Input, InputState};
+    use gpui_kit::component::{ActiveTheme as _, Root, Theme, ThemeMode};
+    use gpui_kit::{
+        AppContext as _, Context, Entity, Hsla, IntoElement, ParentElement as _, Render,
+        Styled as _, TestAppContext, Window, div, px,
+    };
+
+    struct Field(Entity<InputState>);
+
+    impl Render for Field {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().w(px(300.)).p_4().child(Input::new(&self.0))
+        }
+    }
+
+    /// A focused text field has one thin outline, which is not green, in both themes.
+    #[gpui_kit::test]
+    fn a_focused_field_has_a_plain_outline(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::component::init(cx);
+            super::init(cx);
+        });
+        let mut input = None;
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let state = cx.new(|cx| InputState::new(window, cx));
+            input = Some(state.clone());
+            let field = cx.new(|_| Field(state));
+            Root::new(field, window, cx)
+        });
+        let input = input.unwrap();
+        cx.update(|window, cx| input.update(cx, |input, cx| input.focus(window, cx)));
+        for mode in [ThemeMode::Dark, ThemeMode::Light] {
+            cx.update(|window, cx| Theme::change(mode, Some(window), cx));
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                window.refresh();
+                window.draw(cx).clear(cx);
+                let ring = cx.theme().ring;
+                assert!(ring.s < 0.3, "{mode:?}: {ring:?}");
+                let scale = window.scale_factor();
+                let none = px(0.).scale(scale);
+                // An outline is painted in pieces, all with its bounds. A glow is around it, in
+                // the same color but fainter.
+                let outlines: Vec<_> = (window.painted_quads().into_iter())
+                    .filter(|quad| {
+                        let color = Hsla {
+                            a: 1.,
+                            ..quad.border_color
+                        };
+                        color == ring && quad.border_color.a > 0. && quad.border_widths.top > none
+                    })
+                    .collect();
+                assert!(!outlines.is_empty(), "{mode:?}: no outline");
+                for quad in &outlines {
+                    assert_eq!(quad.bounds, outlines[0].bounds, "{mode:?}: a glow");
+                    assert_eq!(quad.border_color, ring, "{mode:?}: a glow");
+                    assert!(quad.border_widths.top <= px(1.).scale(scale));
+                }
+            });
         }
     }
 }

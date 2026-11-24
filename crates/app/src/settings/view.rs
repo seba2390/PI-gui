@@ -11,7 +11,7 @@ use gpui_kit::component::setting::{
     NumberFieldOptions, RenderOptions, SelectIndex, SettingField, SettingGroup, SettingItem,
     SettingPage, Settings,
 };
-use gpui_kit::component::{ActiveTheme as _, IconName, Sizable as _, h_flex};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use pi_config::settings::{StartupDefaults, THINKING_LEVELS};
@@ -20,8 +20,8 @@ use super::{AppSettings, StartMode, TextSize, ThemeChoice};
 use crate::code_colors::CodeColors;
 use crate::config::AppConfig;
 use crate::remote_ui::SavedHostAction;
-use crate::ui::AppIcon;
 use crate::ui::spinner::IndicatorStyle;
+use crate::ui::{AppIcon, PiField, QuietButton as _, buttons};
 
 /// What the window does for the page (dialogs and connections live there).
 #[derive(Debug, Clone)]
@@ -68,6 +68,8 @@ pub struct SettingsView {
     indicator_drawn: std::rc::Rc<std::cell::Cell<bool>>,
     /// The preview's repaint loop is running.
     indicator_ticking: std::rc::Rc<std::cell::Cell<bool>>,
+    /// The drifting π signs behind the pages.
+    pi_field: Entity<PiField>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -140,6 +142,7 @@ impl SettingsView {
             models,
             pi_version: None,
             start_page: 0,
+            pi_field: cx.new(|_| PiField::plain()),
             code_colors_hover: None,
             indicator_hover: None,
             indicator_drawn: std::rc::Rc::default(),
@@ -502,13 +505,14 @@ impl SettingsView {
                 SettingGroup::new()
                     .title("Models")
                     .description("Custom models and providers in pi's models.json.")
-                    .item(SettingItem::render(move |_, _, _| {
+                    .item(SettingItem::render(move |_, _, cx| {
                         let (weak_add, weak_edit) = (weak_add.clone(), weak_edit.clone());
-                        h_flex()
-                            .gap_2()
+                        let accent = crate::theme::palette(cx).accent_icon;
+                        buttons()
                             .child(
                                 Button::new("settings-add-model")
-                                    .small()
+                                    .form_other(cx)
+                                    .icon(Icon::from(IconName::Plus).text_color(accent))
                                     .label("Add model…")
                                     .on_click(move |_, _, cx| {
                                         let _ = weak_add
@@ -517,7 +521,8 @@ impl SettingsView {
                             )
                             .child(
                                 Button::new("settings-edit-models")
-                                    .small()
+                                    .form_other(cx)
+                                    .icon(Icon::from(AppIcon::SquarePen).text_color(accent))
                                     .label("Edit models.json…")
                                     .on_click(move |_, _, cx| {
                                         let _ = weak_edit
@@ -579,7 +584,7 @@ impl SettingsView {
                         SettingItem::new(
                             "Brave API key",
                             SettingField::render(move |_, _, _| {
-                                Input::new(&brave).small().mask_toggle().w(px(260.))
+                                Input::new(&brave).mask_toggle().w(px(260.))
                             }),
                         )
                         .description("Stored only on this computer, readable by you alone."),
@@ -587,7 +592,7 @@ impl SettingsView {
                     .item(SettingItem::new(
                         "Tavily API key",
                         SettingField::render(move |_, _, _| {
-                            Input::new(&tavily).small().mask_toggle().w(px(260.))
+                            Input::new(&tavily).mask_toggle().w(px(260.))
                         }),
                     )),
             )
@@ -710,7 +715,7 @@ impl SettingsView {
             .group(
                 SettingGroup::new()
                     .title("Saved connections")
-                    .item(SettingItem::render(move |_, window, cx| {
+                    .item(SettingItem::render(move |_, _, cx| {
                         let weak = weak.clone();
                         crate::remote_ui::saved_hosts(
                             move |action, _, cx| {
@@ -718,7 +723,6 @@ impl SettingsView {
                                     cx.emit(SettingsEvent::Host(action));
                                 });
                             },
-                            window,
                             cx,
                         )
                     })),
@@ -727,6 +731,12 @@ impl SettingsView {
 }
 
 impl SettingsView {
+    /// The π signs, for the window to draw behind this view: drawn in it, each of their frames
+    /// would render the pages again.
+    pub fn pi_field(&self) -> Entity<PiField> {
+        self.pi_field.clone()
+    }
+
     /// Opens on the SSH connections page (before the first render).
     pub fn start_on_ssh(&mut self) {
         self.start_page = 3;
@@ -808,7 +818,8 @@ impl Render for SettingsView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let _timer = crate::perf::render("settings");
         let weak = cx.weak_entity();
-        div().size_full().bg(cx.theme().background).child(
+        // No background: the π signs are behind it.
+        div().size_full().child(
             Settings::new("app-settings")
                 .default_selected_index(SelectIndex {
                     page_ix: self.start_page,
@@ -914,14 +925,13 @@ fn hover_switch(
     set_value: impl Fn(bool, &mut App) + 'static,
 ) -> SettingField<SharedString> {
     let set_value = std::rc::Rc::new(set_value);
-    SettingField::render(move |_, window, cx| {
+    SettingField::render(move |_, _, cx| {
         let set_value = set_value.clone();
         crate::ui::hover_switch(
             id,
             value(cx),
             move |checked, _, cx| set_value(checked, cx),
             None,
-            window,
             cx,
         )
     })

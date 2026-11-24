@@ -551,11 +551,10 @@ impl ConnectFlow {
             .child(
                 h_flex()
                     .gap_1()
-                    .child(div().flex_1().child(Input::new(&self.path_input).small()))
+                    .child(div().flex_1().child(Input::new(&self.path_input)))
                     .child(
                         Button::new("go-to-path")
                             .quiet(cx)
-                            .small()
                             .icon(IconName::ArrowRight)
                             .accessibility_label("Go to this folder (Enter)")
                             .tooltip("Go to this folder (Enter)")
@@ -603,10 +602,9 @@ impl ConnectFlow {
                 this.child(
                     h_flex()
                         .gap_1()
-                        .child(div().flex_1().child(Input::new(&input).small()))
+                        .child(div().flex_1().child(Input::new(&input)))
                         .child(
                             Button::new("create-folder")
-                                .small()
                                 .label("Create")
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.create_folder(window, cx);
@@ -615,7 +613,6 @@ impl ConnectFlow {
                         .child(
                             Button::new("cancel-folder")
                                 .quiet(cx)
-                                .small()
                                 .label("Cancel")
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.close_new_folder(window, cx);

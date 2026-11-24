@@ -544,7 +544,7 @@ impl ChatView {
                 .child(
                     div()
                         .w(px(220.))
-                        .child(Input::new(&find.input).small().appearance(false)),
+                        .child(Input::new(&find.input).appearance(false)),
                 )
                 .child(
                     div()
