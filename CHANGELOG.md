@@ -6,6 +6,8 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.4.9] - 2026-11-24
+
 ### Changed
 
 - The Skills page is an overview of all your skills, also without a session open: the ones that come
@@ -447,7 +449,8 @@ chats, skills and model management. Changes since the last private build:
 - A corrupt `hosts.json` is kept as a backup.
 - A remembered terminal height can no longer squeeze out the chat.
 
-[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.4.8...HEAD
+[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.4.9...HEAD
+[0.4.9]: https://github.com/seba2390/pistachio/compare/v0.4.8...v0.4.9
 [0.4.8]: https://github.com/seba2390/pistachio/compare/v0.4.7...v0.4.8
 [0.4.7]: https://github.com/seba2390/pistachio/compare/v0.4.6...v0.4.7
 [0.4.6]: https://github.com/seba2390/pistachio/compare/v0.4.5...v0.4.6
