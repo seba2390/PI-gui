@@ -469,6 +469,7 @@ impl MainWindow {
                         settings.update(cx, |settings, _| settings.start_on_web_search());
                     }
                 }
+                "searxng-setup" => crate::settings::open_searxng_setup(window, cx),
                 "searxng-get" => crate::settings::use_local_searxng(cx),
                 "settings-ssh" => {
                     self.open_settings(&OpenSettings, window, cx);

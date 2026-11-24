@@ -63,8 +63,10 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
       `{{max_searches}}` and `{{max_fetches}}` are filled in). Delete a file to get the
       default back.
     - **SearXNG on this computer** (macOS and Linux, no Docker): choosing SearXNG in Settings
-      checks whether one answers at the address. If not, it says what is missing and offers to
-      download and run it. It does not come with the app: on request SearXNG, a Python of its own
+      checks whether one answers at the address. If not, it shows what is missing and asks whether
+      to download and run it; Cancel keeps the service from before. Its row has a light (green
+      running, amber busy, red stopped or not usable) and a “⋮” menu: start or stop, update, change
+      the address, remove. It does not come with the app: on request SearXNG, a Python of its own
       and the packages it needs (about 80 MB, 190 MB on disk), each pinned and checked against its
       checksum, go to the `searxng` folder here; your own Python is not touched, and Remove deletes
       all of it. Only this computer can reach it, on a free port. It starts with the first message
@@ -263,7 +265,7 @@ mouse.
   and shortcuts to add models or edit `models.json`.
 - **Web search:** the search service (DuckDuckGo, SearXNG, Brave or Tavily) and the address or
   API key the chosen one needs (keys are stored only on this computer) or a SearXNG on this
-  computer (download, start, stop, remove), whether new chats search, limits per message, and
+  computer, whether new chats search, limits per message, and
   local network access.
 - **SSH connections:** whether saved connections connect when the app opens (off by
   default), and the saved hosts with their status, connecting, adding and managing them.

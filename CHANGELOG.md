@@ -9,10 +9,12 @@ All notable changes to PI-gui are listed here. The format follows
 ### Added
 
 - SearXNG can run on this computer, with one click and without Docker (macOS and Linux). Choosing
-  it in Settings → Web search checks whether one answers at the address. If not, Download and run
-  gets SearXNG, a Python of its own and the packages it needs (about 80 MB) and starts it. Only
-  this computer can reach it. It starts when a chat searches, stops with Pistachio, and Remove
-  deletes it. It does not come with the app.
+  it in Settings → Web search checks whether one answers at the address. If not, it shows what is
+  missing and asks: Download and run gets SearXNG, a Python of its own and the packages it needs
+  (about 80 MB) and starts it, Cancel keeps the service from before. A light shows whether it runs,
+  and its “⋮” menu starts, stops, updates and removes it or changes the address. Only this computer
+  can reach it. It starts when a chat searches and stops with Pistachio. It does not come with the
+  app.
 
 ### Changed
 

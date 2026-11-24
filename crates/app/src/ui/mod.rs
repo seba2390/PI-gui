@@ -40,3 +40,13 @@ pub fn top_bar_icon(icon: impl Into<gpui_kit::component::Icon>) -> gpui_kit::com
     use gpui_kit::Styled as _;
     icon.into().size_5()
 }
+
+/// A small status light.
+pub fn light(color: gpui_kit::Hsla) -> gpui_kit::Div {
+    use gpui_kit::Styled as _;
+    gpui_kit::div()
+        .size(gpui_kit::px(7.))
+        .flex_none()
+        .rounded_full()
+        .bg(color)
+}

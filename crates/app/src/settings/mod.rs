@@ -7,7 +7,7 @@
 mod local_search;
 pub mod view;
 
-pub use local_search::use_local as use_local_searxng;
+pub use local_search::{open_setup as open_searxng_setup, use_local as use_local_searxng};
 
 use std::path::{Path, PathBuf};
 

@@ -4,7 +4,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
 use deepsearch::config::BackendKind;
 use gpui_kit::component::WindowExt as _;
@@ -16,9 +15,6 @@ use gpui_kit::{
 use searxng::{InstallError, Installed, Probe, Progress, Server};
 
 use crate::config::AppConfig;
-
-/// How long after the last change of the address it is checked.
-const PROBE_DELAY: Duration = Duration::from_millis(500);
 
 /// The running SearXNG, if any.
 #[derive(Debug)]
@@ -58,6 +54,8 @@ struct Check {
 pub enum SearchServerEvent {
     /// The download finished and it runs.
     Ready,
+    /// The download was cancelled.
+    Cancelled,
     Failed(String),
 }
 
@@ -108,6 +106,7 @@ pub fn notify(event: &SearchServerEvent, window: &mut Window, cx: &mut App) {
             Notification::success("SearXNG is running on this computer. Chats search with it now.")
         }
         SearchServerEvent::Failed(error) => Notification::error(error.clone()),
+        SearchServerEvent::Cancelled => return,
     };
     window.push_notification(notification, cx);
 }
@@ -240,7 +239,7 @@ impl SearchServer {
         self.installed = searxng::installed(&self.root);
         match result {
             Ok(()) => self.start_and(true, cx),
-            Err(InstallError::Cancelled) => {}
+            Err(InstallError::Cancelled) => cx.emit(SearchServerEvent::Cancelled),
             Err(InstallError::Failed(error)) => self.fail(error, cx),
         }
         cx.notify();
@@ -325,18 +324,15 @@ impl SearchServer {
         cx.notify();
     }
 
-    /// Checks what answers at `url`, shortly after it stopped changing; not again for the address
-    /// that was checked last, unless `again`.
+    /// Checks what answers at `url`; not again for the address that was checked last, unless
+    /// `again`.
     pub fn probe(&mut self, url: &str, again: bool, cx: &mut Context<Self>) {
         if !again && self.probe.as_ref().is_some_and(|check| check.url == url) {
             return;
         }
         let address = url.to_owned();
-        // Replacing it drops a check still waiting.
+        // Replacing it drops the check of another address.
         let task = cx.spawn(async move |this, cx| {
-            if !again {
-                cx.background_executor().timer(PROBE_DELAY).await;
-            }
             let result = cx
                 .background_spawn(async move { searxng::probe(&address) })
                 .await;
@@ -353,6 +349,11 @@ impl SearchServer {
             _task: task,
         });
         cx.notify();
+    }
+
+    /// Makes [`Self::probe`] check again.
+    pub fn forget_probe(&mut self) {
+        self.probe = None;
     }
 
     fn fail(&mut self, error: String, cx: &mut Context<Self>) {

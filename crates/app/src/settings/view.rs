@@ -15,12 +15,13 @@ use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use pi_config::settings::{StartupDefaults, THINKING_LEVELS};
+use searxng::{Installed, Probe};
 
-use super::{AppSettings, StartMode, TextSize, ThemeChoice};
+use super::{AppSettings, StartMode, TextSize, ThemeChoice, local_search};
 use crate::code_colors::CodeColors;
 use crate::config::AppConfig;
 use crate::remote_ui::SavedHostAction;
-use crate::search_server::{Running, search_server};
+use crate::search_server::{Running, SearchServerEvent, search_server};
 use crate::ui::spinner::IndicatorStyle;
 use crate::ui::{AppIcon, PiField, QuietButton as _, buttons};
 
@@ -38,9 +39,18 @@ struct WebSearchState {
     dir: Option<PathBuf>,
     config: WebConfig,
     error: Option<String>,
+    /// SearXNG was just chosen and may have to be set up first.
+    choosing: Option<Choosing>,
 }
 
 impl Global for WebSearchState {}
+
+/// Choosing SearXNG instead of `before`, which comes back when it is not set up after all.
+struct Choosing {
+    before: BackendKind,
+    /// The user was asked whether to download it.
+    asked: bool,
+}
 
 /// The startup model and thinking level in pi's `settings.json` on this computer.
 struct PiStartupState {
@@ -125,11 +135,20 @@ impl SettingsView {
             }),
             cx.observe(&crate::hosts::hosts(cx), |_, _, cx| cx.notify()),
             // The chosen search service's field.
-            cx.observe_global::<WebSearchState>(|_, cx| {
+            cx.observe_global_in::<WebSearchState>(window, |_, window, cx| {
                 check_searxng(false, cx);
+                offer_searxng(window, cx);
                 cx.notify();
             }),
-            cx.observe(&search_server(cx), |_, _, cx| cx.notify()),
+            cx.observe_in(&search_server(cx), window, |_, _, window, cx| {
+                offer_searxng(window, cx);
+                cx.notify();
+            }),
+            cx.subscribe(&search_server(cx), |_, _, event, cx| match event {
+                SearchServerEvent::Ready => keep_service(cx),
+                SearchServerEvent::Cancelled => download_cancelled(cx),
+                SearchServerEvent::Failed(_) => {}
+            }),
         ];
         check_searxng(true, cx);
         let models = models
@@ -569,7 +588,7 @@ impl SettingsView {
                         "tavily" => BackendKind::Tavily,
                         _ => BackendKind::Duckduckgo,
                     };
-                    update_web(cx, |config| config.backend = backend);
+                    choose_service(backend, cx);
                 },
             ),
         )
@@ -582,7 +601,7 @@ impl SettingsView {
         ]);
         let needs = match web_config(cx).backend {
             BackendKind::Duckduckgo => Vec::new(),
-            BackendKind::Searxng => super::local_search::items(cx),
+            BackendKind::Searxng => vec![local_search::item()],
             BackendKind::Brave => vec![
                 SettingItem::new("Brave API key", key_field("brave-key", &self.brave_key))
                     .description(key_hint),
@@ -1256,6 +1275,87 @@ pub(super) fn web_config(cx: &App) -> &WebConfig {
     &cx.global::<WebSearchState>().config
 }
 
+/// Makes chats search with `backend`. SearXNG may have to be set up for that: [`offer_searxng`].
+fn choose_service(backend: BackendKind, cx: &mut App) {
+    let before = web_config(cx).backend;
+    // Also when it was chosen before: it may not be set up.
+    let choosing = (backend == BackendKind::Searxng).then_some(Choosing {
+        before,
+        asked: false,
+    });
+    cx.global_mut::<WebSearchState>().choosing = choosing;
+    if backend == BackendKind::Searxng {
+        // What answered the last time it was chosen may have changed.
+        search_server(cx).update(cx, |server, _| server.forget_probe());
+    }
+    update_web(cx, |config| config.backend = backend);
+}
+
+/// Once it is known that the SearXNG just chosen cannot be used: uses the one that is installed
+/// on this computer, or asks whether to download it.
+fn offer_searxng(window: &mut Window, cx: &mut App) {
+    let state = cx.global::<WebSearchState>();
+    let Some(choosing) = &state.choosing else {
+        return;
+    };
+    if choosing.asked || state.config.backend != BackendKind::Searxng {
+        return;
+    }
+    let installed = search_server(cx).read(cx).installed() != Installed::No;
+    if !local_search::is_local(cx) {
+        match local_search::probed(cx) {
+            None => return,
+            Some(Probe::Ready) => return keep_service(cx),
+            Some(_) => {}
+        }
+    }
+    if searxng::catalog::platform().is_some() && installed {
+        keep_service(cx);
+        return local_search::use_local(cx);
+    }
+    if let Some(choosing) = &mut cx.global_mut::<WebSearchState>().choosing {
+        choosing.asked = true;
+    }
+    if searxng::catalog::platform().is_some() {
+        local_search::open_setup(window, cx);
+    } else {
+        local_search::open_address_dialog(window, cx);
+    }
+}
+
+/// The SearXNG just chosen is set up.
+pub(super) fn keep_service(cx: &mut App) {
+    cx.global_mut::<WebSearchState>().choosing = None;
+}
+
+/// The user did not set up the SearXNG they just chose: the service from before searches again.
+pub(super) fn go_back_to_previous_service(cx: &mut App) {
+    let state = cx.global_mut::<WebSearchState>();
+    if let Some(choosing) = state.choosing.take() {
+        let missing = is_missing(cx);
+        update_web(cx, |config| {
+            config.backend = choosing.before;
+            config.searxng.local &= !missing;
+        });
+    }
+}
+
+/// [`go_back_to_previous_service`], also when the page it was chosen on is gone.
+fn download_cancelled(cx: &mut App) {
+    go_back_to_previous_service(cx);
+    if is_missing(cx) {
+        update_web(cx, |config| {
+            config.backend = BackendKind::Duckduckgo;
+            config.searxng.local = false;
+        });
+    }
+}
+
+/// Chats are to search with the SearXNG on this computer, and there is none.
+fn is_missing(cx: &App) -> bool {
+    local_search::is_local(cx) && search_server(cx).read(cx).installed() == Installed::No
+}
+
 /// Checks the SearXNG that is used, now or after a change of the settings: whether the address
 /// answers, or what state the one on this computer is in. That one stops when it is not used.
 fn check_searxng(opened: bool, cx: &mut App) {
@@ -1293,7 +1393,12 @@ fn load_web_search(cx: &mut App) {
         ),
     };
     let dir = error.is_none().then_some(dir);
-    cx.set_global(WebSearchState { dir, config, error });
+    cx.set_global(WebSearchState {
+        dir,
+        config,
+        error,
+        choosing: None,
+    });
 }
 
 /// Changes web search's settings and saves them (unless the file could not be read: then
@@ -1380,13 +1485,18 @@ mod tests {
     use gpui_kit::component::Root;
     use gpui_kit::{AppContext as _, TestAppContext, VisualTestContext};
 
-    use super::{AppConfig, AppSettings, Path, SettingsView, WebConfig, update_web, web_config};
+    use super::{
+        AppConfig, AppSettings, Path, SettingsView, choose_service, download_cancelled,
+        search_server, update_web, web_config,
+    };
+    use crate::ui::dialog::testing as dialog;
 
     /// The Web search page, with its settings in `dir`.
     fn open<'a>(dir: &Path, cx: &'a mut TestAppContext) -> &'a mut VisualTestContext {
         cx.executor().allow_parking();
         cx.update(|cx| {
             gpui_kit::component::init(cx);
+            cx.set_reduce_motion(true);
             let mut config = AppConfig::for_tests("/nonexistent/pi".into());
             config.deepsearch_dir = dir.to_path_buf();
             cx.set_global(config);
@@ -1437,14 +1547,10 @@ mod tests {
         assert_eq!(key.as_deref(), Some("key"));
     }
 
-    /// Choosing SearXNG checks the address, and offers the one on this computer unless one that
-    /// can be used answers there.
-    #[gpui_kit::test]
-    fn searxng_is_offered_when_none_answers(cx: &mut TestAppContext) {
+    /// Addresses where a SearXNG answers, and where nothing does.
+    fn addresses() -> (String, String) {
         use std::io::{Read as _, Write as _};
 
-        let dir = tempfile::tempdir().unwrap();
-        let cx = open(dir.path(), cx);
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let running = format!("http://{}", listener.local_addr().unwrap());
         std::thread::spawn(move || {
@@ -1459,33 +1565,146 @@ mod tests {
             }
         });
         let free = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let nothing = format!("http://{}", free.local_addr().unwrap());
-        drop(free);
-        let shown = |change: &dyn Fn(&mut WebConfig), cx: &mut VisualTestContext| {
-            cx.update(|_, cx| {
-                update_web(cx, |config| {
-                    config.backend = BackendKind::Searxng;
-                    change(config);
-                });
+        (running, format!("http://{}", free.local_addr().unwrap()))
+    }
+
+    /// Chooses SearXNG, with `url` as its address, after Brave.
+    fn choose_searxng(url: &str, cx: &mut VisualTestContext) {
+        cx.update(|_, cx| {
+            update_web(cx, |config| {
+                config.backend = BackendKind::Brave;
+                config.searxng.local = false;
+                config.searxng.url = url.into();
             });
-            cx.executor()
-                .advance_clock(std::time::Duration::from_secs(1));
-            cx.run_until_parked();
-            ["searxng-address-check", "searxng-offer", "searxng-local"]
-                .map(|row| cx.debug_bounds(row).is_some())
+            choose_service(BackendKind::Searxng, cx);
+        });
+        dialog::draw(cx);
+    }
+
+    fn service(cx: &mut VisualTestContext) -> (BackendKind, bool) {
+        cx.read(|cx| (web_config(cx).backend, web_config(cx).searxng.local))
+    }
+
+    #[gpui_kit::test]
+    fn a_searxng_that_answers_is_used(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let cx = open(dir.path(), cx);
+        let (running, nothing) = addresses();
+        choose_searxng(&running, cx);
+        assert!(!dialog::is_open(cx));
+        assert!(cx.debug_bounds("searxng-on").is_some());
+        assert!(cx.debug_bounds("searxng-menu").is_some());
+        assert_eq!(service(cx), (BackendKind::Searxng, false));
+
+        // Losing it later shows, but does not interrupt.
+        cx.update(|_, cx| update_web(cx, |config| config.searxng.url = nothing));
+        dialog::draw(cx);
+        assert!(!dialog::is_open(cx));
+        assert!(cx.debug_bounds("searxng-on").is_none());
+        assert!(cx.debug_bounds("searxng-off").is_some());
+    }
+
+    /// Without one the user is asked whether to download it, and Cancel and Esc go back to the
+    /// service from before.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[gpui_kit::test]
+    fn a_missing_searxng_is_offered(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let cx = open(dir.path(), cx);
+        let (running, nothing) = addresses();
+        for cancel in [true, false] {
+            choose_searxng(&nothing, cx);
+            assert!(dialog::is_open(cx));
+            assert_eq!(service(cx), (BackendKind::Searxng, false));
+            if cancel {
+                dialog::click("searxng-setup-cancel", cx);
+            } else {
+                dialog::press("escape", cx);
+            }
+            assert!(!dialog::is_open(cx));
+            assert_eq!(service(cx), (BackendKind::Brave, false));
+        }
+
+        // Choosing it again asks again.
+        cx.update(|_, cx| update_web(cx, |config| config.backend = BackendKind::Searxng));
+        dialog::draw(cx);
+        assert!(!dialog::is_open(cx));
+        cx.update(|_, cx| choose_service(BackendKind::Searxng, cx));
+        dialog::draw(cx);
+        assert!(dialog::is_open(cx));
+        dialog::click("searxng-setup-cancel", cx);
+        assert_eq!(service(cx), (BackendKind::Searxng, false));
+
+        // Another address instead.
+        choose_searxng(&nothing, cx);
+        dialog::click("searxng-setup-address", cx);
+        assert!(dialog::is_open(cx));
+        dialog::click("searxng-address-cancel", cx);
+        assert_eq!(service(cx), (BackendKind::Brave, false));
+        choose_searxng(&nothing, cx);
+        dialog::click("searxng-setup-address", cx);
+        cx.simulate_keystrokes("secondary-a backspace");
+        // Without "http://", which is added.
+        cx.simulate_input(running.trim_start_matches("http://"));
+        dialog::press("enter", cx);
+        assert!(!dialog::is_open(cx));
+        assert_eq!(service(cx), (BackendKind::Searxng, false));
+        assert_eq!(cx.read(|cx| web_config(cx).searxng.url.clone()), running);
+        assert!(cx.debug_bounds("searxng-on").is_some());
+    }
+
+    /// The one that was downloaded before is used without asking; a cancelled download leaves
+    /// nothing chosen that is not there.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[gpui_kit::test]
+    fn an_installed_searxng_is_used(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let cx = open(dir.path(), cx);
+        let (_, nothing) = addresses();
+        cx.update(|_, cx| {
+            update_web(cx, |config| {
+                config.backend = BackendKind::Searxng;
+                config.searxng.local = true;
+            });
+            download_cancelled(cx);
+        });
+        assert_eq!(service(cx), (BackendKind::Duckduckgo, false));
+
+        let app = dir.path().join("searxng/app");
+        std::fs::create_dir_all(app.join("python/bin")).unwrap();
+        std::fs::write(app.join("python/bin/python3"), "").unwrap();
+        std::fs::write(app.join(".installed"), "older").unwrap();
+        cx.update(|_, cx| {
+            search_server(cx).update(cx, crate::search_server::SearchServer::refresh);
+        });
+        choose_searxng(&nothing, cx);
+        assert!(!dialog::is_open(cx));
+        assert_eq!(service(cx), (BackendKind::Searxng, true));
+        // This one cannot start: the light is red, and the row says why.
+        assert!(cx.debug_bounds("searxng-off").is_some());
+        cx.update(|_, cx| {
+            let server = search_server(cx).read(cx);
+            assert!(server.error().unwrap().contains("could not start"));
+        });
+
+        // "⋮" has Start, Update, Change address… and Remove….
+        let choose = |downs: usize, cx: &mut VisualTestContext| {
+            let menu = cx.debug_bounds("searxng-menu").unwrap();
+            cx.simulate_click(menu.center(), gpui_kit::Modifiers::default());
+            dialog::draw(cx);
+            cx.simulate_keystrokes(&vec!["down"; downs].join(" "));
+            cx.simulate_keystrokes("enter");
+            dialog::draw(cx);
         };
-        let supported = searxng::catalog::platform().is_some();
-        assert_eq!(
-            shown(&|config| config.searxng.url.clone_from(&nothing), cx),
-            [true, supported, false]
-        );
-        assert_eq!(
-            shown(&|config| config.searxng.url.clone_from(&running), cx),
-            [true, false, false]
-        );
-        assert_eq!(
-            shown(&|config| config.searxng.local = true, cx),
-            [!supported, false, supported]
-        );
+        choose(3, cx);
+        assert!(dialog::is_open(cx));
+        dialog::click("searxng-address-cancel", cx);
+        assert_eq!(service(cx), (BackendKind::Searxng, true));
+        choose(4, cx);
+        assert!(dialog::is_open(cx));
+        dialog::click("searxng-remove", cx);
+        assert!(!dialog::is_open(cx));
+        assert_eq!(service(cx), (BackendKind::Duckduckgo, false));
+        assert!(!dir.path().join("searxng").exists());
     }
 }
