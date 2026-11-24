@@ -16,7 +16,7 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
 - Tools that run other tools (subagents, code mode) show that work inside their own row: a
   live step count while running, and every nested call and reply when expanded.
 - Composer: attachments, working-folder picker (a long name fades out), model and thinking
-  pickers, context-window wheel,
+  pickers (only the thinking levels that differ on the model), context-window wheel,
   `/` command completion, inline `@file` completion (paths with spaces are quoted like pi does),
   ↑ / ↓ through earlier prompts, and `!cmd` shell commands (with live output; Esc stops them).
   Messages typed while pi starts, compacts or is busy sending are listed above the input as

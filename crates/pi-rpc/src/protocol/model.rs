@@ -3,6 +3,7 @@
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// pi's thinking level. `Xhigh` and `Max` exist only on models that support them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -66,9 +67,86 @@ pub struct Model {
     pub context_window: u64,
     #[serde(default)]
     pub max_tokens: u64,
+    /// What pi sends the provider for each thinking level (levels it does not list send their
+    /// own name). Like the two below kept as JSON, so an odd value set by an extension cannot
+    /// make the model unreadable.
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub thinking_level_map: Value,
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub sampling_params_by_thinking_level: Value,
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub compat: Value,
 }
 
 impl Model {
+    /// The levels of `offered` that do something different on this model. pi also offers the
+    /// ones `thinkingLevelMap` maps onto another level (`"high": "xhigh"`).
+    pub fn distinct_thinking_levels(&self, offered: &[ThinkingLevel]) -> Vec<ThinkingLevel> {
+        let keeps = |level: &ThinkingLevel| self.shown_thinking_level(*level, offered) == *level;
+        offered.iter().copied().filter(keeps).collect()
+    }
+
+    /// The level of [`Self::distinct_thinking_levels`] that does the same as `level`: the one
+    /// named like the value pi sends, otherwise the highest. `level` if there is none.
+    pub fn shown_thinking_level(
+        &self,
+        level: ThinkingLevel,
+        offered: &[ThinkingLevel],
+    ) -> ThinkingLevel {
+        let same = |other: &&ThinkingLevel| self.same_thinking(level, **other);
+        let named = |other: &&ThinkingLevel| self.thinking_value(**other) == other.as_str();
+        offered
+            .iter()
+            .filter(same)
+            .find(named)
+            .or_else(|| offered.iter().rfind(same))
+            .copied()
+            .unwrap_or(level)
+    }
+
+    /// Whether pi's requests are the same at both levels.
+    fn same_thinking(&self, a: ThinkingLevel, b: ThinkingLevel) -> bool {
+        let sampling = |level: ThinkingLevel| {
+            let params = self.sampling_params_by_thinking_level.get(level.as_str());
+            params.filter(|params| !params.is_null())
+        };
+        // Off is more than its value: pi turns thinking off in other ways too.
+        let off = a == ThinkingLevel::Off || b == ThinkingLevel::Off;
+        a == b
+            || (!off
+                && !self.sends_thinking_budget()
+                && self.thinking_value(a) == self.thinking_value(b)
+                && sampling(a) == sampling(b))
+    }
+
+    /// What pi sends for `level`, in lower case (Gemini's are in upper case).
+    fn thinking_value(&self, level: ThinkingLevel) -> String {
+        self.thinking_level_map
+            .get(level.as_str())
+            .and_then(Value::as_str)
+            .unwrap_or(level.as_str())
+            .to_lowercase()
+    }
+
+    /// Whether pi also sends a token budget, which is another one for each level.
+    fn sends_thinking_budget(&self) -> bool {
+        let set = |key: &str| {
+            self.compat
+                .get(key)
+                .is_some_and(|value| !matches!(value, Value::Null | Value::Bool(false)))
+        };
+        let template = |key: &str| {
+            self.compat
+                .get(key)
+                .and_then(Value::as_object)
+                .is_some_and(|values| values.values().any(|v| v["$var"] == "thinking.budget"))
+        };
+        set("thinkingTokenBudgetField")
+            || set("supportsThinkingTokenBudget")
+            || template("chatTemplateKwargs")
+            || template("chatTemplateArgs")
+    }
+
     /// `provider/id`, the form pi's `--model` flag and TUI use.
     pub fn qualified_id(&self) -> String {
         format!("{}/{}", self.provider, self.id)
@@ -235,6 +313,79 @@ mod tests {
                 serde_json::from_value::<ThinkingLevel>(encoded).unwrap(),
                 level
             );
+        }
+    }
+
+    fn reasoning_model(extra: &Value) -> Model {
+        let mut model = json!({"id": "m", "provider": "p", "reasoning": true});
+        for (key, value) in extra.as_object().unwrap() {
+            model[key] = value.clone();
+        }
+        serde_json::from_value(model).unwrap()
+    }
+
+    #[test]
+    fn levels_that_do_the_same_are_one() {
+        use ThinkingLevel::{High, Low, Max, Medium, Minimal, Off, Xhigh};
+
+        let map = json!({
+            "off": "none", "minimal": "low", "low": "low", "medium": "medium", "high": "xhigh",
+            "xhigh": "xhigh", "max": null
+        });
+        let offered = [Off, Minimal, Low, Medium, High, Xhigh];
+        let model = reasoning_model(&json!({"thinkingLevelMap": map}));
+        assert_eq!(
+            model.distinct_thinking_levels(&offered),
+            [Off, Low, Medium, Xhigh]
+        );
+        let shown = |level| model.shown_thinking_level(level, &offered);
+        assert_eq!(shown(Minimal), Low);
+        assert_eq!(shown(High), Xhigh);
+        assert_eq!(shown(Off), Off);
+        // Not offered at all.
+        assert_eq!(shown(Max), Max);
+
+        // A level the map leaves out sends its own name.
+        let model = reasoning_model(&json!({"thinkingLevelMap": {"minimal": "low"}}));
+        assert_eq!(
+            model.distinct_thinking_levels(&[Off, Minimal, Low, Medium, High]),
+            [Off, Low, Medium, High]
+        );
+        // No level is named like the value: the highest one. Off is never one of them.
+        let model = reasoning_model(&json!({"thinkingLevelMap":
+            {"off": "on", "low": "on", "medium": "on", "high": "on"}}));
+        assert_eq!(
+            model.distinct_thinking_levels(&[Off, Low, Medium, High]),
+            [Off, High]
+        );
+        // Gemini's names are in upper case.
+        let model = reasoning_model(&json!({"thinkingLevelMap":
+            {"minimal": "LOW", "low": "LOW", "medium": "HIGH", "high": "HIGH"}}));
+        assert_eq!(
+            model.distinct_thinking_levels(&[Minimal, Low, Medium, High]),
+            [Low, High]
+        );
+    }
+
+    #[test]
+    fn levels_that_differ_otherwise_stay() {
+        use ThinkingLevel::{High, Low, Medium, Minimal, Off};
+
+        let offered = [Off, Minimal, Low, Medium, High];
+        let map = json!({"minimal": "low", "low": "low"});
+        for extra in [
+            json!({}),
+            json!({"thinkingLevelMap": null}),
+            json!({"thinkingLevelMap": "odd"}),
+            json!({"thinkingLevelMap": map, "compat": {"supportsThinkingTokenBudget": true}}),
+            json!({"thinkingLevelMap": map, "compat": {"thinkingTokenBudgetField": "budget"}}),
+            json!({"thinkingLevelMap": map,
+                "compat": {"chatTemplateKwargs": {"b": {"$var": "thinking.budget"}}}}),
+            json!({"thinkingLevelMap": map,
+                "samplingParamsByThinkingLevel": {"minimal": {"temperature": 0.2}}}),
+        ] {
+            let model = reasoning_model(&extra);
+            assert_eq!(model.distinct_thinking_levels(&offered), offered, "{extra}");
         }
     }
 

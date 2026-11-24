@@ -189,6 +189,7 @@ pub struct PiSession {
     transcript: Transcript,
     state: Option<SessionState>,
     models: Vec<Model>,
+    /// All levels pi offers for the model; see [`Self::thinking_levels`].
     thinking_levels: Vec<ThinkingLevel>,
     stats: Option<SessionStats>,
     commands: Vec<SlashCommand>,
@@ -551,13 +552,33 @@ impl PiSession {
         &self.models
     }
 
+    /// The thinking level, as the one of [`Self::thinking_levels`] that does the same.
     pub fn thinking_level(&self) -> Option<ThinkingLevel> {
-        self.transcript
+        let level = self
+            .transcript
             .thinking_level()
-            .or_else(|| self.state.as_ref().map(|state| state.thinking_level))
+            .or_else(|| self.state.as_ref().map(|state| state.thinking_level))?;
+        Some(self.shown_thinking_level(level))
     }
 
-    pub fn thinking_levels(&self) -> &[ThinkingLevel] {
+    /// The one of [`Self::thinking_levels`] that does the same as `level`.
+    pub fn shown_thinking_level(&self, level: ThinkingLevel) -> ThinkingLevel {
+        match self.model() {
+            Some(model) => model.shown_thinking_level(level, &self.thinking_levels),
+            None => level,
+        }
+    }
+
+    /// The thinking levels that differ on the model.
+    pub fn thinking_levels(&self) -> Vec<ThinkingLevel> {
+        match self.model() {
+            Some(model) => model.distinct_thinking_levels(&self.thinking_levels),
+            None => self.thinking_levels.clone(),
+        }
+    }
+
+    /// All levels pi accepts, also those that do the same as another on the model.
+    pub fn accepted_thinking_levels(&self) -> &[ThinkingLevel] {
         &self.thinking_levels
     }
 
@@ -1101,16 +1122,15 @@ impl PiSession {
 
     /// Shift+Tab: next available thinking level.
     pub fn cycle_thinking_level(&mut self, cx: &mut Context<Self>) {
-        let (Some(current), false) = (self.thinking_level(), self.thinking_levels.is_empty())
-        else {
+        let levels = self.thinking_levels();
+        let (Some(current), false) = (self.thinking_level(), levels.is_empty()) else {
             return;
         };
-        let index = self
-            .thinking_levels
+        let index = levels
             .iter()
             .position(|level| *level == current)
             .unwrap_or(0);
-        let next = self.thinking_levels[(index + 1) % self.thinking_levels.len()];
+        let next = levels[(index + 1) % levels.len()];
         self.set_thinking_level(next, cx);
     }
 

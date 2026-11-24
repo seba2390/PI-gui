@@ -1266,7 +1266,7 @@ impl Composer {
 
     fn render_thinking_picker(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let session = self.session.read(cx);
-        let levels = session.thinking_levels().to_vec();
+        let levels = session.thinking_levels();
         let current = session.thinking_level();
         let reasoning = session.model().is_some_and(|model| model.reasoning);
         let handle = self.session.clone();

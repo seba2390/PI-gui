@@ -1,11 +1,11 @@
 //! Drives a real [`PiSession`] against the scripted fake pi from `pi-rpc`'s tests: prompts pi
-//! refuses, shell commands, compaction and queued messages.
+//! refuses, shell commands, compaction, queued messages and thinking levels.
 
 use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui_kit::{AppContext as _, Entity, Subscription, TestAppContext};
-use pi_rpc::protocol::ImageContent;
+use pi_rpc::protocol::{ImageContent, ThinkingLevel};
 use transcript::{BashItem, BashStatus, ItemKind, NoticeKind, RunStatus};
 
 use super::session::{Lifecycle, PiSession, SessionEvent};
@@ -399,4 +399,29 @@ async fn queued_images_are_given_back(cx: &mut TestAppContext) {
     assert_eq!((text.as_str(), images), ("again", vec![image("C")]));
     fake.until(cx, |session| !session.is_busy()).await;
     assert_eq!(fake.prompts(cx), ["hold", "delivered"]);
+}
+
+/// Levels the model maps onto another one are not listed; a session on one of them shows that
+/// other one, and Shift+Tab steps on from there.
+#[gpui_kit::test]
+async fn only_thinking_levels_that_differ_are_listed(cx: &mut TestAppContext) {
+    use ThinkingLevel::{High, Low, Medium, Minimal, Off, Xhigh};
+
+    let fake = Fake::ready(cx).await;
+    let levels = |cx: &mut TestAppContext| {
+        fake.read(cx, |session| {
+            (session.thinking_levels(), session.thinking_level())
+        })
+    };
+    assert_eq!(levels(cx), (vec![Off, Low, Medium, Xhigh], Some(Low)));
+    let set = |level, cx: &mut TestAppContext| {
+        fake.session
+            .update(cx, |session, cx| session.set_thinking_level(level, cx));
+        levels(cx).1
+    };
+    assert_eq!(set(Minimal, cx), Some(Low));
+    assert_eq!(set(High, cx), Some(Xhigh));
+    fake.session
+        .update(cx, |session, cx| session.cycle_thinking_level(cx));
+    assert_eq!(levels(cx).1, Some(Off));
 }

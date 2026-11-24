@@ -6,6 +6,12 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The thinking menu lists only the levels that differ on the model. Ones that its
+  `thinkingLevelMap` in `models.json` sends as another level are left out: with minimal sent as
+  low and high as xhigh, it has off, low, medium and xhigh. Shift+Tab steps through the same ones.
+
 ## [0.4.9] - 2026-11-24
 
 ### Changed

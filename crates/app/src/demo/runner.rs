@@ -227,10 +227,13 @@ impl Runner {
                     s.thinking_levels().len() > 1
                 })
                 .await?;
+                let level = self
+                    .session(cx)?
+                    .read_with(cx, |session, _| session.shown_thinking_level(*level));
                 self.pick("thinking-picker", &format!("thinking:{level}"), cx)
                     .await?;
                 self.wait_for_session(cx, &format!("thinking level {level}"), APPEAR, |s| {
-                    s.thinking_level() == Some(*level)
+                    s.thinking_level() == Some(level)
                 })
                 .await?;
             }
