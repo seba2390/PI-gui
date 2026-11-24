@@ -46,6 +46,22 @@ cargo test --workspace
 - Update [docs/FEATURES.md](docs/FEATURES.md) and [CHANGELOG.md](CHANGELOG.md) for
   user-visible changes.
 
+## Releasing
+
+For maintainers. Describe the changes under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md) (it
+becomes the release notes), commit everything, and run this on the branch with the changes:
+
+```bash
+script/release.sh 0.5.0   # --dry-run checks everything and changes nothing
+```
+
+It runs CI's checks, sets the version, dates the changelog section, pushes, opens a pull request
+into `main` and turns on auto-merge. Then GitHub does the rest: it merges once the required checks
+pass, `tag-release.yml` tags the merge and starts `release.yml`, and that builds the downloads,
+publishes the release and updates the Homebrew cask. If a required check fails, nothing is
+released: push a fix to the branch. If `release.yml` fails, run it again on the tag (Actions →
+Release → Run workflow).
+
 ## Handy tools
 
 ```bash
@@ -55,6 +71,7 @@ script/measure-memory.sh                 # memory of a running instance and its 
 script/perf.sh [release|debug] [runs] [baseline.json]   # time startup, navigation and quitting
 script/make-icon.sh                      # regenerate the .icns / PNG from icon.svg
 script/set-version.sh 0.5.0              # bump the version (Cargo.toml, Cargo.lock, README install links)
+script/release.sh 0.5.0                  # release a version (see Releasing)
 ```
 
 `script/shot.sh` stops any running `Pistachio.app` first.
