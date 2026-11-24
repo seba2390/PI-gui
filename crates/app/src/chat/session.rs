@@ -9,7 +9,7 @@ use pi_sessions::Mode;
 use remote::HostId;
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use gpui_kit::{Context, EventEmitter, Task};
 use pi_rpc::protocol::{
@@ -78,6 +78,10 @@ pub enum AfterFork {
     /// Leave it out: the branch ends before it.
     Keep,
 }
+
+/// How long after a lost connection the disconnect itself (which comes after the last events
+/// pi sent) may take to arrive.
+const DISCONNECT_GRACE: Duration = Duration::from_secs(1);
 
 /// The images of the user message `from_end` messages before the last one (0 is the
 /// newest), if its text is `text`; empty when it cannot be matched.
@@ -153,6 +157,15 @@ struct PendingPrompt {
     follow_up: bool,
 }
 
+/// The prompt pi has not answered yet. It is kept to give it back if pi refuses it.
+struct Sending {
+    prompt: PendingPrompt,
+    /// [`PiSession::runs_started`] when it was sent.
+    runs_before: u64,
+    /// Nothing was said in the conversation before it: it names it once pi accepts it.
+    first: bool,
+}
+
 pub struct PiSession {
     /// The SSH host pi runs on, or `None` for this computer.
     host: Option<HostId>,
@@ -176,8 +189,8 @@ pub struct PiSession {
     /// second message never arrives while pi still thinks it is idle (it would start a second
     /// run or be refused as busy).
     outbox: VecDeque<PendingPrompt>,
-    /// A prompt was sent and pi has not answered yet.
-    sending: bool,
+    /// The prompt that was sent and that pi has not answered yet.
+    sending: Option<Sending>,
     /// pi said it started a run whose first event has not arrived yet (until then,
     /// `transcript.is_running()` is still false). Responses and events travel separately, so
     /// the run may also have started (and even ended) before the response is handled: see
@@ -201,13 +214,10 @@ pub struct PiSession {
 }
 
 /// Automatic naming looks at the first prompt only.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Naming {
-    /// No prompt was sent yet.
+    /// pi accepted no prompt yet.
     NotYet,
-    /// The first message waits for pi to start and report the conversation's model, which
-    /// names it.
-    WaitingForModel(String),
     /// Started, skipped or not wanted; later prompts never name the conversation.
     Considered,
 }
@@ -274,7 +284,7 @@ impl PiSession {
             extension_status: BTreeMap::new(),
             widgets: BTreeMap::new(),
             outbox: VecDeque::new(),
-            sending: false,
+            sending: None,
             awaiting_start: false,
             runs_started: 0,
             reported_busy: false,
@@ -355,6 +365,7 @@ impl PiSession {
                         options.program.display()
                     ),
                 };
+                this.return_outbox(cx);
                 cx.notify();
             }
         }
@@ -380,7 +391,7 @@ impl PiSession {
             extension_status: BTreeMap::new(),
             widgets: BTreeMap::new(),
             outbox: VecDeque::new(),
-            sending: false,
+            sending: None,
             awaiting_start: false,
             runs_started: 0,
             reported_busy: false,
@@ -442,7 +453,10 @@ impl PiSession {
     /// the user switches away, or its messages are lost.
     pub fn is_busy(&self) -> bool {
         matches!(self.lifecycle, Lifecycle::Starting | Lifecycle::Ready)
-            && (self.is_running() || self.sending || self.awaiting_start || !self.outbox.is_empty())
+            && (self.is_running()
+                || self.sending.is_some()
+                || self.awaiting_start
+                || !self.outbox.is_empty())
     }
 
     pub fn model(&self) -> Option<&Model> {
@@ -615,12 +629,6 @@ impl PiSession {
         follow_up: bool,
         cx: &mut Context<Self>,
     ) {
-        if self.naming == Naming::NotYet {
-            self.naming = Naming::Considered;
-            if self.is_first_prompt() {
-                self.start_naming(&text, cx);
-            }
-        }
         // Only a visible run can be steered; anything sent before it shows (typed while pi
         // starts, or right after another message) waits its turn as a follow-up.
         let follow_up = follow_up || !self.is_running();
@@ -634,11 +642,9 @@ impl PiSession {
         cx.notify();
     }
 
-    /// Whether nothing was said in this conversation yet: a new session, no prompt shown or
-    /// waiting.
+    /// Whether nothing was said in this conversation yet: a new session, no prompt shown.
     fn is_first_prompt(&self) -> bool {
         self.resumed_from.is_none()
-            && self.outbox.is_empty()
             && !self
                 .transcript
                 .items()
@@ -646,9 +652,20 @@ impl PiSession {
                 .any(|item| matches!(item.kind, transcript::ItemKind::User(_)))
     }
 
+    /// Names the conversation after the prompt pi just accepted, if it is the first one.
+    /// Later prompts never do.
+    fn consider_naming(&mut self, sent: &Sending, cx: &mut Context<Self>) {
+        if self.naming == Naming::NotYet {
+            self.naming = Naming::Considered;
+            if sent.first {
+                self.start_naming(&sent.prompt.text, cx);
+            }
+        }
+    }
+
     /// Starts naming the conversation after its first `message`, if the user turned automatic
-    /// names on (see [`crate::naming`]). The prompt is sent right away regardless: naming
-    /// runs beside it, so a slow namer never holds the conversation up.
+    /// names on (see [`crate::naming`]). Naming runs beside the conversation, so a slow namer
+    /// never holds it up.
     fn start_naming(&mut self, message: &str, cx: &mut Context<Self>) {
         let Some(settings) = cx.try_global::<crate::settings::AppSettings>() else {
             return;
@@ -668,10 +685,7 @@ impl PiSession {
                 None => log::info!("no local naming model is installed; not naming"),
             },
             crate::naming::Namer::Conversation => {
-                if self.lifecycle == Lifecycle::Starting {
-                    // The model is known once pi has started (see `initialize`).
-                    self.naming = Naming::WaitingForModel(message.to_owned());
-                } else if let Some(job) = self.pi_naming_job(message.to_owned(), cx) {
+                if let Some(job) = self.pi_naming_job(message.to_owned(), cx) {
                     self.run_naming(job, cx);
                 }
             }
@@ -717,7 +731,7 @@ impl PiSession {
 
     /// Sends the next waiting prompt once pi is ready and has answered the previous one.
     fn flush_outbox(&mut self, cx: &mut Context<Self>) {
-        if self.sending || self.lifecycle != Lifecycle::Ready {
+        if self.sending.is_some() || self.lifecycle != Lifecycle::Ready {
             return;
         }
         let Some(client) = self.client.clone() else {
@@ -726,32 +740,60 @@ impl PiSession {
         let Some(prompt) = self.outbox.pop_front() else {
             return;
         };
-        self.sending = true;
-        let runs_before = self.runs_started;
         // pi ignores the behaviour while idle and queues the prompt while a run is active.
         let behavior = Some(if prompt.follow_up {
             StreamingBehavior::FollowUp
         } else {
             StreamingBehavior::Steer
         });
+        let (text, images) = (prompt.text.clone(), prompt.images.clone());
+        self.sending = Some(Sending {
+            prompt,
+            runs_before: self.runs_started,
+            first: self.is_first_prompt(),
+        });
         cx.spawn(async move |this, cx| {
-            let result = client.prompt(prompt.text, prompt.images, behavior).await;
-            let _ = this.update(cx, |this, cx| {
-                this.sending = false;
-                match result {
-                    // Unless its run already showed up: then the transcript tracks it.
-                    Ok(Disposition::Started) => {
-                        this.awaiting_start = this.runs_started == runs_before;
-                    }
-                    // Joins the active run, which the transcript tracks.
-                    Ok(Disposition::Queued | Disposition::Handled) => {}
-                    Err(error) => this.report(&error, cx),
-                }
-                this.flush_outbox(cx);
-                this.report_busy(cx);
-            });
+            let result = client.prompt(text, images, behavior).await;
+            if matches!(result, Err(RpcError::Disconnected)) {
+                // Events pi sent before it stopped may still wait to be handled, and they say
+                // whether the prompt's run started. The disconnect comes after them and gives
+                // the prompt back; this is for when it doesn't come.
+                cx.background_executor().timer(DISCONNECT_GRACE).await;
+            }
+            let _ = this.update(cx, |this, cx| this.prompt_answered(result, cx));
         })
         .detach();
+    }
+
+    /// pi accepted or refused the prompt being sent.
+    fn prompt_answered(&mut self, result: Result<Disposition, RpcError>, cx: &mut Context<Self>) {
+        // pi stopped, and the prompt was given back already.
+        let Some(sent) = self.sending.take() else {
+            return;
+        };
+        match result {
+            Ok(Disposition::Started) => {
+                // Unless its run already showed up: then the transcript tracks it.
+                self.awaiting_start = self.runs_started == sent.runs_before;
+                self.consider_naming(&sent, cx);
+            }
+            // Joins the active run, which the transcript tracks.
+            Ok(Disposition::Queued) => self.consider_naming(&sent, cx),
+            // A command: nothing was said.
+            Ok(Disposition::Handled) => {}
+            // pi took the prompt, but its answer could not be read.
+            Err(error @ RpcError::Decode { .. }) => self.report(&error, cx),
+            Err(error) => {
+                // The ones behind it go back too: sent now, they would be refused as well, or
+                // be answered without it.
+                self.outbox.push_front(sent.prompt);
+                self.return_outbox(cx);
+                self.report(&error, cx);
+            }
+        }
+        self.flush_outbox(cx);
+        self.report_busy(cx);
+        cx.notify();
     }
 
     /// Emits [`SessionEvent::BusyChanged`] when [`Self::is_busy`] changed since last time.
@@ -781,7 +823,8 @@ impl PiSession {
         (texts, images)
     }
 
-    /// Gives prompts that can no longer be sent (pi exited) back to the composer.
+    /// Gives prompts that can no longer be sent (pi exited, or refused one) back to the
+    /// composer.
     fn return_outbox(&mut self, cx: &mut Context<Self>) {
         let (texts, images) = self.take_outbox(cx);
         if !texts.is_empty() || !images.is_empty() {
@@ -1393,13 +1436,6 @@ impl PiSession {
                 if this.lifecycle == Lifecycle::Ready {
                     this.apply_pending_model(cx);
                 }
-                if matches!(this.naming, Naming::WaitingForModel(_))
-                    && let Naming::WaitingForModel(message) =
-                        std::mem::replace(&mut this.naming, Naming::Considered)
-                    && let Some(job) = this.pi_naming_job(message, cx)
-                {
-                    this.run_naming(job, cx);
-                }
                 // A replaced transcript restarts item ids: rebuild every row.
                 cx.emit(if replaced {
                     SessionEvent::Reloaded
@@ -1495,7 +1531,12 @@ impl PiSession {
                 }
                 self.lifecycle = Lifecycle::Exited { message };
                 self.client = None;
-                self.sending = false;
+                if let Some(sent) = self.sending.take()
+                    && self.runs_started == sent.runs_before
+                {
+                    // pi stopped before it took the prompt.
+                    self.outbox.push_front(sent.prompt);
+                }
                 self.awaiting_start = false;
                 self.return_outbox(cx);
                 cx.emit(SessionEvent::MetaChanged);

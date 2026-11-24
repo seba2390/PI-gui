@@ -3,6 +3,9 @@
 
 Answers the commands the GUI sends at startup and streams a tiny run for `prompt`.
 Writes strict JSONL to stdout and exits when stdin closes, like pi.
+
+Prompts that act differently: "refuse ..." is rejected, "die" makes pi exit instead of
+answering, "start and die" makes it exit after the run started.
 """
 import json
 import sys
@@ -25,6 +28,13 @@ for line in sys.stdin:
         reply["data"] = {"model": model, "thinkingLevel": "low", "sessionId": "s1"}
     elif kind == "get_available_models":
         reply["data"] = {"models": [model]}
+    elif kind == "prompt" and command["message"].startswith("refuse"):
+        reply.update(success=False, error="No API key found for the selected model.")
+    elif kind == "prompt" and command["message"] == "die":
+        break
+    elif kind == "prompt" and command["message"] == "start and die":
+        emit({"type": "agent_start"})
+        break
     elif kind == "prompt":
         reply["data"] = {"disposition": "started"}
         emit(reply)
