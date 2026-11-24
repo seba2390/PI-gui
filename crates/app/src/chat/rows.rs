@@ -14,8 +14,8 @@ use transcript::explore::{Group, RowRole};
 use transcript::search::Field;
 use transcript::tool::{self, DiffKind, PathContext, ToolKind};
 use transcript::{
-    AssistantItem, BlockKind, ItemId, ItemKind, NestedEntry, NoticeKind, RunStatus, ThinkingBlock,
-    ToolBlock, ToolStatus, TranscriptItem, format_duration,
+    AssistantItem, BashItem, BashStatus, BlockKind, ItemId, ItemKind, NestedEntry, NoticeKind,
+    RunStatus, ThinkingBlock, ToolBlock, ToolStatus, TranscriptItem, format_duration,
 };
 
 use super::images;
@@ -209,40 +209,7 @@ fn render_item(item: &TranscriptItem, cx: &RowContext<'_>, bubble: Hsla, app: &A
             .child(user_actions(item.id.0, &user.text, cx, app))
             .into_any_element(),
         ItemKind::Assistant(assistant) => render_assistant(item, assistant, cx),
-        ItemKind::Bash {
-            command,
-            output,
-            exit_code,
-        } => v_flex()
-            .gap_1()
-            .child(
-                h_flex()
-                    .gap_2()
-                    .font_family(cx.mono.clone())
-                    .text_sm()
-                    .child(div().text_color(cx.palette.accent).child("$"))
-                    .child(div().text_color(cx.foreground).child(command.clone()))
-                    .when_some(exit_code.filter(|code| *code != 0), |this, code| {
-                        this.child(
-                            div()
-                                .text_color(cx.palette.error)
-                                .child(format!("exit {code}")),
-                        )
-                    }),
-            )
-            .when(!output.trim().is_empty(), |this| {
-                this.child(output_box(
-                    ("bash-out", item.id.0),
-                    output,
-                    None,
-                    BlockKey {
-                        item: item.id,
-                        block: 0,
-                    },
-                    cx,
-                ))
-            })
-            .into_any_element(),
+        ItemKind::Bash(bash) => render_bash(item.id, bash, cx),
         ItemKind::Notice(notice) => {
             let (icon, color): (Icon, Hsla) = match notice.kind {
                 NoticeKind::Error => (IconName::CircleX.into(), cx.palette.error),
@@ -282,6 +249,89 @@ fn render_item(item: &TranscriptItem, cx: &RowContext<'_>, bubble: Hsla, app: &A
                 .into_any_element()
         }
     }
+}
+
+/// A shell command the user ran: the command, its output, and while it runs how long it has
+/// been running.
+fn render_bash(id: ItemId, bash: &BashItem, cx: &RowContext<'_>) -> AnyElement {
+    let error = cx.palette.error;
+    let ended = match bash.status {
+        BashStatus::Running { .. }
+        | BashStatus::Done {
+            exit_code: None | Some(0),
+        } => None,
+        BashStatus::Done {
+            exit_code: Some(code),
+        } => Some((error, format!("exit {code}"))),
+        BashStatus::Cancelled => Some((cx.muted, "Cancelled".to_owned())),
+        BashStatus::Failed => Some((error, "Failed".to_owned())),
+    };
+    let output = bash.shown_output();
+    v_flex()
+        .gap_1()
+        .child(
+            h_flex()
+                .gap_2()
+                .font_family(cx.mono.clone())
+                .text_sm()
+                .child(div().text_color(cx.palette.accent).child("$"))
+                .child(div().text_color(cx.foreground).child(bash.command.clone()))
+                .when_some(ended, |this, (color, label)| {
+                    this.child(div().flex_none().text_color(color).child(label))
+                }),
+        )
+        .when(!output.trim().is_empty(), |this| {
+            this.child(output_box(
+                ("bash-out", id.0),
+                output,
+                None,
+                BlockKey { item: id, block: 0 },
+                cx,
+            ))
+        })
+        .when_some(bash.full_output.clone(), |this, path| {
+            this.child(
+                div()
+                    .text_xs()
+                    .text_color(cx.muted)
+                    .child(format!("Only the end is shown. All of it: {path}")),
+            )
+        })
+        .when_some(
+            match bash.status {
+                BashStatus::Running { since } => Some(since),
+                _ => None,
+            },
+            |this, since| this.child(render_bash_running(since, cx)),
+        )
+        .into_any_element()
+}
+
+/// The line under a running command. Esc stops the agent first when it works too, so it is
+/// only offered while the agent rests.
+fn render_bash_running(since: Instant, cx: &RowContext<'_>) -> impl IntoElement {
+    let style = working_style(cx);
+    let elapsed = format_duration(since.elapsed());
+    let hint = if cx.session.read(cx.app).is_running() {
+        elapsed
+    } else {
+        format!("{elapsed} · esc to stop")
+    };
+    h_flex()
+        .items_center()
+        .gap_1p5()
+        .text_xs()
+        .child(crate::ui::spinner::working_indicator(
+            style,
+            px(11.),
+            cx.palette.accent,
+        ))
+        .child(crate::ui::spinner::working_label(
+            style,
+            "Running…".into(),
+            cx.palette.accent,
+        ))
+        .child(div().text_color(cx.muted).child(hint))
 }
 
 /// Hover actions under a prompt: copy it, or edit it (the conversation continues in a new
@@ -1253,6 +1303,12 @@ fn diff_box(
         .into_any_element()
 }
 
+fn working_style(cx: &RowContext<'_>) -> crate::ui::spinner::IndicatorStyle {
+    cx.app
+        .global::<crate::settings::AppSettings>()
+        .working_indicator
+}
+
 fn render_working(status: &RunStatus, cx: &RowContext<'_>) -> AnyElement {
     let (label, since): (String, Option<Instant>) = match status {
         RunStatus::Working { since } => ("Working…".to_owned(), Some(*since)),
@@ -1268,10 +1324,7 @@ fn render_working(status: &RunStatus, cx: &RowContext<'_>) -> AnyElement {
         RunStatus::Idle => ("Working…".to_owned(), None),
     };
     let elapsed = since.map(|since| since.elapsed());
-    let style = cx
-        .app
-        .global::<crate::settings::AppSettings>()
-        .working_indicator;
+    let style = working_style(cx);
     h_flex()
         .w_full()
         .justify_center()

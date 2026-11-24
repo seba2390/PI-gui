@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use gpui_kit::{AppContext as _, Entity, Subscription, TestAppContext};
 use pi_rpc::protocol::ImageContent;
-use transcript::{ItemKind, NoticeKind};
+use transcript::{BashItem, BashStatus, ItemKind, NoticeKind};
 
 use super::session::{Lifecycle, PiSession, SessionEvent};
 use crate::config::AppConfig;
@@ -50,6 +50,10 @@ impl Fake {
         }
     }
 
+    async fn until_event(&self, wanted: impl Fn(&SessionEvent) -> bool) {
+        while !wanted(&self.events.recv().await.expect("session alive")) {}
+    }
+
     /// Waits for messages given back to the composer.
     async fn restored(&self) -> (String, Vec<ImageContent>) {
         loop {
@@ -71,12 +75,34 @@ impl Fake {
         });
     }
 
+    fn run_bash(&self, command: &str, cx: &mut TestAppContext) {
+        self.session.update(cx, |session, cx| {
+            session.run_bash(command.into(), false, cx);
+        });
+    }
+
+    fn interrupt(&self, cx: &mut TestAppContext) {
+        self.session.update(cx, |session, cx| session.interrupt(cx));
+    }
+
     fn read<T>(&self, cx: &mut TestAppContext, read: impl Fn(&PiSession) -> T) -> T {
         cx.read(|cx| read(self.session.read(cx)))
     }
 
     fn is_busy(&self, cx: &mut TestAppContext) -> bool {
         self.read(cx, PiSession::is_busy)
+    }
+
+    /// The newest shell command.
+    fn bash(&self, cx: &mut TestAppContext) -> BashItem {
+        self.read(cx, |session| {
+            let items = session.transcript().items();
+            let bash = items.iter().rev().find_map(|item| match &item.kind {
+                ItemKind::Bash(bash) => Some(bash.clone()),
+                _ => None,
+            });
+            bash.expect("a shell command ran")
+        })
     }
 
     fn prompts(&self, cx: &mut TestAppContext) -> Vec<String> {
@@ -187,4 +213,72 @@ async fn a_refused_first_prompt_does_not_name_the_conversation(cx: &mut TestAppC
         fake.read(cx, PiSession::title).as_deref(),
         Some("fix tests")
     );
+}
+
+/// A shell command shows while it runs and keeps the chat busy; Esc stops it.
+#[gpui_kit::test]
+async fn a_shell_command_streams_and_stops(cx: &mut TestAppContext) {
+    let fake = Fake::ready(cx).await;
+    fake.run_bash("hang", cx);
+    assert!(fake.is_busy(cx), "busy right away");
+    assert!(matches!(fake.bash(cx).status, BashStatus::Running { .. }));
+    assert!(fake.read(cx, PiSession::can_stop));
+    assert!(!fake.read(cx, PiSession::is_running), "the agent rests");
+    fake.until_event(|event| matches!(event, SessionEvent::BusyChanged))
+        .await;
+    fake.until(cx, |session| session.transcript().revision() > 1)
+        .await;
+    assert_eq!(fake.bash(cx).output, "working\n");
+
+    fake.interrupt(cx);
+    fake.until(cx, |session| !session.is_busy()).await;
+    assert_eq!(fake.bash(cx).status, BashStatus::Cancelled);
+    assert_eq!(fake.bash(cx).output, "working\n");
+    assert!(fake.notices(cx).is_empty());
+}
+
+/// Every way a command ends leaves no running row behind.
+#[gpui_kit::test]
+async fn shell_commands_always_end(cx: &mut TestAppContext) {
+    let fake = Fake::ready(cx).await;
+    fake.run_bash("make", cx);
+    fake.until(cx, |session| !session.is_busy()).await;
+    let exit_code = Some(3);
+    assert_eq!(fake.bash(cx).status, BashStatus::Done { exit_code });
+    assert_eq!(fake.bash(cx).output, "part two");
+
+    fake.run_bash("refuse", cx);
+    fake.until(cx, |session| !session.is_busy()).await;
+    assert_eq!(fake.bash(cx).status, BashStatus::Failed);
+    assert_eq!(
+        fake.notices(cx),
+        [(NoticeKind::Error, "spawn failed".to_owned())]
+    );
+
+    fake.run_bash("die", cx);
+    fake.until(cx, |session| {
+        matches!(session.lifecycle(), Lifecycle::Exited { .. })
+    })
+    .await;
+    assert_eq!(fake.bash(cx).status, BashStatus::Cancelled);
+    assert!(!fake.read(cx, PiSession::is_bash_running));
+    let notices = fake.notices(cx).len();
+    // pi is gone: the command is not lost silently.
+    fake.run_bash("make", cx);
+    assert_eq!(fake.notices(cx).len(), notices + 1);
+}
+
+/// Like in pi's terminal, Esc stops the agent first and the shell command after that.
+#[gpui_kit::test]
+async fn esc_stops_the_agent_before_a_shell_command(cx: &mut TestAppContext) {
+    let fake = Fake::ready(cx).await;
+    fake.run_bash("hang", cx);
+    fake.submit("hold", &[], cx);
+    fake.until(cx, PiSession::is_running).await;
+    fake.interrupt(cx);
+    fake.until(cx, |session| !session.is_running()).await;
+    assert!(fake.read(cx, PiSession::is_bash_running));
+    fake.interrupt(cx);
+    fake.until(cx, |session| !session.is_busy()).await;
+    assert_eq!(fake.bash(cx).status, BashStatus::Cancelled);
 }

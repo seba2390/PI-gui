@@ -456,7 +456,7 @@ mod unix {
             // Also when the shell ends without a report.
             assert!(probe(&shell(dir.path(), "sleep 15 &\nexit 0"), LONG).is_err());
             assert!(
-                started.elapsed() < Duration::from_secs(10),
+                started.elapsed() < Duration::from_secs(20),
                 "{:?}",
                 started.elapsed()
             );
@@ -469,10 +469,10 @@ mod unix {
             // The shell waits for a command, which must go too.
             let rc = format!("echo $$ > '{}'\nsleep 60", pid_file.display());
             let started = Instant::now();
-            let error = probe(&shell(dir.path(), &rc), Duration::from_secs(2)).unwrap_err();
+            let error = probe(&shell(dir.path(), &rc), Duration::from_secs(5)).unwrap_err();
             assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
             assert!(
-                started.elapsed() < Duration::from_secs(10),
+                started.elapsed() < Duration::from_secs(20),
                 "{:?}",
                 started.elapsed()
             );

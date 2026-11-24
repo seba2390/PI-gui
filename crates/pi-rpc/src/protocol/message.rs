@@ -202,6 +202,9 @@ pub struct BashExecutionMessage {
     pub cancelled: bool,
     #[serde(default)]
     pub truncated: bool,
+    /// The file with the whole output, when `output` is only the end of it.
+    #[serde(default)]
+    pub full_output_path: Option<String>,
     #[serde(default)]
     pub exclude_from_context: bool,
     #[serde(default)]
