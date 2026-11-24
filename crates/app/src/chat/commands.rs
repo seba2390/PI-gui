@@ -6,7 +6,7 @@
 //! sent to pi unchanged, exactly as the terminal does.
 
 use gpui_kit::{App, ClipboardItem, Entity, Window};
-use pi_rpc::protocol::ThinkingLevel;
+use pi_rpc::protocol::{Model, ThinkingLevel};
 use transcript::{BlockKind, ItemKind, NoticeKind};
 
 use super::dialogs::{PickerItem, open_picker};
@@ -83,6 +83,86 @@ pub fn suggestions(text: &str, pi_commands: &[pi_rpc::protocol::SlashCommand]) -
     matches.dedup_by(|a, b| a.name == b.name);
     matches.truncate(8);
     matches
+}
+
+/// What `/model` found for the text after it.
+#[derive(Debug, PartialEq)]
+enum ModelMatch<'a> {
+    One(&'a Model),
+    /// Several models fit equally well; the user has to say which.
+    Several(Vec<&'a Model>),
+    None,
+}
+
+/// Finds the model `text` means: its qualified id (`provider/id`), its id or its display name,
+/// else the only one that starts with the text, else the only one that contains it. An id (or
+/// name) that several providers offer means the current provider's, if that has exactly one.
+fn find_model<'a>(text: &str, models: &'a [Model], current: Option<&Model>) -> ModelMatch<'a> {
+    let text = text.trim().to_lowercase();
+    if text.is_empty() {
+        return ModelMatch::None;
+    }
+    let find = |fits: &dyn Fn(&str) -> bool, fields: &dyn Fn(&Model) -> Vec<String>| {
+        models
+            .iter()
+            .filter(|model| {
+                fields(model)
+                    .iter()
+                    .any(|field| fits(&field.to_lowercase()))
+            })
+            .collect::<Vec<_>>()
+    };
+    let all = |model: &Model| vec![model.qualified_id(), model.id.clone(), model.name.clone()];
+    let exact = |field: &str| field == text;
+    for fields in [
+        &Model::qualified_id as &dyn Fn(&Model) -> String,
+        &|model: &Model| model.id.clone(),
+        &|model: &Model| model.name.clone(),
+    ] {
+        let found = find(&exact, &|model| vec![fields(model)]);
+        let own: Vec<_> = found
+            .iter()
+            .copied()
+            .filter(|model| current.is_some_and(|current| current.provider == model.provider))
+            .collect();
+        match (found.as_slice(), own.as_slice()) {
+            ([], _) => {}
+            ([model], _) | (_, [model]) => return ModelMatch::One(model),
+            _ => return ModelMatch::Several(found),
+        }
+    }
+    let starting = find(&|field| field.starts_with(&text), &all);
+    let found = if starting.is_empty() {
+        find(&|field| field.contains(&text), &all)
+    } else {
+        starting
+    };
+    match found.as_slice() {
+        [] => ModelMatch::None,
+        [model] => ModelMatch::One(model),
+        _ => ModelMatch::Several(found),
+    }
+}
+
+/// How many models an ambiguous `/model` lists.
+const MODELS_LISTED: usize = 8;
+
+/// The notice for an ambiguous `/model`: the models it could mean, as the ids that select them.
+fn several_models(text: &str, models: &[&Model]) -> String {
+    let mut lines = vec![format!(
+        "Several models match “{}”. Type more of the name, or one of:",
+        text.trim()
+    )];
+    lines.extend(
+        models
+            .iter()
+            .take(MODELS_LISTED)
+            .map(|model| model.qualified_id()),
+    );
+    if models.len() > MODELS_LISTED {
+        lines.push(format!("… and {} more", models.len() - MODELS_LISTED));
+    }
+    lines.join("\n")
 }
 
 /// Parsed form of composer text, independent of GPUI so it is unit-testable.
@@ -221,58 +301,8 @@ fn builtin(
             let name = args.to_owned();
             session.update(cx, |session, cx| session.rename(name, cx));
         }
-        "thinking" => {
-            let level = ThinkingLevel::ALL
-                .into_iter()
-                .find(|level| level.as_str() == args);
-            match level {
-                Some(level) => {
-                    session.update(cx, |session, cx| session.set_thinking_level(level, cx));
-                }
-                None => {
-                    let available = session
-                        .read(cx)
-                        .thinking_levels()
-                        .iter()
-                        .map(|level| level.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    notice(
-                        session,
-                        NoticeKind::Warning,
-                        format!("Usage: /thinking <{available}>"),
-                        cx,
-                    );
-                    return CommandOutcome::Keep;
-                }
-            }
-        }
-        "model" => {
-            let needle = args.to_lowercase();
-            let model = session
-                .read(cx)
-                .models()
-                .iter()
-                .find(|model| {
-                    !needle.is_empty()
-                        && (model.qualified_id().to_lowercase() == needle
-                            || model.id.to_lowercase().contains(&needle)
-                            || model.name.to_lowercase().contains(&needle))
-                })
-                .cloned();
-            match model {
-                Some(model) => session.update(cx, |session, cx| session.set_model(&model, cx)),
-                None => {
-                    notice(
-                        session,
-                        NoticeKind::Warning,
-                        "Usage: /model <provider/id or name> — or use the model picker.".into(),
-                        cx,
-                    );
-                    return CommandOutcome::Keep;
-                }
-            }
-        }
+        "thinking" => return set_thinking(args, session, cx),
+        "model" => return set_model(args, session, cx),
         "session" => {
             let text = session_summary(session.read(cx));
             notice(session, NoticeKind::Info, text, cx);
@@ -315,6 +345,56 @@ fn builtin(
     }
     CommandOutcome::Handled
 }
+
+/// `/thinking <level>`: one of the levels the model offers (any of pi's while those are not
+/// known yet).
+fn set_thinking(args: &str, session: &Entity<PiSession>, cx: &mut App) -> CommandOutcome {
+    let offered = match session.read(cx).thinking_levels() {
+        [] => ThinkingLevel::ALL.to_vec(),
+        levels => levels.to_vec(),
+    };
+    if let Some(level) = offered
+        .iter()
+        .copied()
+        .find(|level| level.as_str().eq_ignore_ascii_case(args))
+    {
+        session.update(cx, |session, cx| session.set_thinking_level(level, cx));
+        return CommandOutcome::Handled;
+    }
+    let offered: Vec<_> = offered.iter().map(|level| level.as_str()).collect();
+    notice(
+        session,
+        NoticeKind::Warning,
+        format!("Usage: /thinking <{}>", offered.join(", ")),
+        cx,
+    );
+    CommandOutcome::Keep
+}
+
+/// `/model <text>`: switches to the model it means, or says why it can't tell.
+fn set_model(args: &str, session: &Entity<PiSession>, cx: &mut App) -> CommandOutcome {
+    let found = {
+        let session = session.read(cx);
+        match find_model(args, session.models(), session.model()) {
+            ModelMatch::One(model) => Ok(model.clone()),
+            ModelMatch::Several(models) => Err(several_models(args, &models)),
+            ModelMatch::None if args.is_empty() => Err(MODEL_USAGE.to_owned()),
+            ModelMatch::None => Err(format!("No model matches “{args}”. {MODEL_USAGE}")),
+        }
+    };
+    match found {
+        Ok(model) => {
+            session.update(cx, |session, cx| session.set_model(&model, cx));
+            CommandOutcome::Handled
+        }
+        Err(text) => {
+            notice(session, NoticeKind::Warning, text, cx);
+            CommandOutcome::Keep
+        }
+    }
+}
+
+const MODEL_USAGE: &str = "Usage: /model <provider/id or name> — or use the model picker.";
 
 /// `/fork`: pick one of pi's user messages; the branch starts before it, with its text in
 /// the composer to edit and send.
@@ -482,5 +562,79 @@ mod tests {
         assert_eq!(names("/compact now"), Vec::<&str>::new());
         assert_eq!(names("hello"), Vec::<&str>::new());
         assert_eq!(names("/").len(), 8);
+    }
+
+    fn model(provider: &str, id: &str, name: &str) -> Model {
+        serde_json::from_value(serde_json::json!({
+            "provider": provider, "id": id, "name": name,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn finds_the_model_that_is_meant() {
+        let models = [
+            model("openai", "gpt-5-mini", "GPT-5 mini"),
+            model("openai", "gpt-5", "GPT-5"),
+            model("openrouter", "openai/gpt-5-nano", "GPT-5 nano"),
+            model("anthropic", "claude-opus-5", "Claude Opus 5"),
+        ];
+        let found = |text: &str| match find_model(text, &models, None) {
+            ModelMatch::One(model) => model.qualified_id(),
+            ModelMatch::Several(models) => format!("{} models", models.len()),
+            ModelMatch::None => "none".to_owned(),
+        };
+        // An exact id or name wins over one that only starts with it.
+        assert_eq!(found("gpt-5"), "openai/gpt-5");
+        assert_eq!(found("GPT-5"), "openai/gpt-5");
+        assert_eq!(found("openai/gpt-5"), "openai/gpt-5");
+        assert_eq!(found(" claude opus 5 "), "anthropic/claude-opus-5");
+        // One prefix wins over models that contain the text elsewhere.
+        assert_eq!(found("openai/gpt-5-n"), "openrouter/openai/gpt-5-nano");
+        assert_eq!(found("gpt-5-m"), "openai/gpt-5-mini");
+        assert_eq!(found("opus"), "anthropic/claude-opus-5");
+        // Several: no guessing.
+        assert_eq!(found("gpt"), "3 models");
+        assert_eq!(found("mystery"), "none");
+        assert_eq!(found(""), "none");
+    }
+
+    #[test]
+    fn the_same_id_in_several_providers_is_ambiguous() {
+        let models = [
+            model("openai", "gpt-5", "GPT-5"),
+            model("azure", "gpt-5", "GPT-5"),
+            model("anthropic", "claude-opus-5", "Claude Opus 5"),
+        ];
+        let ModelMatch::Several(found) = find_model("gpt-5", &models, Some(&models[2])) else {
+            panic!("ambiguous");
+        };
+        assert_eq!(
+            several_models("gpt-5", &found),
+            "Several models match “gpt-5”. Type more of the name, or one of:\n\
+             openai/gpt-5\nazure/gpt-5"
+        );
+        // The current provider's is meant, when it has one.
+        assert_eq!(
+            find_model("gpt-5", &models, Some(&models[1])),
+            ModelMatch::One(&models[1])
+        );
+        assert_eq!(
+            find_model("azure/gpt-5", &models, Some(&models[0])),
+            ModelMatch::One(&models[1])
+        );
+    }
+
+    #[test]
+    fn a_long_list_of_models_is_cut() {
+        let models: Vec<Model> = (0..12)
+            .map(|index| model("p", &format!("m{index}"), ""))
+            .collect();
+        let ModelMatch::Several(found) = find_model("m", &models, None) else {
+            panic!("ambiguous");
+        };
+        let text = several_models("m", &found);
+        assert_eq!(text.lines().count(), 1 + MODELS_LISTED + 1);
+        assert!(text.ends_with("… and 4 more"), "{text}");
     }
 }
