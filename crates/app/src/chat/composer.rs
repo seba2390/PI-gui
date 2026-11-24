@@ -28,7 +28,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use pi_rpc::protocol::ImageContent;
 
-use super::commands::{self, CommandOutcome};
+use super::commands::{self, CommandOutcome, Suggestion, SuggestionList};
 use super::file_picker::{self, FilePicker, Pick};
 use super::mention::{self, History};
 use super::session::{Lifecycle, PiSession, WebMode};
@@ -103,6 +103,9 @@ pub struct Composer {
     context_open: bool,
     /// Inline `@file` completion for the mention being typed.
     mention: Option<Mention>,
+    /// The `/` list: its highlighted row, and whether Esc closed it.
+    suggestions: SuggestionList,
+    suggestions_scroll: ScrollHandle,
     /// ↑ / ↓ through earlier prompts.
     history: History,
     /// Dictation: microphone, local recognizer and the live transcript.
@@ -132,6 +135,8 @@ struct Mention {
 
 /// Files offered for an `@` mention at once.
 const MENTION_RESULTS: usize = 8;
+/// The `/` list's height: about 8 rows, then it scrolls.
+const SUGGESTIONS_HEIGHT: Rems = rems(16.5);
 
 impl EventEmitter<ComposerEvent> for Composer {}
 
@@ -167,7 +172,7 @@ impl Composer {
                         InputEvent::PressEnter { shift: false, .. } => {
                             if this.mention.is_some() {
                                 this.accept_mention(window, cx);
-                            } else {
+                            } else if !this.enter_suggestion(window, cx) {
                                 this.submit(false, window, cx);
                             }
                         }
@@ -210,6 +215,8 @@ impl Composer {
             picker_open: false,
             context_open: false,
             mention: None,
+            suggestions: SuggestionList::default(),
+            suggestions_scroll: ScrollHandle::new(),
             history: History::default(),
             speech,
             dictation: None,
@@ -564,6 +571,7 @@ impl Composer {
         self.attachments.clear();
         self.history.reset();
         self.mention = None;
+        self.suggestions = SuggestionList::default();
         self.input
             .update(cx, |input, cx| input.set_value("", window, cx));
         cx.notify();
@@ -1218,65 +1226,159 @@ impl Composer {
         h_flex().flex_wrap().gap_1().px_3().pt_2().children(chips)
     }
 
-    fn render_suggestions(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+    /// The commands that complete what is typed, best first; none after Esc, or while the
+    /// text is an earlier prompt or is being dictated.
+    fn suggested(&self, cx: &App) -> Vec<Suggestion> {
+        if self.dictation.is_some() || self.history.is_browsing() {
+            return Vec::new();
+        }
+        let text = self.input.read(cx).value();
+        self.suggestions
+            .rows(&text, self.session.read(cx).commands())
+    }
+
+    /// The `/` list's rows. A fully typed command with no other match needs no list.
+    fn suggestion_rows(&self, cx: &App) -> Vec<Suggestion> {
+        let rows = self.suggested(cx);
+        match rows.as_slice() {
+            [only] if only.text() == *self.input.read(cx).value() => Vec::new(),
+            _ => rows,
+        }
+    }
+
+    fn move_suggestion(&mut self, rows: &[Suggestion], down: bool, cx: &mut Context<Self>) {
+        let index = self.suggestions.move_selection(rows, down);
+        self.suggestions_scroll.scroll_to_item(index);
+        cx.notify();
+    }
+
+    /// Replaces the text with `suggestion`, ready for its arguments.
+    fn accept_suggestion(
+        &mut self,
+        suggestion: &Suggestion,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let completion = format!("{} ", suggestion.text());
+        self.input.update(cx, |input, cx| {
+            let end = input.value().len();
+            input.set_selected_range(0..end, cx);
+            input.replace(completion, window, cx);
+        });
+        let focus = self.focus_handle(cx);
+        focus.focus(window, cx);
+        cx.notify();
+    }
+
+    /// Enter with the `/` list open: completes the highlighted row, and runs it right away when
+    /// it takes no arguments. Returns `false` when the text is to be sent as it is (no list, or
+    /// the row is what is typed).
+    fn enter_suggestion(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let rows = self.suggestion_rows(cx);
+        let Some(row) = rows.get(self.suggestions.selected(&rows)) else {
+            return false;
+        };
+        let typed = self.input.read(cx).value().to_string();
+        if row.text() == typed {
+            return false;
+        }
+        self.accept_suggestion(row, window, cx);
+        // With attachments the text is a message, not a command.
+        if self.attachments.is_empty() && row.runs_at_once(&typed) {
+            self.submit(false, window, cx);
+        }
+        true
+    }
+
+    /// Esc: closes the `/` list. Returns whether it was open.
+    fn close_suggestions(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.suggestion_rows(cx).is_empty() {
+            return false;
+        }
         let text = self.input.read(cx).value().to_string();
-        let found = commands::suggestions(&text, self.session.read(cx).commands());
-        if found.is_empty()
-            || found
-                .iter()
-                .any(|suggestion| text == format!("/{}", suggestion.name))
-        {
+        self.suggestions.close(&text);
+        cx.notify();
+        true
+    }
+
+    fn render_suggestions(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let found = self.suggestion_rows(cx);
+        if found.is_empty() {
             return None;
         }
-        let (muted, hover) = (cx.theme().muted_foreground, cx.theme().secondary_hover);
+        let selected = self.suggestions.selected(&found);
+        let theme = cx.theme();
+        let (muted, hover, selected_bg) = (
+            theme.muted_foreground,
+            theme.secondary_hover,
+            theme.secondary_active,
+        );
         let rows = found.into_iter().enumerate().map(|(index, suggestion)| {
-            let completion = format!("/{} ", suggestion.name);
+            let (name, description) = (suggestion.text(), suggestion.description.clone());
             h_flex()
                 .id(("suggestion", index))
+                .flex_none()
                 .gap_3()
                 .px_3()
                 .py_1()
                 .rounded_md()
                 .cursor_pointer()
+                .role(Role::ListBoxOption)
+                .aria_label(SharedString::from(name.clone()))
+                .aria_selected(index == selected)
+                .when(index == selected, |this| this.bg(selected_bg))
                 .hover(move |style| style.bg(hover))
-                .on_click(
-                    cx.listener(move |this, _, window, cx| this.set_text(&completion, window, cx)),
-                )
-                .child(
-                    div()
-                        .flex_none()
-                        .text_sm()
-                        .child(format!("/{}", suggestion.name)),
-                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.accept_suggestion(&suggestion, window, cx);
+                }))
+                .child(div().flex_none().text_sm().child(name))
                 .child(
                     div()
                         .min_w_0()
                         .truncate()
                         .text_xs()
                         .text_color(muted)
-                        .child(suggestion.description),
+                        .child(description),
                 )
         });
-        Some(v_flex().px_1().pt_1().gap_0p5().children(rows))
+        Some(
+            v_flex()
+                .id("suggestion-list")
+                .role(Role::ListBox)
+                .aria_label("Commands")
+                .max_h(SUGGESTIONS_HEIGHT)
+                .overflow_y_scroll()
+                .track_scroll(&self.suggestions_scroll)
+                .px_1()
+                .pt_1()
+                .gap_0p5()
+                .children(rows),
+        )
     }
 
-    fn complete_first(&mut self, _: &Complete, window: &mut Window, cx: &mut Context<Self>) {
+    /// Tab: the highlighted file or command.
+    fn complete(&mut self, _: &Complete, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.complete_selected(window, cx) {
+            cx.propagate();
+        }
+    }
+
+    /// Accepts the highlighted row of the `@` or `/` list. Returns whether there was one.
+    fn complete_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if self.mention.is_some() {
             self.accept_mention(window, cx);
-            return;
+            return true;
         }
-        let text = self.input.read(cx).value().to_string();
-        match commands::suggestions(&text, self.session.read(cx).commands()).first() {
-            Some(first) => {
-                let completion = format!("/{} ", first.name);
-                self.set_text(&completion, window, cx);
-            }
-            None => cx.propagate(),
-        }
+        let rows = self.suggested(cx);
+        let Some(row) = rows.get(self.suggestions.selected(&rows)) else {
+            return false;
+        };
+        self.accept_suggestion(row, window, cx);
+        true
     }
 
-    /// The input changed: follow the `@` mention at the cursor, and stop browsing history
-    /// once the shown entry is edited.
+    /// The input changed: follow the `@` mention at the cursor and the `/` list, and stop
+    /// browsing history once the shown entry is edited.
     fn on_input_changed(&mut self, cx: &mut Context<Self>) {
         let (text, cursor) = {
             let input = self.input.read(cx);
@@ -1285,6 +1387,10 @@ impl Composer {
         if self.history.is_browsing() && !self.history_entries(cx).contains(&text) {
             self.history.reset();
         }
+        let rows = commands::suggestions(&text, self.session.read(cx).commands());
+        self.suggestions.text_changed(&text, &rows);
+        self.suggestions_scroll
+            .scroll_to_item(self.suggestions.selected(&rows));
         let query = self
             .session
             .read(cx)
@@ -1354,11 +1460,17 @@ impl Composer {
         }))
     }
 
-    /// ↑ in the input: the `@` list, or an earlier prompt when the composer is empty (or
+    /// ↑ in the input: the `@` or `/` list, or an earlier prompt when the composer is empty (or
     /// shows one) and the cursor is on the first line. Otherwise the cursor moves as usual.
     fn on_move_up(&mut self, _: &MoveUp, window: &mut Window, cx: &mut Context<Self>) {
         if self.mention.is_some() {
             self.move_mention(false, cx);
+            cx.stop_propagation();
+            return;
+        }
+        let rows = self.suggestion_rows(cx);
+        if !rows.is_empty() {
+            self.move_suggestion(&rows, false, cx);
             cx.stop_propagation();
             return;
         }
@@ -1379,11 +1491,17 @@ impl Composer {
         }
     }
 
-    /// ↓ in the input: the `@` list, or the next prompt while browsing history (the cursor on
-    /// the last line).
+    /// ↓ in the input: the `@` or `/` list, or the next prompt while browsing history (the
+    /// cursor on the last line).
     fn on_move_down(&mut self, _: &MoveDown, window: &mut Window, cx: &mut Context<Self>) {
         if self.mention.is_some() {
             self.move_mention(true, cx);
+            cx.stop_propagation();
+            return;
+        }
+        let rows = self.suggestion_rows(cx);
+        if !rows.is_empty() {
+            self.move_suggestion(&rows, true, cx);
             cx.stop_propagation();
             return;
         }
@@ -1585,7 +1703,7 @@ impl Render for Composer {
             .on_action(cx.listener(Self::interrupt))
             .on_action(cx.listener(Self::dequeue))
             .on_action(cx.listener(Self::cycle_thinking))
-            .on_action(cx.listener(Self::complete_first))
+            .on_action(cx.listener(Self::complete))
             .capture_key_down(cx.listener(Self::on_dictation_key_down))
             .on_key_up(cx.listener(|this, event: &KeyUpEvent, _, cx| {
                 if event.keystroke.key == "space" {
@@ -1599,16 +1717,23 @@ impl Render for Composer {
             }))
             .capture_action(cx.listener(Self::on_move_up))
             .capture_action(cx.listener(Self::on_move_down))
-            // The input binds Tab and Esc itself; with the `@` list open they act on it.
+            // The input binds Tab and Esc itself; with the `@` or `/` list open they act on it.
             .capture_action(cx.listener(|this, _: &IndentInline, window, cx| {
-                if this.mention.is_some() {
-                    this.accept_mention(window, cx);
+                if this.complete_selected(window, cx) {
                     cx.stop_propagation();
                 }
             }))
             .capture_action(cx.listener(|this, _: &Escape, _, cx| {
                 if this.mention.take().is_some() {
                     cx.notify();
+                    cx.stop_propagation();
+                } else if this.close_suggestions(cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            // Esc with the focus on one of the composer's buttons.
+            .capture_action(cx.listener(|this, _: &Interrupt, _, cx| {
+                if this.close_suggestions(cx) {
                     cx.stop_propagation();
                 }
             }))
@@ -2020,5 +2145,145 @@ mod inline_tests {
             inline_file_block("b.md", "```rust\nx\n```"),
             "`b.md`:\n````\n```rust\nx\n```\n````"
         );
+    }
+}
+
+#[cfg(test)]
+mod suggestion_tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use gpui_kit::component::Root;
+    use gpui_kit::component::input::Enter;
+    use gpui_kit::{AppContext as _, Entity, TestAppContext, VisualTestContext};
+    use pi_sessions::Mode;
+
+    use super::Composer;
+    use crate::chat::session::PiSession;
+
+    /// A composer in a window, over a session without a pi.
+    fn composer(cx: &mut TestAppContext) -> (Entity<Composer>, &mut VisualTestContext) {
+        cx.update(|cx| {
+            gpui_kit::component::init(cx);
+            super::init(cx);
+            cx.set_global(crate::config::AppConfig::for_tests("pi".into()));
+            cx.set_global(crate::settings::AppSettings::default());
+            let hosts = cx.new(|_| crate::hosts::Hosts::for_tests(Vec::new()));
+            cx.set_global(crate::hosts::HostsHandle(hosts));
+            crate::stt::models::init(cx);
+        });
+        let mut composer = None;
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let session = cx.new(|_| PiSession::idle(std::env::temp_dir(), Mode::Code));
+            let view = cx.new(|cx| Composer::new(session, window, cx));
+            composer = Some(view.clone());
+            Root::new(view, window, cx)
+        });
+        let composer = composer.unwrap();
+        cx.update(|window, cx| {
+            let focus = composer.read(cx).focus_handle(cx);
+            focus.focus(window, cx);
+        });
+        (composer, cx)
+    }
+
+    /// Enter in the input. (A simulated keystroke would also type a newline first: the test
+    /// platform inserts the text of a key its action lets through.)
+    fn press_enter(cx: &mut VisualTestContext) {
+        cx.dispatch_action(Enter {
+            secondary: false,
+            shift: false,
+        });
+        cx.run_until_parked();
+    }
+
+    fn text(composer: &Entity<Composer>, cx: &VisualTestContext) -> String {
+        cx.read(|cx| composer.read(cx).input.read(cx).value().to_string())
+    }
+
+    fn rows(composer: &Entity<Composer>, cx: &VisualTestContext) -> Vec<String> {
+        cx.read(|cx| {
+            let rows = composer.read(cx).suggestion_rows(cx);
+            rows.into_iter().map(|row| row.name).collect()
+        })
+    }
+
+    #[gpui_kit::test]
+    fn arrows_and_enter_complete_the_highlighted_command(cx: &mut TestAppContext) {
+        let (composer, cx) = composer(cx);
+        cx.simulate_input("/co");
+        assert_eq!(rows(&composer, cx), ["compact", "copy"]);
+        cx.simulate_keystrokes("down down up");
+        press_enter(cx);
+        // Completed, not sent; the caret is after it, ready for arguments.
+        assert_eq!(text(&composer, cx), "/compact ");
+        assert_eq!(rows(&composer, cx), Vec::<String>::new());
+        cx.simulate_input("keep it");
+        assert_eq!(text(&composer, cx), "/compact keep it");
+    }
+
+    #[gpui_kit::test]
+    fn tab_completes_and_esc_closes_the_list(cx: &mut TestAppContext) {
+        let (composer, cx) = composer(cx);
+        cx.simulate_input("/th");
+        cx.simulate_keystrokes("tab");
+        assert_eq!(text(&composer, cx), "/thinking ");
+        cx.update(|window, cx| {
+            composer.update(cx, |composer, cx| composer.clear(window, cx));
+        });
+        cx.simulate_input("/comp");
+        cx.simulate_keystrokes("escape");
+        assert_eq!(rows(&composer, cx), Vec::<String>::new());
+        assert_eq!(text(&composer, cx), "/comp");
+        // It opens again for other text.
+        cx.simulate_input("a");
+        assert_eq!(rows(&composer, cx), ["compact"]);
+    }
+
+    #[gpui_kit::test]
+    fn enter_runs_a_named_command_and_one_without_arguments(cx: &mut TestAppContext) {
+        let (composer, cx) = composer(cx);
+        let opened = Rc::new(Cell::new(0));
+        cx.update(|_, cx| {
+            let opened = opened.clone();
+            cx.on_action(move |_: &crate::actions::NewChat, _| opened.set(opened.get() + 1));
+        });
+        // Fully typed: no list, Enter runs it.
+        cx.simulate_input("/new");
+        assert_eq!(rows(&composer, cx), Vec::<String>::new());
+        press_enter(cx);
+        assert_eq!((text(&composer, cx).as_str(), opened.get()), ("", 1));
+        // Its highlighted row: Enter runs it as well.
+        cx.simulate_input("/ne");
+        press_enter(cx);
+        assert_eq!((text(&composer, cx).as_str(), opened.get()), ("", 2));
+    }
+
+    #[gpui_kit::test]
+    fn the_whole_list_is_reachable_and_stays_in_view(cx: &mut TestAppContext) {
+        let (composer, cx) = composer(cx);
+        cx.simulate_input("/");
+        let all = rows(&composer, cx);
+        assert_eq!(all.len(), crate::chat::commands::SUPPORTED.len());
+        for _ in 0..all.len() + 3 {
+            cx.simulate_keystrokes("down");
+        }
+        cx.run_until_parked();
+        cx.read(|cx| {
+            let composer = composer.read(cx);
+            let rows = composer.suggestion_rows(cx);
+            assert_eq!(composer.suggestions.selected(&rows), rows.len() - 1);
+            let scroll = &composer.suggestions_scroll;
+            let last = scroll.bounds_for_item(rows.len() - 1).unwrap();
+            let list = scroll.bounds();
+            assert!(list.size.height < gpui_kit::px(320.), "{list:?}");
+            assert!(
+                last.bottom() + scroll.offset().y <= list.bottom() + gpui_kit::px(1.),
+                "{last:?} {list:?} {:?}",
+                scroll.offset()
+            );
+        });
+        press_enter(cx);
+        assert_eq!(text(&composer, cx), "/quit ");
     }
 }

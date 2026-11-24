@@ -5,13 +5,15 @@
 //! RPC calls. Extension commands, prompt templates and skills (`/skill:name`) are
 //! sent to pi unchanged, exactly as the terminal does.
 
+use std::collections::HashSet;
+
 use gpui_kit::{App, ClipboardItem, Entity, Window};
 use pi_rpc::protocol::{Model, ThinkingLevel};
 use transcript::{BlockKind, ItemKind, NoticeKind};
 
 use super::dialogs::{PickerItem, open_picker};
 use super::session::{AfterFork, PiSession};
-use crate::actions::{NewChat, ResumeSession};
+use crate::actions::{NewChat, OpenLogin, OpenSettings, ReloadSession, ResumeSession};
 
 pub enum CommandOutcome {
     /// Executed; clear the composer.
@@ -45,7 +47,26 @@ pub const SUPPORTED: &[(&str, &str)] = &[
         "share",
         "Share the conversation as a secret GitHub gist (gh)",
     ),
+    ("settings", "Open Settings"),
+    (
+        "login",
+        "Sign in to a provider in pi's terminal (optional provider)",
+    ),
+    (
+        "logout",
+        "Sign out of a provider in pi's terminal (optional provider)",
+    ),
+    (
+        "reload",
+        "Restart pi on this conversation (new sign-ins, extensions, skills)",
+    ),
     ("quit", "Quit"),
+];
+
+/// Built-ins without arguments: Enter on their row runs them right away, as in pi's terminal.
+/// `/share` (it uploads) and `/quit` are left out, so a half-typed name never runs them.
+const RUN_AT_ONCE: &[&str] = &[
+    "new", "session", "copy", "fork", "clone", "resume", "settings", "reload",
 ];
 
 /// One completion candidate for `/` input.
@@ -55,16 +76,33 @@ pub struct Suggestion {
     pub description: String,
 }
 
-/// Completions for composer text that is a bare `/prefix` (no arguments yet):
-/// GUI built-ins first, then pi's extension commands, prompt templates and skills.
+impl Suggestion {
+    /// The composer text that names this command.
+    pub fn text(&self) -> String {
+        format!("/{}", self.name)
+    }
+
+    /// Whether Enter on this row (with `typed` in the composer) runs the command instead of
+    /// only completing it: it takes no arguments, and what was typed is the start of its name.
+    pub fn runs_at_once(&self, typed: &str) -> bool {
+        RUN_AT_ONCE.contains(&self.name.as_str()) && self.text().starts_with(typed)
+    }
+}
+
+/// Completions for composer text that is a bare `/query` (no arguments yet): the command of
+/// exactly that name, then names that start with the query, then names that contain it. Within
+/// each, GUI built-ins come first, then pi's extension commands, prompt templates and skills in
+/// pi's order.
 pub fn suggestions(text: &str, pi_commands: &[pi_rpc::protocol::SlashCommand]) -> Vec<Suggestion> {
-    let Some(prefix) = text.strip_prefix('/') else {
+    let Some(query) = text.strip_prefix('/') else {
         return Vec::new();
     };
-    if prefix.contains(char::is_whitespace) {
+    // A built-in without a row (`/tree`) is complete as typed, whatever else contains its name.
+    let has_row = SUPPORTED.iter().any(|(name, _)| *name == query);
+    if query.contains(char::is_whitespace) || (BUILTINS.contains(&query) && !has_row) {
         return Vec::new();
     }
-    let prefix = prefix.to_lowercase();
+    let lowercase = query.to_lowercase();
     let builtins = SUPPORTED.iter().map(|(name, description)| Suggestion {
         name: (*name).to_owned(),
         description: (*description).to_owned(),
@@ -76,13 +114,86 @@ pub fn suggestions(text: &str, pi_commands: &[pi_rpc::protocol::SlashCommand]) -
             .clone()
             .unwrap_or_else(|| command.source.clone()),
     });
-    let mut matches: Vec<Suggestion> = builtins
-        .chain(from_pi)
-        .filter(|suggestion| suggestion.name.to_lowercase().starts_with(&prefix))
-        .collect();
-    matches.dedup_by(|a, b| a.name == b.name);
-    matches.truncate(8);
-    matches
+    let mut seen = HashSet::new();
+    let (mut exact, mut starting, mut containing) = (Vec::new(), Vec::new(), Vec::new());
+    for suggestion in builtins.chain(from_pi) {
+        if !seen.insert(suggestion.name.clone()) {
+            continue;
+        }
+        let name = suggestion.name.to_lowercase();
+        if suggestion.name == query {
+            exact.push(suggestion);
+        } else if name.starts_with(&lowercase) {
+            starting.push(suggestion);
+        } else if name.contains(&lowercase) {
+            containing.push(suggestion);
+        }
+    }
+    [exact, starting, containing].concat()
+}
+
+/// What the user did with the `/` list: the row they moved to, and whether they closed it.
+#[derive(Debug, Default)]
+pub struct SuggestionList {
+    /// The row moved to with ↑ / ↓, by name; the first row until then.
+    selected: Option<String>,
+    /// The text Esc closed the list for; it stays closed until the text changes.
+    closed_for: Option<String>,
+}
+
+impl SuggestionList {
+    /// The list's rows for `text`; none after Esc.
+    pub fn rows(
+        &self,
+        text: &str,
+        pi_commands: &[pi_rpc::protocol::SlashCommand],
+    ) -> Vec<Suggestion> {
+        if self.closed_for.as_deref() == Some(text) {
+            return Vec::new();
+        }
+        suggestions(text, pi_commands)
+    }
+
+    /// Index of the highlighted row.
+    pub fn selected(&self, rows: &[Suggestion]) -> usize {
+        self.selected
+            .as_ref()
+            .and_then(|name| rows.iter().position(|row| row.name == *name))
+            .unwrap_or(0)
+    }
+
+    /// ↑ / ↓: moves the highlight one row, stopping at the ends. Returns its new index.
+    pub fn move_selection(&mut self, rows: &[Suggestion], down: bool) -> usize {
+        let current = self.selected(rows);
+        let index = if down {
+            (current + 1).min(rows.len().saturating_sub(1))
+        } else {
+            current.saturating_sub(1)
+        };
+        self.selected = rows.get(index).map(|row| row.name.clone());
+        index
+    }
+
+    /// Esc: closes the list until the text changes.
+    pub fn close(&mut self, text: &str) {
+        self.closed_for = Some(text.to_owned());
+    }
+
+    /// The text changed: the highlight stays on its row while the list refines, unless the
+    /// text now names a command (Enter then runs that one).
+    pub fn text_changed(&mut self, text: &str, rows: &[Suggestion]) {
+        if self.closed_for.as_deref() != Some(text) {
+            self.closed_for = None;
+        }
+        let named = rows.first().is_some_and(|row| row.text() == text);
+        if named
+            || !rows
+                .iter()
+                .any(|row| Some(&row.name) == self.selected.as_ref())
+        {
+            self.selected = None;
+        }
+    }
 }
 
 /// What `/model` found for the text after it.
@@ -310,6 +421,9 @@ fn builtin(
         "fork" => pick_fork(session, window, cx),
         "clone" => session.update(cx, |session, cx| session.clone_session(cx)),
         "resume" => window.dispatch_action(Box::new(ResumeSession), cx),
+        "settings" => window.dispatch_action(Box::new(OpenSettings), cx),
+        "reload" => window.dispatch_action(Box::new(ReloadSession), cx),
+        "login" | "logout" => return login(name == "logout", args, session, window, cx),
         "export" => {
             let path = (!args.is_empty()).then(|| args.to_owned());
             session.update(cx, |session, cx| session.export_html(path, cx));
@@ -345,6 +459,40 @@ fn builtin(
     }
     CommandOutcome::Handled
 }
+
+/// `/login` and `/logout`, with or without a provider: in a terminal next to a Code session; a
+/// chat has none, so it says where to do it.
+fn login(
+    logout: bool,
+    args: &str,
+    session: &Entity<PiSession>,
+    window: &mut Window,
+    cx: &mut App,
+) -> CommandOutcome {
+    let valid = |c: char| c.is_ascii_alphanumeric() || "._-".contains(c);
+    if args.starts_with('-') || !args.chars().all(valid) {
+        let name = if logout { "logout" } else { "login" };
+        notice(
+            session,
+            NoticeKind::Warning,
+            format!("Usage: /{name}, or /{name} <provider> (for example /{name} anthropic)"),
+            cx,
+        );
+        return CommandOutcome::Keep;
+    }
+    if session.read(cx).has_folder_tools() {
+        let provider = (!args.is_empty()).then(|| args.to_owned());
+        window.dispatch_action(Box::new(OpenLogin { logout, provider }), cx);
+    } else {
+        notice(session, NoticeKind::Info, CHAT_LOGIN.to_owned(), cx);
+    }
+    CommandOutcome::Handled
+}
+
+const CHAT_LOGIN: &str = "Signing in (and out) happens in pi's terminal, which chats don't have. \
+    Switch to Code and use /login in a session there, or run `pi` in a terminal and type /login. \
+    For an API key or a model server of your own, choose “Add model…” in the model menu. \
+    Afterwards, /reload makes this chat use it.";
 
 /// `/thinking <level>`: one of the levels the model offers (any of pi's while those are not
 /// known yet).
@@ -557,11 +705,125 @@ mod tests {
                 .map(|s| s.name)
                 .collect::<Vec<_>>()
         };
-        assert_eq!(names("/co"), vec!["compact", "copy"]);
+        assert_eq!(names("/co"), vec!["compact", "copy", "skill:commit"]);
         assert_eq!(names("/sk"), vec!["skill:commit"]);
         assert_eq!(names("/compact now"), Vec::<&str>::new());
         assert_eq!(names("hello"), Vec::<&str>::new());
-        assert_eq!(names("/").len(), 8);
+        assert_eq!(names("/path/like/this"), Vec::<&str>::new());
+        // Every command is listed, not only the first few.
+        assert_eq!(names("/").len(), SUPPORTED.len() + 1);
+    }
+
+    fn command(name: &str) -> pi_rpc::protocol::SlashCommand {
+        pi_rpc::protocol::SlashCommand {
+            name: name.into(),
+            description: None,
+            source: "skill".into(),
+            source_info: None,
+        }
+    }
+
+    fn names(rows: &[Suggestion]) -> Vec<&str> {
+        rows.iter().map(|row| row.name.as_str()).collect()
+    }
+
+    #[test]
+    fn ranks_exact_then_prefix_then_substring() {
+        let pi = [
+            command("skill:add-skill"),
+            command("readd"),
+            command("add-tests"),
+            command("skill:add"),
+            command("add"),
+        ];
+        assert_eq!(
+            names(&suggestions("/add", &pi)),
+            ["add", "add-tests", "skill:add-skill", "readd", "skill:add"]
+        );
+        assert_eq!(
+            names(&suggestions("/SKILL:add", &pi)),
+            ["skill:add-skill", "skill:add"]
+        );
+    }
+
+    #[test]
+    fn lists_each_name_once() {
+        let pi = [command("fix"), command("model"), command("fix")];
+        let rows = suggestions("/", &pi);
+        assert_eq!(
+            names(&rows).iter().filter(|name| **name == "fix").count(),
+            1
+        );
+        let model: Vec<_> = rows.iter().filter(|row| row.name == "model").collect();
+        assert_eq!(model.len(), 1);
+        assert_eq!(model[0].description, "Switch model (provider/id or name)");
+    }
+
+    #[test]
+    fn a_builtin_without_a_row_is_complete() {
+        let pi = [command("skill:tree-view")];
+        assert_eq!(suggestions("/tree", &pi), []);
+        assert_eq!(names(&suggestions("/tre", &pi)), ["skill:tree-view"]);
+    }
+
+    #[test]
+    fn only_typed_commands_without_arguments_run_at_once() {
+        let row = |name: &str| Suggestion {
+            name: name.into(),
+            description: String::new(),
+        };
+        assert!(row("resume").runs_at_once("/re"));
+        assert!(!row("resume").runs_at_once("/sum"));
+        assert!(!row("compact").runs_at_once("/comp"));
+        assert!(!row("quit").runs_at_once("/q"));
+        assert!(!row("share").runs_at_once("/sha"));
+        assert!(!row("skill:new").runs_at_once("/skill"));
+    }
+
+    #[test]
+    fn the_highlight_moves_and_follows_its_row() {
+        let mut list = SuggestionList::default();
+        let rows = list.rows("/co", &[]);
+        assert_eq!(names(&rows), ["compact", "copy"]);
+        assert_eq!(list.selected(&rows), 0);
+        assert_eq!(list.move_selection(&rows, false), 0);
+        assert_eq!(list.move_selection(&rows, true), 1);
+        assert_eq!(list.move_selection(&rows, true), 1);
+        // Widening the list keeps the highlight on `copy`.
+        let rows = list.rows("/c", &[]);
+        list.text_changed("/c", &rows);
+        assert_eq!(rows[list.selected(&rows)].name, "copy");
+        // A row that is gone starts over.
+        let rows = list.rows("/com", &[]);
+        list.text_changed("/com", &rows);
+        let rows = list.rows("/c", &[]);
+        list.text_changed("/c", &rows);
+        assert_eq!(list.selected(&rows), 0);
+    }
+
+    #[test]
+    fn a_fully_typed_name_takes_the_highlight() {
+        let pi = [command("fix-all"), command("fix")];
+        let mut list = SuggestionList::default();
+        let rows = list.rows("/fi", &pi);
+        list.text_changed("/fi", &rows);
+        assert_eq!(rows[list.selected(&rows)].name, "fix-all");
+        list.move_selection(&rows, true);
+        list.move_selection(&rows, false);
+        let rows = list.rows("/fix", &pi);
+        list.text_changed("/fix", &rows);
+        assert_eq!(rows[list.selected(&rows)].name, "fix");
+    }
+
+    #[test]
+    fn esc_closes_the_list_until_the_text_changes() {
+        let mut list = SuggestionList::default();
+        list.close("/co");
+        assert_eq!(list.rows("/co", &[]), []);
+        let rows = list.rows("/com", &[]);
+        assert_eq!(names(&rows), ["compact"]);
+        list.text_changed("/com", &rows);
+        assert_eq!(names(&list.rows("/co", &[])), ["compact", "copy"]);
     }
 
     fn model(provider: &str, id: &str, name: &str) -> Model {

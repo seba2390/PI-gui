@@ -18,9 +18,9 @@ use pi_sessions::SessionSummary;
 use pi_sessions::Mode;
 
 use crate::actions::{
-    CheckForUpdates, FindInChat, FocusComposer, NewChat, OpenSettings, ResumeSession, ShowChatMode,
-    ShowCodeMode, ShowDiff, ShowFiles, ToggleRightPanel, ToggleSidebar, ToggleTerminal,
-    WINDOW_CONTEXT,
+    CheckForUpdates, FindInChat, FocusComposer, NewChat, OpenLogin, OpenSettings, ReloadSession,
+    ResumeSession, ShowChatMode, ShowCodeMode, ShowDiff, ShowFiles, ToggleRightPanel,
+    ToggleSidebar, ToggleTerminal, WINDOW_CONTEXT,
 };
 use crate::chat::{ChatEvent, ChatView, ComposerEvent};
 use crate::config::AppConfig;
@@ -117,11 +117,46 @@ fn focus_chat(chat: &Entity<ChatView>, window: &mut Window, cx: &mut App) {
     focus.focus(window, cx);
 }
 
+/// What the chat says when `/login` or `/logout` opens the terminal.
+fn login_notice(login: &OpenLogin) -> String {
+    let command = login.slash_command();
+    let first = match &login.provider {
+        Some(provider) => format!(
+            "pi runs {command} {provider} in the terminal. If it can't, run `pi` there and type \
+             {command}."
+        ),
+        None => format!(
+            "pi starts in the terminal: type {command} there (run `pi` first if you see a shell)."
+        ),
+    };
+    format!(
+        "{first} Then come back and use /reload, so this session's pi picks it up. Closing the \
+         terminal brings back the one that was open before (ctrl+`)."
+    )
+}
+
+/// The command line that runs `pi` (a path, maybe `~/…`, or a name) with `args` in a login
+/// shell on a host.
+fn remote_command(pi: &str, args: &[String]) -> String {
+    // A quoted `~` would not be expanded.
+    let program = match pi.strip_prefix("~/") {
+        Some(rest) => format!("~/{}", remote::remote_word(rest)),
+        None => remote::remote_word(pi),
+    };
+    let args = args.iter().map(|arg| remote::remote_word(arg));
+    std::iter::once(program)
+        .chain(args)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// What changed on disk that pi reads only when it starts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReloadReason {
     Models,
     Skills,
+    /// The user asked for it (`/reload`).
+    Asked,
 }
 
 /// A restart of one chat's pi that waits for its agent to settle, and the model to select
@@ -1336,6 +1371,7 @@ impl MainWindow {
                 ReloadReason::Skills => {
                     "Saved. pi reloads its skills when the current turn finishes."
                 }
+                ReloadReason::Asked => "pi restarts when the current turn finishes.",
             };
             window.push_notification(message, cx);
             return;
@@ -1372,6 +1408,23 @@ impl MainWindow {
         self.keep_skills = false;
         self.background
             .retain(|(chat, _)| chat.entity_id() != previous.entity_id());
+    }
+
+    /// `/reload`: restarts the visible session's pi, which reads sign-ins, extensions, skills
+    /// and settings when it starts.
+    fn reload_session(&mut self, _: &ReloadSession, window: &mut Window, cx: &mut Context<Self>) {
+        let off = self
+            .host(cx)
+            .is_some_and(|host| crate::hosts::hosts(cx).read(cx).is_turned_off(&host));
+        if off {
+            window.push_notification("This session's SSH connection is turned off.", cx);
+            return;
+        }
+        let busy = self.chat.read(cx).session().read(cx).is_busy();
+        self.reload_models(None, ReloadReason::Asked, window, cx);
+        if !busy {
+            window.push_notification("Restarted pi.", cx);
+        }
     }
 
     /// Shows (or hides) the Skills page for the visible Code session.
@@ -2126,6 +2179,55 @@ impl MainWindow {
         self.show_terminal(window, cx);
     }
 
+    /// `/login` and `/logout`: runs pi's own sign-in in a new terminal, so nothing is typed into
+    /// a program running in the user's (kept in the background until this one closes).
+    fn open_login(&mut self, login: &OpenLogin, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.folder_tools(cx) {
+            return;
+        }
+        let session = self.chat.read(cx).session().clone();
+        // pi on a host that uses this computer's models uses its sign-ins too: they are here.
+        let hosts = crate::hosts::hosts(cx);
+        let host = self
+            .host(cx)
+            .filter(|host| !hosts.read(cx).uses_local_models(host));
+        let terminal = match host {
+            Some(host) => {
+                let hosts = hosts.read(cx);
+                let off = hosts.is_turned_off(&host);
+                let (Some(ssh), Some(pi), false) = (hosts.ssh(&host), hosts.pi_command(&host), off)
+                else {
+                    window.push_notification("This session's SSH connection is turned off.", cx);
+                    return;
+                };
+                let label = hosts.label(&host);
+                let command = remote_command(&pi, &login.pi_args());
+                let cwd = self.cwd(cx);
+                cx.new(|cx| {
+                    TerminalPanel::remote(host, label, &ssh, cwd, Some(&command), window, cx)
+                })
+            }
+            None => {
+                let config = cx.global::<AppConfig>();
+                let home = config.home.clone().unwrap_or_else(std::env::temp_dir);
+                let pi = config.pi_program.to_string_lossy().into_owned();
+                let cwd = if self.local_code(cx) {
+                    self.cwd(cx)
+                } else {
+                    home
+                };
+                let command = std::iter::once(pi).chain(login.pi_args()).collect();
+                cx.new(|cx| TerminalPanel::running(cwd, command, window, cx))
+            }
+        };
+        self.set_terminal(terminal, window, cx);
+        self.show_terminal(window, cx);
+        let text = login_notice(login);
+        session.update(cx, |session, cx| {
+            session.push_notice(transcript::NoticeKind::Info, text, cx);
+        });
+    }
+
     fn set_terminal(
         &mut self,
         terminal: Entity<TerminalPanel>,
@@ -2839,6 +2941,8 @@ impl Render for MainWindow {
             .on_action(cx.listener(Self::show_chat_mode))
             .on_action(cx.listener(Self::show_code_mode))
             .on_action(cx.listener(Self::resume_session))
+            .on_action(cx.listener(Self::reload_session))
+            .on_action(cx.listener(Self::open_login))
             .on_action(cx.listener(Self::open_settings))
             .on_action(cx.listener(|this, _: &CheckForUpdates, window, cx| {
                 this.check_for_updates(true, window, cx);

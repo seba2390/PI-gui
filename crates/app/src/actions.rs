@@ -1,7 +1,7 @@
 //! Window-level actions and their default key bindings.
 
 use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
-use gpui_kit::{App, KeyBinding, Menu, MenuItem, OsAction, SystemMenuType, actions};
+use gpui_kit::{Action, App, KeyBinding, Menu, MenuItem, OsAction, SystemMenuType, actions};
 
 actions!(
     pistachio,
@@ -20,6 +20,7 @@ actions!(
         ShowAll,
         Quit,
         ResumeSession,
+        ReloadSession,
         CloseWindow,
         Minimize,
         Zoom,
@@ -28,6 +29,32 @@ actions!(
         FindInChat,
     ]
 );
+
+/// `/login` and `/logout`: pi's own sign-in, which only works in a terminal.
+#[derive(Action, Debug, Clone, PartialEq, Eq)]
+#[action(namespace = pistachio, no_json)]
+pub struct OpenLogin {
+    pub logout: bool,
+    /// The provider named after the command, if any.
+    pub provider: Option<String>,
+}
+
+impl OpenLogin {
+    /// The command as typed in pi's terminal.
+    pub fn slash_command(&self) -> &'static str {
+        if self.logout { "/logout" } else { "/login" }
+    }
+
+    /// pi's arguments for it: `pi auth login <provider>` does it directly; without a provider,
+    /// pi itself opens, to choose one there.
+    pub fn pi_args(&self) -> Vec<String> {
+        let Some(provider) = &self.provider else {
+            return Vec::new();
+        };
+        let verb = if self.logout { "logout" } else { "login" };
+        vec!["auth".into(), verb.into(), provider.clone()]
+    }
+}
 
 /// The shortcut of [`NewChat`], shown on the welcome screen's button.
 pub const NEW_CHAT_KEYS: &str = if cfg!(target_os = "macos") {

@@ -97,6 +97,17 @@ impl TerminalPanel {
         Self::with_shell(cwd, None, None, window, cx)
     }
 
+    /// A terminal that runs `command` (a program and its arguments) first and stays open as the
+    /// user's shell afterwards. (On Windows only the shell.)
+    pub fn running(
+        cwd: PathBuf,
+        command: Vec<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::with_shell(cwd, shell_running(command), None, window, cx)
+    }
+
     /// A terminal on SSH host `host` (shown as `label`) in `cwd` there, through the host's
     /// shared connection. With `command`, the remote login shell runs it first.
     pub fn remote(
@@ -124,7 +135,7 @@ impl TerminalPanel {
     /// Like [`new`](Self::new) with an explicit shell instead of the user's login shell.
     fn with_shell(
         cwd: PathBuf,
-        shell: Option<PathBuf>,
+        shell: Option<(PathBuf, Vec<String>)>,
         remote: Option<RemoteShell>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -168,7 +179,7 @@ impl TerminalPanel {
         self.remote.as_ref().map(|remote| &remote.host)
     }
 
-    fn spawn(&mut self, shell: Option<PathBuf>, cx: &mut Context<Self>) {
+    fn spawn(&mut self, shell: Option<(PathBuf, Vec<String>)>, cx: &mut Context<Self>) {
         let mut config = match &self.remote {
             // The local ssh client only needs some existing folder.
             Some(remote) => {
@@ -184,7 +195,10 @@ impl TerminalPanel {
             }
             None => {
                 let mut config = TerminalConfig::new(&self.cwd);
-                config.shell = shell;
+                if let Some((program, args)) = shell {
+                    config.shell = Some(program);
+                    config.args = args;
+                }
                 config
             }
         };
@@ -563,6 +577,37 @@ impl TerminalPanel {
     }
 }
 
+/// Runs its arguments as a command, then becomes the user's shell ($0 is the shell's flag).
+/// The command gets Ctrl-C to itself: stopping it leaves the shell.
+#[cfg(unix)]
+const RUN_FIRST: &str = r#"trap : INT
+"$@"
+trap - INT
+exec "${SHELL:-/bin/sh}" "$0""#;
+
+/// The shell (program and arguments) for a terminal that runs `command` first.
+#[cfg(unix)]
+#[allow(clippy::unnecessary_wraps)] // same signature as the Windows version
+fn shell_running(command: Vec<String>) -> Option<(PathBuf, Vec<String>)> {
+    // A login shell on macOS, like its terminal apps; elsewhere an interactive one.
+    let flag = if cfg!(target_os = "macos") {
+        "-l"
+    } else {
+        "-i"
+    };
+    let args = ["-c", RUN_FIRST, flag].map(str::to_owned);
+    Some((
+        PathBuf::from("/bin/sh"),
+        args.into_iter().chain(command).collect(),
+    ))
+}
+
+#[cfg(not(unix))]
+#[allow(clippy::needless_pass_by_value)] // same signature as the Unix version
+fn shell_running(_: Vec<String>) -> Option<(PathBuf, Vec<String>)> {
+    None
+}
+
 fn pixels_u16(value: Pixels) -> u16 {
     // Cell sizes are a few dozen pixels; the clamp makes the cast lossless.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -707,6 +752,33 @@ mod tests {
 
     use super::{State, TerminalPanel};
 
+    /// The shell of a terminal with a command runs that command, then takes over.
+    #[test]
+    fn a_command_runs_before_the_shell() {
+        let command = ["printf", "ran %s\\n", "a b"].map(str::to_owned).to_vec();
+        let (program, args) = super::shell_running(command).unwrap();
+        // A stand-in for the user's shell that reports how it is started.
+        let dir = tempfile::tempdir().unwrap();
+        let shell = dir.path().join("shell");
+        std::fs::write(&shell, "#!/bin/sh\necho \"shell $*\"\n").unwrap();
+        let mode = std::os::unix::fs::PermissionsExt::from_mode(0o755);
+        std::fs::set_permissions(&shell, mode).unwrap();
+        let out = std::process::Command::new(program)
+            .args(args)
+            .env("SHELL", &shell)
+            .output()
+            .unwrap();
+        let flag = if cfg!(target_os = "macos") {
+            "-l"
+        } else {
+            "-i"
+        };
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            format!("ran a b\nshell {flag}\n")
+        );
+    }
+
     /// Types into a real `/bin/sh` through the panel's key and input handlers and waits for
     /// the echoed output to show up in the painted snapshot.
     #[gpui_kit::test]
@@ -720,7 +792,7 @@ mod tests {
         });
         let dir = std::env::temp_dir();
         let (panel, cx) = cx.add_window_view(|window, cx| {
-            TerminalPanel::with_shell(dir, Some("/bin/sh".into()), None, window, cx)
+            TerminalPanel::with_shell(dir, Some(("/bin/sh".into(), Vec::new())), None, window, cx)
         });
         cx.update(|window, cx| {
             let focus = panel.read(cx).focus_handle(cx);
