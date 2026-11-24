@@ -116,39 +116,6 @@ fn focus_chat(chat: &Entity<ChatView>, window: &mut Window, cx: &mut App) {
     focus.focus(window, cx);
 }
 
-/// What the chat says when `/login` or `/logout` opens the terminal.
-fn login_notice(login: &OpenLogin) -> String {
-    let command = login.slash_command();
-    let first = match &login.provider {
-        Some(provider) => format!(
-            "pi runs {command} {provider} in the terminal. If it can't, run `pi` there and type \
-             {command}."
-        ),
-        None => format!(
-            "pi starts in the terminal: type {command} there (run `pi` first if you see a shell)."
-        ),
-    };
-    format!(
-        "{first} Then come back and use /reload, so this session's pi picks it up. Closing the \
-         terminal brings back the one that was open before (ctrl+`)."
-    )
-}
-
-/// The command line that runs `pi` (a path, maybe `~/…`, or a name) with `args` in a login
-/// shell on a host.
-fn remote_command(pi: &str, args: &[String]) -> String {
-    // A quoted `~` would not be expanded.
-    let program = match pi.strip_prefix("~/") {
-        Some(rest) => format!("~/{}", remote::remote_word(rest)),
-        None => remote::remote_word(pi),
-    };
-    let args = args.iter().map(|arg| remote::remote_word(arg));
-    std::iter::once(program)
-        .chain(args)
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 /// What changed on disk that pi reads only when it starts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReloadReason {
@@ -2192,7 +2159,7 @@ impl MainWindow {
                     return;
                 };
                 let label = hosts.label(&host);
-                let command = remote_command(&pi, &login.pi_args());
+                let command = login.remote_command(&pi);
                 let cwd = self.cwd(cx);
                 cx.new(|cx| {
                     TerminalPanel::remote(host, label, &ssh, cwd, Some(&command), window, cx)
@@ -2213,7 +2180,7 @@ impl MainWindow {
         };
         self.set_terminal(terminal, window, cx);
         self.show_terminal(window, cx);
-        let text = login_notice(login);
+        let text = login.notice();
         session.update(cx, |session, cx| {
             session.push_notice(transcript::NoticeKind::Info, text, cx);
         });

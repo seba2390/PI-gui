@@ -2161,8 +2161,15 @@ mod suggestion_tests {
     use super::Composer;
     use crate::chat::session::PiSession;
 
-    /// A composer in a window, over a session without a pi.
+    /// A composer in a window, over a Code session without a pi.
     fn composer(cx: &mut TestAppContext) -> (Entity<Composer>, &mut VisualTestContext) {
+        composer_in(Mode::Code, cx)
+    }
+
+    fn composer_in(
+        mode: Mode,
+        cx: &mut TestAppContext,
+    ) -> (Entity<Composer>, &mut VisualTestContext) {
         cx.update(|cx| {
             gpui_kit::component::init(cx);
             super::init(cx);
@@ -2174,7 +2181,7 @@ mod suggestion_tests {
         });
         let mut composer = None;
         let (_, cx) = cx.add_window_view(|window, cx| {
-            let session = cx.new(|_| PiSession::idle(std::env::temp_dir(), Mode::Code));
+            let session = cx.new(|_| PiSession::idle(std::env::temp_dir(), mode));
             let view = cx.new(|cx| Composer::new(session, window, cx));
             composer = Some(view.clone());
             Root::new(view, window, cx)
@@ -2285,5 +2292,33 @@ mod suggestion_tests {
         });
         press_enter(cx);
         assert_eq!(text(&composer, cx), "/quit ");
+    }
+
+    /// `/login` asks the window for a terminal in a Code session, and says what to do in a chat.
+    #[gpui_kit::test]
+    fn login_leads_somewhere(cx: &mut TestAppContext) {
+        use crate::actions::OpenLogin;
+
+        let opened = Rc::new(std::cell::RefCell::new(Vec::new()));
+        for mode in [Mode::Code, Mode::Chat] {
+            let (composer, cx) = composer_in(mode, cx);
+            cx.update(|_, cx| {
+                let opened = opened.clone();
+                cx.on_action(move |login: &OpenLogin, _| opened.borrow_mut().push(login.clone()));
+            });
+            cx.simulate_input("/login anthropic");
+            press_enter(cx);
+            assert_eq!(text(&composer, cx), "");
+            let notices = cx.read(|cx| {
+                let session = composer.read(cx).session.read(cx);
+                session.transcript().items().len()
+            });
+            assert_eq!(notices, usize::from(mode == Mode::Chat));
+        }
+        let login = OpenLogin {
+            logout: false,
+            provider: Some("anthropic".into()),
+        };
+        assert_eq!(*opened.borrow(), [login]);
     }
 }
