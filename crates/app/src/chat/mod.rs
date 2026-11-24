@@ -11,6 +11,7 @@ mod images;
 mod math;
 pub(crate) mod mention;
 pub mod models_dialog;
+mod queued;
 mod rows;
 pub mod session;
 #[cfg(all(test, unix))]

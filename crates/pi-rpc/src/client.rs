@@ -18,9 +18,10 @@ use serde::de::DeserializeOwned;
 use crate::error::RpcError;
 use crate::framing::{JsonlReader, write_record};
 use crate::protocol::{
-    AgentMessage, BashResult, Command, CommandEnvelope, Disposition, Event, ExtensionUiAnswer,
-    ExtensionUiRequest, ExtensionUiResponse, ForkMessage, ImageContent, Incoming, Model, Response,
-    SessionState, SessionStats, SlashCommand, StreamingBehavior, ThinkingLevel,
+    AgentMessage, BashResult, ClearedQueue, Command, CommandEnvelope, Disposition, Event,
+    ExtensionUiAnswer, ExtensionUiRequest, ExtensionUiResponse, ForkMessage, ImageContent,
+    Incoming, Model, Response, SessionState, SessionStats, SlashCommand, StreamingBehavior,
+    ThinkingLevel,
 };
 
 /// Everything pi sends that is not a response to one of our commands.
@@ -217,18 +218,9 @@ impl PiClient {
         self.request(Command::Abort).await.map(drop)
     }
 
-    /// Removes queued steering/follow-up messages and returns their text, in order.
-    pub async fn clear_queue(&self) -> Result<Vec<String>, RpcError> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Data {
-            #[serde(default)]
-            steering: Vec<String>,
-            #[serde(default)]
-            follow_up: Vec<String>,
-        }
-        let data: Data = self.call(Command::ClearQueue).await?;
-        Ok(data.steering.into_iter().chain(data.follow_up).collect())
+    /// Removes queued steering/follow-up messages and returns their texts.
+    pub async fn clear_queue(&self) -> Result<ClearedQueue, RpcError> {
+        self.call(Command::ClearQueue).await
     }
 
     pub async fn get_state(&self) -> Result<SessionState, RpcError> {

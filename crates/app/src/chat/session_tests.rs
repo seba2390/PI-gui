@@ -360,3 +360,43 @@ async fn esc_cancels_a_compaction(cx: &mut TestAppContext) {
         )]
     );
 }
+
+/// Esc and Alt+Up give queued messages back with their images, also those pi expanded and
+/// those without text, but not those already delivered.
+#[gpui_kit::test]
+async fn queued_images_are_given_back(cx: &mut TestAppContext) {
+    let fake = Fake::ready(cx).await;
+    fake.submit("hold", &[], cx);
+    fake.until(cx, PiSession::is_running).await;
+    let queued = async |count: usize, cx: &mut TestAppContext| {
+        fake.until(cx, |session| {
+            let queue = session.transcript().queue();
+            queue.steering.len() == count && session.pending_prompts().count() == 0
+        })
+        .await;
+        cx.run_until_parked();
+    };
+    fake.submit("delivered", &[image("D")], cx);
+    queued(1, cx).await;
+    fake.submit("", &[image("A")], cx);
+    queued(2, cx).await;
+    fake.submit("/skill:x", &[image("B")], cx);
+    queued(3, cx).await;
+    fake.run_bash("deliver", cx);
+    queued(2, cx).await;
+    fake.until(cx, |session| !session.is_bash_running()).await;
+
+    fake.session.update(cx, |session, cx| session.dequeue(cx));
+    let (text, images) = fake.restored().await;
+    assert_eq!(text, "<skill>x</skill>");
+    assert_eq!(images, [image("A"), image("B")]);
+    assert!(fake.read(cx, PiSession::is_running), "not aborted");
+
+    fake.submit("again", &[image("C")], cx);
+    queued(1, cx).await;
+    fake.interrupt(cx);
+    let (text, images) = fake.restored().await;
+    assert_eq!((text.as_str(), images), ("again", vec![image("C")]));
+    fake.until(cx, |session| !session.is_busy()).await;
+    assert_eq!(fake.prompts(cx), ["hold", "delivered"]);
+}

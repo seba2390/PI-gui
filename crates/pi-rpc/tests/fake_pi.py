@@ -5,7 +5,9 @@ Answers the commands the GUI sends at startup and streams a tiny run for `prompt
 Writes strict JSONL to stdout and exits when stdin closes, like pi.
 
 Prompts that act differently: "refuse ..." is rejected, "die" makes pi exit instead of
-answering, "start and die" makes it exit after the run started, and "hold" runs until `abort`.
+answering, "start and die" makes it exit after the run started, and "hold" runs until
+`abort`. Prompts during that run are queued ("/skill:x" expanded) until `clear_queue`, or the
+shell command "deliver" for the first one.
 
 `bash` ends right away, except "hang", which prints a line and runs until `abort_bash`;
 "refuse" is rejected, and "die" makes pi exit.
@@ -32,6 +34,7 @@ hanging = []
 running = False
 # The request id of the `compact` command in progress.
 compacting = None
+queue = {"steering": [], "followUp": []}
 
 
 def end_compaction(**outcome):
@@ -59,6 +62,20 @@ for line in sys.stdin:
     elif kind == "prompt" and command["message"] == "start and die":
         emit({"type": "agent_start"})
         break
+    elif kind == "prompt" and running:
+        text = command["message"].replace("/skill:x", "<skill>x</skill>")
+        queue["followUp" if command.get("streamingBehavior") == "followUp" else "steering"].append(text)
+        emit({"type": "queue_update", **queue})
+        reply["data"] = {"disposition": "queued"}
+    elif kind == "clear_queue":
+        reply["data"] = queue
+        queue = {"steering": [], "followUp": []}
+        emit({"type": "queue_update", **queue})
+    elif kind == "bash" and command["command"] == "deliver":
+        text = (queue["steering"] or queue["followUp"]).pop(0)
+        emit({"type": "queue_update", **queue})
+        emit({"type": "message_start", "message": {"role": "user", "content": text, "timestamp": 2}})
+        reply["data"] = {}
     elif kind == "prompt" and command["message"] == "hold":
         reply["data"] = {"disposition": "started"}
         emit(reply)
