@@ -15,6 +15,7 @@ use crate::config::AppConfig;
 use crate::hosts::{HostStatus, Hosts, HostsHandle};
 use crate::settings::AppSettings;
 use crate::ui_state::UiState;
+use crate::updates::Release;
 
 fn fake_pi() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../pi-rpc/tests/fake_pi.py")
@@ -423,4 +424,44 @@ fn renaming_on_a_host_needs_its_connection(cx: &mut TestAppContext) {
         assert_eq!(status, HostStatus::Idle);
     });
     assert_eq!(cx.update(|w, cx| w.notifications(cx).len()), 1);
+}
+
+/// "Check for updates" shows one notification: that it checks, then the result in its place.
+#[gpui_kit::test]
+fn an_update_check_shows_one_notification(cx: &mut TestAppContext) {
+    let (window, cx) = open(fake_pi(), Vec::new(), cx);
+    // As `check_for_updates` does, without asking GitHub.
+    let checking = |cx: &mut VisualTestContext| {
+        act(&window, cx, |_, window, cx| {
+            MainWindow::show_update_check(window, cx);
+        });
+    };
+    let done = |result: Result<Option<Release>, String>, cx: &mut VisualTestContext| {
+        act(&window, cx, |this, window, cx| {
+            this.update_check_done(true, result, window, cx);
+        });
+    };
+    let count = |cx: &mut VisualTestContext| cx.update(|w, cx| w.notifications(cx).len());
+    for result in [Ok(None), Err("no network".to_owned())] {
+        checking(cx);
+        assert_eq!(count(cx), 1);
+        done(result, cx);
+        assert_eq!(count(cx), 1);
+    }
+    // The card with the offer stands alone.
+    checking(cx);
+    assert_eq!(count(cx), 1);
+    let release = Release {
+        version: "9999.0.0".into(),
+        page_url: String::new(),
+        download_url: None,
+        notes: String::new(),
+        assets: Vec::new(),
+    };
+    done(Ok(Some(release)), cx);
+    let checked = window.clone();
+    cx.read(|cx| assert!(checked.read(cx).update_prompt.is_some()));
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert_eq!(count(cx), 0);
 }
