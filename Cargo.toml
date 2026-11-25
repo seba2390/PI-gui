@@ -16,9 +16,11 @@ repository = "https://github.com/seba2390/pistachio"
 [workspace.dependencies]
 # Internal crates
 deepsearch = { path = "crates/deepsearch" }
+documents = { path = "crates/documents" }
 pi-config = { path = "crates/pi-config" }
 pi-rpc = { path = "crates/pi-rpc" }
 pi-sessions = { path = "crates/pi-sessions" }
+python-env = { path = "crates/python-env" }
 remote = { path = "crates/remote" }
 searxng = { path = "crates/searxng" }
 transcript = { path = "crates/transcript" }

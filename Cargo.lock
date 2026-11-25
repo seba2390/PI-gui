@@ -1861,9 +1861,9 @@ checksum = "be1e0bca6c3637f992fc1cc7cbc52a78c1ef6db076dbf1059c4323d6a2048376"
 name = "deepsearch"
 version = "0.4.9"
 dependencies = [
+ "documents",
  "html5ever 0.40.1",
  "markup5ever_rcdom 0.40.1+unofficial",
- "pdf-extract",
  "pretty_assertions",
  "searxng",
  "serde",
@@ -2055,6 +2055,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d4b8a88685455ed29a21542a33abd9cb6510b6b129abadabdcef0f4c55bc8f61"
 dependencies = [
  "litrs",
+]
+
+[[package]]
+name = "documents"
+version = "0.4.9"
+dependencies = [
+ "pdf-extract",
+ "pretty_assertions",
+ "python-env",
+ "rustix",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -6664,6 +6677,7 @@ dependencies = [
  "async-channel",
  "base64 0.23.1",
  "deepsearch",
+ "documents",
  "env_logger",
  "futures",
  "gpui-kit",
@@ -6677,6 +6691,7 @@ dependencies = [
  "pi-rpc",
  "pi-sessions",
  "pretty_assertions",
+ "python-env",
  "remote",
  "searxng",
  "serde",
@@ -7009,6 +7024,18 @@ name = "pxfm"
 version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
+
+[[package]]
+name = "python-env"
+version = "0.4.9"
+dependencies = [
+ "flate2",
+ "pretty_assertions",
+ "sha2 0.10.9",
+ "tar",
+ "tempfile",
+ "ureq 3.5.2",
+]
 
 [[package]]
 name = "qoi"
@@ -7897,11 +7924,9 @@ checksum = "1c107b6f4780854c8b126e228ea8869f4d7b71260f962fefb57b996b8959ba6b"
 name = "searxng"
 version = "0.4.9"
 dependencies = [
- "flate2",
  "pretty_assertions",
+ "python-env",
  "serde_json",
- "sha2 0.10.9",
- "tar",
  "tempfile",
  "ureq 3.5.2",
 ]

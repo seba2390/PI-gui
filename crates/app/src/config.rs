@@ -143,9 +143,11 @@ pub struct AppConfig {
     pub chat_dir: PathBuf,
     /// Deep search's settings, research instructions and pi extension (see [`deepsearch`]).
     pub deepsearch_dir: PathBuf,
+    /// Document parsing's settings, parsers and pi extension (see [`documents`]).
+    pub documents_dir: PathBuf,
     /// Where the skills that come with the app are written (see [`crate::builtin_skills`]).
     pub builtin_skills_dir: PathBuf,
-    /// This executable, which runs deep search's web tools for pi.
+    /// This executable, which runs deep search's web tools for pi and reads documents.
     pub exe: Option<PathBuf>,
     /// Panels to open at startup (`PISTACHIO_OPEN=terminal,diff,files`), for scripted
     /// screenshots and responsiveness checks.
@@ -182,6 +184,7 @@ impl AppConfig {
             home: None,
             chat_dir: std::env::temp_dir().join("pistachio-test-chat"),
             deepsearch_dir: std::env::temp_dir().join("pistachio-test-deepsearch"),
+            documents_dir: std::env::temp_dir().join("pistachio-test-documents"),
             builtin_skills_dir: std::env::temp_dir().join("pistachio-test-skills"),
             exe: Some(PathBuf::from("/app/pistachio")),
             open_at_startup: Vec::new(),
@@ -202,6 +205,8 @@ impl AppConfig {
                 .unwrap_or_else(|| std::env::temp_dir().join("pistachio-chat")),
             deepsearch_dir: deepsearch::config::default_dir()
                 .unwrap_or_else(|| std::env::temp_dir().join("pistachio-deepsearch")),
+            documents_dir: documents::config::default_dir()
+                .unwrap_or_else(|| std::env::temp_dir().join("pistachio-documents")),
             builtin_skills_dir: pi_sessions::app_dir().map_or_else(
                 || std::env::temp_dir().join("pistachio-skills"),
                 |dir| dir.join("skills"),

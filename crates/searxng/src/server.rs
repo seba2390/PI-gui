@@ -138,7 +138,7 @@ fn command(root: &Path, settings: &Path, port: u16) -> Result<Command, String> {
     command
         .args(["-c", LAUNCH])
         .env_clear()
-        .envs(crate::network_env())
+        .envs(python_env::network_env())
         .env("HOME", &data)
         .env("TMPDIR", &tmp)
         // It needs no other programs.
@@ -161,7 +161,7 @@ fn command(root: &Path, settings: &Path, port: u16) -> Result<Command, String> {
 fn secret() -> std::io::Result<String> {
     let mut bytes = [0; 32];
     fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
-    Ok(crate::fetch::hex(&bytes))
+    Ok(python_env::fetch::hex(&bytes))
 }
 
 fn free_port() -> std::io::Result<u16> {

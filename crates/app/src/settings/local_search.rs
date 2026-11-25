@@ -400,7 +400,7 @@ fn setup_body(problem: &str, cx: &App) -> Div {
     let theme = cx.theme();
     let muted = theme.muted_foreground;
     let platform = catalog::platform();
-    let size = |of: fn(&catalog::Platform) -> u64| platform.map_or(0, of);
+    let size = |of: fn(&catalog::Platform) -> u64| platform.as_ref().map_or(0, of);
     let part = |icon: Icon, name: String, note: &'static str, size: u64| {
         h_flex()
             .w_full()
@@ -452,7 +452,7 @@ fn setup_body(problem: &str, cx: &App) -> Div {
                     AppIcon::CodeXml.into(),
                     format!("Python {}", catalog::PYTHON_VERSION),
                     "A private copy; your own Python is not touched",
-                    size(|platform| platform.python_size),
+                    size(|platform| platform.python.python_size),
                 ))
                 .child(part(
                     AppIcon::Package.into(),
@@ -464,7 +464,7 @@ fn setup_body(problem: &str, cx: &App) -> Div {
                     AppIcon::Wrench.into(),
                     format!("uv {}", catalog::UV_VERSION),
                     "Installs the rest, and is deleted afterwards",
-                    size(|platform| platform.uv_size),
+                    size(|platform| platform.python.uv_size),
                 ))
                 .child(
                     h_flex()

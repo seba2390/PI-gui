@@ -1964,6 +1964,7 @@ fn spawn_options(
             chat_args(config, &mut options);
         } else {
             builtin_skill_args(config, &mut options);
+            document_args(config, &mut options);
         }
         return (options, mode);
     };
@@ -1997,6 +1998,37 @@ fn builtin_skill_args(config: &AppConfig, options: &mut SpawnOptions) {
             config.builtin_skills_dir.display()
         ),
     }
+}
+
+/// The extension that has `read` return PDF files as Markdown ([`documents::EXTENSION_SOURCE`]).
+/// Chats have no `read`, and pi on an SSH host no parser.
+fn document_args(config: &AppConfig, options: &mut SpawnOptions) {
+    let Some(exe) = &config.exe else {
+        return;
+    };
+    match documents::install_extension(&config.documents_dir) {
+        Ok(extension) => {
+            options
+                .extra_args
+                .extend(["--extension".into(), extension.into()]);
+            options
+                .env
+                .push((documents::BIN_ENV.into(), exe.clone().into()));
+            document_dir_env(config, options);
+        }
+        Err(error) => log::warn!(
+            "PDF files are not read as Markdown: could not write the extension to {}: {error}",
+            config.documents_dir.display()
+        ),
+    }
+}
+
+/// Where the helper finds the settings of document parsing.
+fn document_dir_env(config: &AppConfig, options: &mut SpawnOptions) {
+    options.env.push((
+        documents::config::DIR_ENV.into(),
+        config.documents_dir.clone().into(),
+    ));
 }
 
 /// pi's arguments and environment for a chat: the web tools only (see [`spawn_options`]).
@@ -2036,6 +2068,7 @@ fn chat_args(config: &AppConfig, options: &mut SpawnOptions) {
         deepsearch::config::DIR_ENV.into(),
         config.deepsearch_dir.clone().into(),
     ));
+    document_dir_env(config, options);
 }
 
 #[cfg(test)]
@@ -2097,8 +2130,23 @@ mod tests {
             [
                 "--skill".into(),
                 std::ffi::OsString::from(config.builtin_skills_dir.join("add-skill")),
+                "--extension".into(),
+                config.documents_dir.join("extension.ts").into(),
             ]
         );
+        assert!(config.documents_dir.join("extension.ts").exists());
+        for (key, value) in [
+            (
+                documents::BIN_ENV,
+                std::ffi::OsString::from("/app/pistachio"),
+            ),
+            (
+                documents::config::DIR_ENV,
+                config.documents_dir.clone().into(),
+            ),
+        ] {
+            assert!(code.env.contains(&(key.into(), value)), "{key}");
+        }
         assert!(
             config
                 .builtin_skills_dir

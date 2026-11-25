@@ -4,6 +4,7 @@
 //! pi's `settings.json` and web search in its own `config.json`; this file only holds what the
 //! app itself decides (look, start-up, notifications, updates, which `pi` to run).
 
+mod documents;
 mod local_search;
 pub mod view;
 mod web_advanced;

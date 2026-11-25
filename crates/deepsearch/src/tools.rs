@@ -109,14 +109,18 @@ pub fn web_fetch(config: &Config, input: &FetchInput) -> Result<Output, String> 
         .pages
         .as_deref()
         .and_then(|dir| pages::load(dir, url.as_str()));
-    let mut page = match stored {
-        Some(page) => page,
-        None => load_page(config, &url, true)?,
+    let (mut page, note) = match stored {
+        Some(page) => (page, None),
+        None => load(config, &url, true)?,
     };
     if input.again {
         page.shown.clear();
     }
-    let output = show_page(config, input, &mut page);
+    let mut output = show_page(config, input, &mut page);
+    if let (Some(note), Ok(output)) = (note, &mut output) {
+        output.text = format!("Note: {note}\n{}", output.text);
+        output.details["note"] = note.into();
+    }
     if let (Some(dir), Ok(_)) = (&input.pages, &output) {
         page.read = true;
         pages::store(dir, url.as_str(), &page);
@@ -126,6 +130,15 @@ pub fn web_fetch(config: &Config, input: &FetchInput) -> Result<Output, String> 
 
 /// Loads a page (HTML, text and, with `pdfs`, PDF) and splits it into passages.
 pub fn load_page(config: &Config, url: &url::Url, pdfs: bool) -> Result<StoredPage, String> {
+    load(config, url, pdfs).map(|(page, _)| page)
+}
+
+/// [`load_page`], and what there is to say about how it was read.
+fn load(
+    config: &Config,
+    url: &url::Url,
+    pdfs: bool,
+) -> Result<(StoredPage, Option<String>), String> {
     let agent = page_agent(&config.fetch);
     let mut response = agent
         .get(url.as_str())
@@ -160,6 +173,7 @@ pub fn load_page(config: &Config, url: &url::Url, pdfs: bool) -> Result<StoredPa
     let (bytes, cut_off) = read_body(response.body_mut(), limit)
         .map_err(|error| format!("Could not read {url}: {error}"))?;
 
+    let mut note = None;
     let page = match mime.as_str() {
         _ if pdf && !pdfs => return Err(format!("{url} is a PDF you did not read.")),
         _ if pdf && cut_off => {
@@ -167,9 +181,15 @@ pub fn load_page(config: &Config, url: &url::Url, pdfs: bool) -> Result<StoredPa
                 "{url} is a PDF too large to read. Look for an HTML version, or a summary."
             ));
         }
-        _ if pdf => crate::pdf::read(bytes).map_err(|error| {
-            format!("{url} is a PDF that could not be read ({error}). Look for an HTML version.")
-        })?,
+        _ if pdf => {
+            let (page, said) = crate::pdf::read(bytes).map_err(|error| {
+                format!(
+                    "{url} is a PDF that could not be read ({error}). Look for an HTML version."
+                )
+            })?;
+            note = said;
+            page
+        }
         "text/html" | "application/xhtml+xml" => extract::html(&decode(&bytes, charset.as_deref())),
         "text/plain" | "text/markdown" | "text/x-markdown" | "application/json"
         | "application/xml" | "text/xml" | "text/csv" => {
@@ -177,7 +197,7 @@ pub fn load_page(config: &Config, url: &url::Url, pdfs: bool) -> Result<StoredPa
         }
         other => return Err(format!("{url} is {other}, not a readable page.")),
     };
-    stored_page(config, &final_url, page, cut_off)
+    Ok((stored_page(config, &final_url, page, cut_off)?, note))
 }
 
 fn stored_page(

@@ -13,14 +13,35 @@ crates/
   titles/       automatic conversation names: title clean-up, the one-shot `pi --print` call, and
                 small local models (quantized GGUF via candle, pure Rust)
   deepsearch/   chat web search (search / deep): search backends, public-only fetching, page text extraction,
-                PDF text, passage ranking, checking reports, settings, and the pi extension that runs them via the app
-  searxng/      a private SearXNG for that: downloading it on request (pinned and checked), running it,
+                passage ranking, checking reports, settings, and the pi extension that runs them via the app
+  documents/    PDF and Office files as Markdown: the built-in reader, the parsers that can be downloaded
+                (pinned and checked), running one per document, and the pi extension for `read` in Code
+  searxng/      a private SearXNG for web search: downloading it on request (pinned and checked), running it,
                 checking one at an address
+  python-env/   what both download with: uv, a private Python and locked packages
   app/          the GPUI application (binary `pistachio`)
 ```
 
 Only `app` depends on the UI toolkit; everything else is plain Rust with its own tests. The app
 keeps a pi process alive only for the visible chat and for chats whose agent is still working.
+
+## Documents
+
+A document is always read by a helper process, the app's own executable run as `--documents-tool`
+(or, for a PDF a chat finds on the web, the `--deepsearch-tool` helper that fetched it): it cannot
+take the app down, and ends when nobody waits for it. A downloaded parser is one more process per
+document, with its own Python, packages and models, no network, a time limit, and its own process
+group. It watches its standard input, so it also ends when the helper is killed. Parsers that load
+models take turns, across processes, because several would fill the memory.
+
+- `web_fetch` turns the Markdown into blocks (`deepsearch::markdown`) and ranks passages as for any
+  page.
+- Attachments in chats keep the Markdown until the message is sent; one that is too long is cut to
+  its outline and what matches the message (`deepsearch::excerpt`).
+- In local Code sessions an extension handles pi's `tool_result` event for `read` of a PDF: pi has
+  decided about and done the read by then, and the result is replaced by the same read (pi's own
+  `createReadTool`) of the Markdown. Nothing runs for other files. pi on an SSH host has no parser
+  and keeps its own behaviour.
 
 ## Performance
 
