@@ -109,3 +109,48 @@ pub fn marker(extension: impl Into<SharedString>, cx: &App) -> Div {
         .text_color(theme.foreground)
         .child(extension.into())
 }
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::component::{Root, WindowExt as _};
+    use gpui_kit::{
+        AppContext as _, Context, IntoElement, Modifiers, ParentElement as _, Render,
+        TestAppContext, Window, div,
+    };
+    use pi_sessions::prompt::AttachedFile;
+
+    use crate::config::AppConfig;
+
+    struct Message(Vec<AttachedFile>);
+
+    impl Render for Message {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div().children(super::pages(1, &self.0, cx))
+        }
+    }
+
+    #[gpui_kit::test]
+    fn a_pdf_is_shown_here(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("report.pdf");
+        std::fs::write(&path, "%PDF-1.4").unwrap();
+        let documents_dir = dir.path().join("documents");
+        let id = documents::attached::remember(&documents_dir, &path);
+        cx.update(|cx| {
+            gpui_kit::component::init(cx);
+            cx.set_reduce_motion(true);
+            let mut config = AppConfig::for_tests("pi".into());
+            config.documents_dir = documents_dir;
+            config.exe = None;
+            cx.set_global(config);
+        });
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let name = "report.pdf".into();
+            let message = cx.new(|_| Message(vec![AttachedFile { name, id }]));
+            Root::new(message, window, cx)
+        });
+        let page = cx.debug_bounds("attached-file").unwrap();
+        cx.simulate_click(page.center(), Modifiers::none());
+        assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+    }
+}

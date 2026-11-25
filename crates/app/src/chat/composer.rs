@@ -3177,7 +3177,7 @@ mod draft_tests {
     use std::path::{Path, PathBuf};
 
     use gpui_kit::component::{Root, WindowExt as _};
-    use gpui_kit::{AppContext as _, Entity, TestAppContext, VisualTestContext, Window};
+    use gpui_kit::{AppContext as _, Entity, Modifiers, TestAppContext, VisualTestContext, Window};
     use pi_rpc::protocol::ImageContent;
     use pi_sessions::Mode;
 
@@ -3514,6 +3514,14 @@ mod draft_tests {
             assert_eq!(shown, [true, false, true]);
             assert!(matches!(&attachments[1].preview, Preview::Text(text) if text == "two\nlines"));
         });
+        // Clicking the picture of the PDF, with nothing else left, shows it.
+        act(&composer, cx, |composer, _, cx| {
+            composer.attachments.truncate(1);
+            cx.notify();
+        });
+        let picture = cx.debug_bounds("attachment-picture").unwrap();
+        cx.simulate_click(picture.center(), Modifiers::none());
+        assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
     }
 
     /// The text of attached files goes along with a message, and comes back as files with it.
