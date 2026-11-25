@@ -11,10 +11,15 @@ use serde::{Deserialize, Serialize};
 use crate::config::Config;
 use crate::pages::{self, StoredPage};
 use crate::rank::{self, Passage};
+use crate::refs;
 use crate::tools;
 
-/// How much of each source is shown for a claim.
+/// How much of its sources is shown for a claim: of one, for each more, and at most.
 const EVIDENCE_CHARS: usize = 2400;
+const EVIDENCE_MORE: usize = 900;
+const EVIDENCE_MAX: usize = 6000;
+/// Passages shown for each number of a claim, wherever they rank.
+const PER_NUMBER: usize = 2;
 /// Statements without a source that are shown at most.
 const MAX_UNSOURCED: usize = 60;
 /// Pages loaded at once.
@@ -59,6 +64,8 @@ pub struct Claim {
     pub urls: Vec<String>,
     /// What its sources say that is closest to it.
     pub evidence: String,
+    /// A page that was read and has its numbers, where those it cites have not.
+    pub elsewhere: Option<String>,
 }
 
 /// A statement that no page the model read stands behind.
@@ -67,6 +74,8 @@ pub struct Unsourced {
     pub text: String,
     /// What it cites instead: pages that were not read.
     pub urls: Vec<String>,
+    /// A page that was read and has its numbers.
+    pub elsewhere: Option<String>,
     /// It says something checkable (a number that no sourced claim has, or it cites a page that
     /// was not read). Otherwise it may be advice or a remark: the model is asked.
     pub sure: bool,
@@ -92,13 +101,14 @@ struct Statement {
 }
 
 pub fn check(config: &Config, input: &CheckInput) -> Checked {
-    let statements = statements(&input.report);
+    let report = refs::as_links(&input.report);
+    let statements = statements(&report);
     let mut urls: Vec<String> = Vec::new();
     for url in statements
         .iter()
         .flat_map(|statement| &statement.urls)
         .cloned()
-        .chain(all_links(&input.report))
+        .chain(all_links(&report))
     {
         if !urls
             .iter()
@@ -129,7 +139,14 @@ pub fn check(config: &Config, input: &CheckInput) -> Checked {
                 .iter()
                 .any(|url| sources.contains_key(&pages::key(url)))
         });
-    let unsourced = unsourced(&cited, &bare);
+    let known: Vec<(String, HashSet<String>)> = pages::all_read(&input.pages)
+        .into_iter()
+        .map(|page| (page.final_url.clone(), page_numbers(&page)))
+        .collect();
+    let mut unsourced = unsourced(&cited, &bare);
+    for claim in &mut unsourced {
+        claim.elsewhere = elsewhere(&claim.text, &known, &[]);
+    }
     let total_claims = cited.len() + unsourced.iter().filter(|claim| claim.sure).count();
     let claims = pick(&cited, input.max_claims)
         .into_iter()
@@ -140,17 +157,14 @@ pub fn check(config: &Config, input: &CheckInput) -> Checked {
                 .iter()
                 .filter_map(|url| Some((url, (*sources.get(&pages::key(url))?)?)))
                 .collect();
-            let mut evidence = String::new();
-            for (url, page) in &pages {
-                let passages = passages_for(page, &claim.text, EVIDENCE_CHARS / pages.len());
-                let _ = writeln!(evidence, "From {url} ({}):\n{passages}", page.title);
-            }
+            let evidence = evidence(&claim.text, &pages);
             // Read before, but not there any more: nothing to judge it by.
             (!evidence.is_empty()).then(|| Claim {
                 id: index + 1,
                 text: claim.text.clone(),
                 urls: pages.iter().map(|(url, _)| (*url).clone()).collect(),
                 evidence,
+                elsewhere: elsewhere(&claim.text, &known, &pages),
             })
         })
         .collect();
@@ -184,6 +198,7 @@ fn unsourced(cited: &[&Statement], bare: &[&Statement]) -> Vec<Unsourced> {
             out.push(Unsourced {
                 text: statement.text.clone(),
                 urls: statement.urls.clone(),
+                elsewhere: None,
                 sure,
             });
         }
@@ -206,10 +221,89 @@ fn numbers(text: &str) -> HashSet<String> {
         .collect()
 }
 
-/// What `page` says that is closest to `claim`.
-fn passages_for(page: &StoredPage, claim: &str, max_chars: usize) -> String {
-    let chosen = rank::select(&page.passages, Some(claim), max_chars);
-    rank::render(&page.passages, &chosen, max_chars)
+/// What `pages` say that is closest to `claim`: the best passages of all of them, and those with
+/// its numbers.
+fn evidence(claim: &str, pages: &[(&String, &StoredPage)]) -> String {
+    let budget = (EVIDENCE_CHARS + EVIDENCE_MORE * pages.len().saturating_sub(1)).min(EVIDENCE_MAX);
+    let all: Vec<Passage> = pages
+        .iter()
+        .flat_map(|(_, page)| page.passages.iter().cloned())
+        .collect();
+    let mut chosen: Vec<usize> = Vec::new();
+    for number in telling_numbers(claim) {
+        let with = all
+            .iter()
+            .enumerate()
+            .filter(|(_, passage)| numbers(&passage.text).contains(&number));
+        // The ones that have most of its other words.
+        let with: Vec<usize> = with.map(|(index, _)| index).collect();
+        let passages: Vec<Passage> = with.iter().map(|index| all[*index].clone()).collect();
+        let scores = rank::scores(&passages, claim);
+        let mut order: Vec<usize> = (0..with.len()).collect();
+        order.sort_by(|a, b| scores[*b].total_cmp(&scores[*a]));
+        chosen.extend(order.into_iter().take(PER_NUMBER).map(|index| with[index]));
+    }
+    chosen.sort_unstable();
+    chosen.dedup();
+    let mut used: usize = 0;
+    chosen.retain(|index| {
+        used += all[*index].text.len();
+        used <= budget
+    });
+    let used: usize = chosen.iter().map(|index| all[*index].text.len()).sum();
+    chosen.extend(rank::select(&all, Some(claim), budget.saturating_sub(used)));
+    chosen.sort_unstable();
+    chosen.dedup();
+    let mut out = String::new();
+    let mut first = 0;
+    for (url, page) in pages {
+        let here: Vec<usize> = chosen
+            .iter()
+            .filter(|index| (first..first + page.passages.len()).contains(*index))
+            .map(|index| index - first)
+            .collect();
+        first += page.passages.len();
+        if !here.is_empty() {
+            let passages = rank::render(&page.passages, &here, budget);
+            let _ = writeln!(out, "From {url} ({}):\n{passages}", page.title);
+        }
+    }
+    out
+}
+
+/// The numbers of a claim that tell it from others: not years, days or counts.
+fn telling_numbers(claim: &str) -> HashSet<String> {
+    numbers(claim)
+        .into_iter()
+        .filter(|number| number.len() > 2 && !(number.len() == 4 && number.starts_with("20")))
+        .collect()
+}
+
+fn page_numbers(page: &StoredPage) -> HashSet<String> {
+    page.passages
+        .iter()
+        .flat_map(|passage| numbers(&passage.text))
+        .collect()
+}
+
+/// A page among `known` that has all numbers of `claim`, where those it cites have not.
+fn elsewhere(
+    claim: &str,
+    known: &[(String, HashSet<String>)],
+    cited: &[(&String, &StoredPage)],
+) -> Option<String> {
+    let wanted = telling_numbers(claim);
+    if wanted.is_empty()
+        || cited
+            .iter()
+            .any(|(_, page)| wanted.is_subset(&page_numbers(page)))
+    {
+        return None;
+    }
+    known
+        .iter()
+        .find(|(_, numbers)| wanted.is_subset(numbers))
+        .map(|(url, _)| url.clone())
 }
 
 /// The page at each address: kept from reading it, or loaded now.
@@ -405,9 +499,29 @@ fn statements(report: &str) -> Vec<Statement> {
     let mut above: Vec<(usize, Vec<String>)> = Vec::new();
     let mut sources = false;
     let mut caveat = false;
+    // Where the part of the report begins that a list of sources below it stands for.
+    let mut section = 0;
     for part in parts(report) {
+        if let Part::Paragraph(text) | Part::Bullet(_, text) = &part
+            && !sources
+            && sentences(text)
+                .iter()
+                .all(|sentence| is_source_line(sentence))
+            && out.len() > section
+        {
+            let named = without_links(text).1;
+            for statement in &mut out[section..] {
+                if statement.urls.is_empty() {
+                    statement.urls.clone_from(&named);
+                }
+            }
+            section = out.len();
+            block = None;
+            continue;
+        }
         match part {
             Part::Heading(text) => {
+                section = out.len();
                 sources = is_sources_heading(&text);
                 caveat = is_caveat_heading(&text);
                 block = None;
@@ -419,6 +533,11 @@ fn statements(report: &str) -> Vec<Statement> {
                 let (plain, urls) = without_links(&text);
                 if is_sources_heading(&plain) && urls.is_empty() {
                     sources = true;
+                    continue;
+                }
+                // "Sources: the page of A, B": names without links.
+                let first = plain.split(':').next().unwrap_or_default();
+                if plain.contains(':') && is_sources_heading(first) && urls.is_empty() {
                     continue;
                 }
                 // "Sources: [a], [b]" below a list or table.
@@ -596,7 +715,7 @@ fn sentences(text: &str) -> Vec<String> {
 }
 
 /// The links of `text`: each label and address, and where they are.
-fn links(text: &str) -> Vec<(std::ops::Range<usize>, &str, &str)> {
+pub(crate) fn links(text: &str) -> Vec<(std::ops::Range<usize>, &str, &str)> {
     let mut out = Vec::new();
     let mut from = 0;
     while let Some(middle) = text[from..].find("](").map(|at| from + at) {
@@ -880,6 +999,83 @@ Shall I check 3 more stores for you?
                 ("It is the better console for most.".to_owned(), false),
             ]
         );
+    }
+
+    /// How the reports of weak models really cite.
+    #[test]
+    fn sources_below_a_part_stand_for_it() {
+        let report = "\
+## New
+
+| Model | Price |
+|---|---|
+| PS5 Digital | 5.149 kr. |
+
+It was 400 kr. cheaper in 2025.
+
+Sources: [A](https://a.org), [B](https://b.org)
+
+- The Pro costs 7.499 kr. [C](https://c.org)
+- Used ones cost 4.050 kr.
+- Source: [D](https://d.org)
+
+**Sources:** the page of A, the one of B, and 3 more
+";
+        assert_eq!(
+            found(report),
+            [
+                claim(
+                    "PS5 Digital; Price: 5.149 kr.",
+                    &["https://a.org", "https://b.org"]
+                ),
+                claim(
+                    "It was 400 kr. cheaper in 2025.",
+                    &["https://a.org", "https://b.org"]
+                ),
+                claim("The Pro costs 7.499 kr. C", &["https://c.org"]),
+                claim("Used ones cost 4.050 kr.", &["https://d.org"]),
+            ]
+        );
+    }
+
+    /// A row that cites several pages is judged by what is about it on all of them.
+    #[test]
+    fn evidence_is_picked_from_all_sources() {
+        let page = |url: &str, texts: &[&str]| StoredPage {
+            final_url: url.into(),
+            passages: texts
+                .iter()
+                .map(|text| Passage {
+                    heading: None,
+                    text: format!("{text} {}", "Words about nothing. ".repeat(30)),
+                })
+                .collect(),
+            ..stored("", true)
+        };
+        let pages: Vec<StoredPage> = (0..7)
+            .map(|index| {
+                let url = format!("https://{index}.org");
+                page(&url, &["Introduction", "Other", "More"])
+            })
+            .chain([page(
+                "https://price.org",
+                &["Introduction", "Other", "Bilka sells it for 5.190 kr."],
+            )])
+            .collect();
+        let cited: Vec<_> = pages.iter().map(|page| (&page.final_url, page)).collect();
+        let found = evidence("PS5 Slim; Retailer: Bilka; Price: 5.190 kr.", &cited);
+        assert!(found.contains("5.190 kr."), "{found}");
+        assert!(found.len() < EVIDENCE_MAX + 2000, "{}", found.len());
+
+        let known: Vec<_> = pages
+            .iter()
+            .map(|page| (page.final_url.clone(), page_numbers(page)))
+            .collect();
+        let other = [cited[0]];
+        let hint =
+            |cited: &[(&String, &StoredPage)]| elsewhere("Bilka: 5.190 kr. in 2026", &known, cited);
+        assert_eq!(hint(&other).as_deref(), Some("https://price.org"));
+        assert_eq!(hint(&cited), None);
     }
 
     #[test]

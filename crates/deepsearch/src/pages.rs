@@ -42,6 +42,20 @@ pub fn load(dir: &Path, url: &str) -> Option<StoredPage> {
     serde_json::from_slice(&fs::read(file(dir, url)).ok()?).ok()
 }
 
+/// Every page in `dir` the model read, once each.
+pub fn all_read(dir: &Path) -> Vec<StoredPage> {
+    let Ok(files) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut pages: Vec<StoredPage> = files
+        .filter_map(|file| serde_json::from_slice(&fs::read(file.ok()?.path()).ok()?).ok())
+        .filter(|page: &StoredPage| page.read)
+        .collect();
+    pages.sort_by(|a, b| a.final_url.cmp(&b.final_url));
+    pages.dedup_by(|a, b| a.final_url == b.final_url);
+    pages
+}
+
 /// Keeps `page` under `url` and where it really is. Losing it only costs loading it again.
 pub fn store(dir: &Path, url: &str, page: &StoredPage) {
     let Ok(json) = serde_json::to_vec(page) else {

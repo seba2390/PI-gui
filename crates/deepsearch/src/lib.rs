@@ -18,6 +18,7 @@ pub mod http;
 pub mod pages;
 pub mod pdf;
 pub mod rank;
+pub mod refs;
 pub mod search;
 pub mod tools;
 
