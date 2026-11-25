@@ -46,6 +46,7 @@ markdown = "1.0.0"
 katex-native = { version = "0.1.1", features = ["raster"] }
 usvg = "0.45.1"
 sha2 = "0.10.9"
+getrandom = "0.3"
 ureq = { version = "=3.5.2", default-features = false, features = ["rustls"] }
 # Complete highlight queries for grammars gpui-kit ships incomplete (see src/syntax.rs).
 # Keep these at the versions gpui-kit itself locks, so each grammar is compiled once.

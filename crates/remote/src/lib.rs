@@ -12,6 +12,7 @@
 //! * [`sessions`] — pi's session files on a host, listed incrementally, and remote trash.
 //! * [`link`] — the host side of using this computer's models there: a port forward to the
 //!   app's model relay and the pi settings folder Pistachio manages on the host.
+//! * `tunnel` — a host's connection where OpenSSH cannot share one (Windows).
 //!
 //! Everything goes through the system `ssh` binary so the user's `~/.ssh/config`, keys,
 //! `ssh-agent`, `known_hosts` and `ProxyJump` all behave exactly as in a terminal. All functions
@@ -29,6 +30,7 @@ mod local_network;
 mod process;
 pub mod sessions;
 pub mod ssh;
+mod tunnel;
 
 pub use askpass::{AskpassServer, Prompt};
 pub use config::{
@@ -36,8 +38,9 @@ pub use config::{
 };
 pub use error::{RemoteError, classify};
 pub use host::{HostId, HostStore, SavedHost, Target};
-pub use link::MANAGED_AGENT_DIR;
+pub use link::{Endpoint, MANAGED_AGENT_DIR, RelayProof};
 pub use sessions::SessionIndex;
 pub use ssh::{
     DirListing, LEGACY_MANAGED_DIR, MANAGED_DIR, Probe, RELAY_PORT_ENV, Ssh, remote_word, sh_quote,
 };
+pub use tunnel::no_console;

@@ -1666,6 +1666,17 @@ impl PiSession {
             .collect()
     }
 
+    /// Without the models that a host's pi lists and this computer does not have.
+    fn usable(&self, mut models: Vec<Model>, cx: &gpui_kit::App) -> Vec<Model> {
+        let hosts = cx.try_global::<crate::hosts::HostsHandle>();
+        if let (Some(id), Some(hosts)) = (&self.host, hosts)
+            && let Some(served) = hosts.0.read(cx).served_models(id)
+        {
+            models.retain(|model| served.usable(&model.provider, &model.id));
+        }
+        models
+    }
+
     fn initialize(&mut self, cx: &mut Context<Self>) {
         let Some(client) = self.client.clone() else {
             return;
@@ -1698,7 +1709,7 @@ impl PiSession {
                         this.return_outbox(cx);
                     }
                 }
-                this.models = models;
+                this.models = this.usable(models, cx);
                 this.thinking_levels = levels;
                 this.stats = stats;
                 this.commands = commands;
@@ -2364,12 +2375,28 @@ mod tests {
 
     /// pi on an SSH host uses a model configured only on this computer, through the relay:
     /// a fake OpenAI-compatible server here (on loopback, unreachable from the host) answers,
-    /// and gets the real key and header that only this computer has.
-    /// `PISTACHIO_SSH_TEST_HOST=<alias> cargo test -p pistachio -- --ignored models_relay_over_ssh`
+    /// and gets the real key and header that only this computer has. A login (Codex),
+    /// also only here, works there too.
+    /// `PISTACHIO_SSH_TEST_HOST=<alias> cargo test -p pistachio -- --ignored --test-threads 1
+    /// models_relay_over`
     #[cfg(unix)]
     #[test]
     #[ignore = "runs pi on PISTACHIO_SSH_TEST_HOST"]
     fn models_relay_over_ssh() {
+        models_relay(false);
+    }
+
+    /// The same without connection sharing, as on Windows: the relay listens on a port, and a
+    /// tunnel holds the connection.
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "runs pi on PISTACHIO_SSH_TEST_HOST"]
+    fn models_relay_over_a_tunnel() {
+        models_relay(true);
+    }
+
+    #[cfg(unix)]
+    fn models_relay(tunnel: bool) {
         use std::io::{BufRead as _, BufReader, Read as _, Write as _};
         use std::sync::{Arc, Mutex};
 
@@ -2407,13 +2434,62 @@ mod tests {
                     let length: usize = header("content-length").parse().unwrap_or(0);
                     let mut body = vec![0; length];
                     let _ = reader.read_exact(&mut body);
+                    // pi's node does this too.
+                    if header("content-encoding") == "zstd" {
+                        let script = "process.stdout.write(require('zlib').zstdDecompressSync(\
+                                      require('fs').readFileSync(0)))";
+                        let mut node = std::process::Command::new("node")
+                            .args(["-e", script])
+                            .stdin(std::process::Stdio::piped())
+                            .stdout(std::process::Stdio::piped())
+                            .spawn()
+                            .expect("node");
+                        node.stdin.take().unwrap().write_all(&body).unwrap();
+                        body = node.wait_with_output().unwrap().stdout;
+                    }
                     log.lock().unwrap().push(format!(
-                        "{} auth={} extra={}",
+                        "{} auth={} extra={} account={} body={}",
                         head.first().cloned().unwrap_or_default(),
                         header("authorization"),
-                        header("x-extra")
+                        header("x-extra"),
+                        header("chatgpt-account-id"),
+                        String::from_utf8_lossy(&body)
                     ));
                     let mut out = reader.into_inner();
+                    // ChatGPT: no WebSocket, and reasoning that only it can read.
+                    if let Some(line) = head.first().filter(|line| line.contains("/codex/")) {
+                        if line.starts_with("GET") {
+                            let _ = out.write_all(
+                                b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                            );
+                            return;
+                        }
+                        let _ = out.write_all(
+                            b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n",
+                        );
+                        let reasoning = serde_json::json!({ "type": "reasoning", "id": "rs_1",
+                            "summary": [{ "type": "summary_text", "text": "Hm." }],
+                            "encrypted_content": "only-chatgpt-can-read-this" });
+                        let text = serde_json::json!({ "type": "message", "id": "msg_1",
+                            "role": "assistant", "status": "completed", "content":
+                            [{ "type": "output_text", "text": "Hello from ChatGPT.", "annotations": [] }] });
+                        let mut events = vec![serde_json::json!({ "type": "response.created",
+                            "response": { "id": "resp_1" } })];
+                        for (index, item) in [reasoning, text].into_iter().enumerate() {
+                            for kind in ["added", "done"] {
+                                events.push(serde_json::json!({
+                                    "type": format!("response.output_item.{kind}"),
+                                    "output_index": index, "item": item }));
+                            }
+                        }
+                        events.push(serde_json::json!({ "type": "response.completed",
+                            "response": { "id": "resp_1", "status": "completed", "usage": {
+                                "input_tokens": 1, "output_tokens": 1, "total_tokens": 2 } } }));
+                        for event in events {
+                            let _ = write!(out, "data: {event}\n\n");
+                        }
+                        return;
+                    }
                     // A careless server that writes the credentials it got into its answer.
                     if head
                         .first()
@@ -2469,11 +2545,29 @@ mod tests {
                 "apiKey": "real-secret-key",
                 "headers": { "x-extra": "real-header" },
                 "models": [{ "id": "fake-1", "name": "Fake One" }],
-            }}})
+            }, "openai-codex": { "baseUrl": format!("http://127.0.0.1:{port}") }}})
             .to_string(),
         )
         .unwrap();
-        std::fs::write(local.path().join("auth.json"), "{}").unwrap();
+        // A login whose token names the account, as ChatGPT's does.
+        let access = {
+            use base64::Engine as _;
+            let part = |value: serde_json::Value| {
+                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value.to_string())
+            };
+            let claims = serde_json::json!({ "https://api.openai.com/auth":
+                { "chatgpt_account_id": "real-account" } });
+            let header = part(serde_json::json!({ "alg": "none" }));
+            format!("{header}.{}.real-signature", part(claims))
+        };
+        std::fs::write(
+            local.path().join("auth.json"),
+            serde_json::json!({ "openai-codex": { "type": "oauth", "access": access,
+                "refresh": "real-refresh", "expires": 32_503_680_000_000_u64,
+                "accountId": "real-account" } })
+            .to_string(),
+        )
+        .unwrap();
         let launch = crate::relay::Launch {
             program: crate::config::default_pi_program(),
             env: vec![(
@@ -2482,16 +2576,23 @@ mod tests {
             )]
             .into(),
             dir: local.path().join("relay"),
+            tcp: tunnel,
         };
 
-        let ssh = remote::Ssh::new(remote::Target::Alias {
+        let mut ssh = remote::Ssh::new(remote::Target::Alias {
             alias: alias.clone(),
         });
+        if tunnel {
+            ssh = ssh.without_sharing();
+        }
         ssh.connect(false).expect("connect");
+        assert!(ssh.is_connected());
         let probe = ssh.probe("pi").expect("probe");
         let host_id = remote::HostId("e2e-relay".into());
-        let token = crate::relay::token(&host_id);
         let link = crate::relay::link(&ssh, &host_id, &probe, None, &launch).expect("link");
+        let token = crate::relay::token(&host_id);
+        assert_eq!(link.master_pid, ssh.master_pid());
+        assert!(link.models.usable("fake", "fake-1") && !link.models.usable("fake", "fake-2"));
         eprintln!("linked on port {}: {:?}", link.port, link.env);
         let agent = &link.env[0].1;
         let models = String::from_utf8(
@@ -2505,13 +2606,15 @@ mod tests {
             "{models}"
         );
         assert!(
-            !models.contains("real-"),
+            !models.contains("real-") && !models.contains(&access),
             "no credential on the host: {models}"
         );
 
         // Linking again on the same connection keeps the port.
         let again = crate::relay::link(&ssh, &host_id, &probe, Some(&link), &launch).unwrap();
         assert_eq!(again.port, link.port);
+        assert_eq!(again.master_pid, link.master_pid);
+        assert_eq!(crate::relay::token(&host_id), token);
 
         // pi there, with its sessions in a scratch folder.
         let scratch = ssh
@@ -2526,7 +2629,7 @@ mod tests {
             link.env[2].clone(),
         ];
         let host = remote::SavedHost {
-            id: host_id,
+            id: host_id.clone(),
             label: alias,
             target: ssh.target().clone(),
             pi_command: probe.pi_path.clone(),
@@ -2556,19 +2659,34 @@ mod tests {
             model_id: "fake-1".into(),
         }))
         .expect("set model");
-        block_on(client.prompt("hi".into(), Vec::new(), None)).expect("prompt accepted");
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-        while std::time::Instant::now() < deadline {
-            match block_on(events.recv()) {
-                Ok(pi_rpc::ClientEvent::Event(event))
-                    if matches!(*event, pi_rpc::protocol::Event::AgentSettled { .. }) =>
-                {
-                    break;
+        let prompt = |text: &str| {
+            block_on(client.prompt(text.into(), Vec::new(), None)).expect("prompt accepted");
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+            while std::time::Instant::now() < deadline {
+                match block_on(events.recv()) {
+                    Ok(pi_rpc::ClientEvent::Event(event))
+                        if matches!(*event, pi_rpc::protocol::Event::AgentSettled { .. }) =>
+                    {
+                        break;
+                    }
+                    Ok(_) => {}
+                    Err(_) => break,
                 }
-                Ok(_) => {}
-                Err(_) => break,
             }
-        }
+        };
+        prompt("hi");
+        // Twice: the second time with what it reasoned before.
+        let chatgpt = available
+            .iter()
+            .find(|model| model.qualified_id().starts_with("openai-codex/"))
+            .expect("the ChatGPT login's models");
+        block_on(client.request(pi_rpc::protocol::Command::SetModel {
+            provider: "openai-codex".into(),
+            model_id: chatgpt.id.clone(),
+        }))
+        .expect("set model");
+        prompt("hi ChatGPT");
+        prompt("and again");
         let messages = block_on(client.get_messages()).expect("messages");
         drop(process);
         // Without the host's token, or for the relay's own models list, the host gets nothing.
@@ -2605,7 +2723,89 @@ mod tests {
                     && refused.contains("forbidden")),
             "{refused}"
         );
+        // Its pi's own protocol needs the token too, and the token only opens this host's models.
+        let post = |token: &str, path: &str, body: &str| {
+            ssh.exec(&format!(
+                "command -v curl >/dev/null || exit 0; curl -s -m 5 -X POST \
+                 -H 'authorization: Bearer {token}' -d '{body}' http://127.0.0.1:{}{path}",
+                link.port
+            ))
+            .unwrap()
+        };
+        let hello = r#"{"model":"fake-1","context":{"messages":[]}}"#;
+        let wrong = format!("pistachio-{}-{}", "0".repeat(16), "0".repeat(64));
+        for (token, path, body, answer) in [
+            (
+                wrong.as_str(),
+                "/m/fake/messages",
+                hello,
+                "did not come from",
+            ),
+            (
+                &token,
+                "/m/fake/messages",
+                r#"{"model":"fake-1"}"#,
+                "no conversation",
+            ),
+            (
+                &token,
+                "/m/other/messages",
+                hello,
+                "has no model other/fake-1",
+            ),
+            (
+                &token,
+                "/m/fake/v1/responses",
+                hello,
+                "does not have this fake model",
+            ),
+            (
+                &token,
+                "/_pistachio/tokens",
+                r#"{"nonces":[]}"#,
+                "forbidden",
+            ),
+        ] {
+            let got = post(token, path, body);
+            assert!(got.is_empty() || got.contains(answer), "{path}: {got}");
+        }
         let _ = ssh.exec(&format!("rm -rf {}", remote::sh_quote(&scratch)));
+
+        // The relay ended by itself: nothing on this computer may take over its port. The next
+        // session gets a new one, over a connection with a new token.
+        if tunnel {
+            let remote::Endpoint::Port(old) = link.relay else {
+                panic!("{:?}", link.relay)
+            };
+            crate::relay::kill_for_tests();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            while ssh
+                .master_pid()
+                .is_none_or(|pid| Some(pid) == link.master_pid)
+            {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the forward is still there"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            let listener = std::net::TcpListener::bind(("127.0.0.1", old)).unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let _ = ssh.exec(&format!(
+                "command -v curl >/dev/null && curl -s -m 5 http://127.0.0.1:{}/",
+                link.port
+            ));
+            assert!(
+                listener.accept().is_err(),
+                "the host still reaches the old port"
+            );
+            let new = crate::relay::link(&ssh, &host_id, &probe, Some(&link), &launch).unwrap();
+            assert_ne!(new.relay, link.relay);
+            assert_eq!(new.master_pid, ssh.master_pid());
+            assert_ne!(crate::relay::token(&host_id), token);
+            ssh.disconnect();
+            assert!(!ssh.is_connected());
+        }
         let transcript = serde_json::to_string(&messages).unwrap();
         let seen = seen.lock().unwrap().clone();
         eprintln!("the fake server saw: {seen:?}");
@@ -2616,8 +2816,25 @@ mod tests {
         assert!(
             seen.iter()
                 .any(|request| request.starts_with("POST /v1/chat/completions")
-                    && request.ends_with("auth=Bearer real-secret-key extra=real-header")),
+                    && request.contains("auth=Bearer real-secret-key extra=real-header ")),
             "{seen:?}"
+        );
+        assert!(transcript.contains("Hello from ChatGPT."), "{transcript}");
+        assert!(!transcript.contains("real-"), "{transcript}");
+        let chatgpt: Vec<_> = seen
+            .iter()
+            .filter(|request| request.starts_with("POST /codex/responses"))
+            .collect();
+        assert!(
+            chatgpt.len() == 2
+                && chatgpt.iter().all(|request| request.contains(&format!(
+                    "auth=Bearer {access} extra= account=real-account "
+                ))),
+            "{seen:?}"
+        );
+        assert!(
+            chatgpt[1].contains("only-chatgpt-can-read-this"),
+            "it gets its reasoning back: {seen:?}"
         );
         crate::relay::stop();
     }

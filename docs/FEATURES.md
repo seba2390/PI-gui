@@ -143,11 +143,14 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
     or a VPN work from any host, and keys and logins never leave this computer. A hidden pi
     here (started on first use) adds them to each request; the host reaches it through a
     port forward on its own loopback, and each request needs a token that only works for
-    that host. pi on the host reads a settings folder Pistachio writes there,
+    this connection to that host. Before pi starts there, the hidden pi proves that it is the
+    one that answers. Logins and cloud credentials that take more than a key (ChatGPT/Codex,
+    GitHub Copilot, Vertex, Bedrock) work too, with pi 1.5 or newer on the host: the hidden pi
+    sends those conversations itself. (Custom thinking budgets and sampling parameters are not
+    passed on for these.) pi on the host reads a settings folder Pistachio writes there,
     `~/.pistachio/agent` (written again when your models, logins or settings here change);
     the host's own `~/.pi` is not changed, and its extensions, skills, prompts and themes are
-    linked in. Not yet relayed: ChatGPT/Codex, GitHub Copilot and Gemini CLI logins, Vertex
-    and Bedrock. If a host does not allow port forwarding, pi there uses its own models and
+    linked in. If a host does not allow port forwarding, pi there uses its own models and
     the model menu says why. "Add model" in a remote session edits this computer's models.
   - Passwords, key passphrases and one-time codes are asked for in the app (ssh's
     `SSH_ASKPASS`); nothing is stored. Unknown host keys are shown for confirmation; a changed
@@ -164,7 +167,9 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   - When the connection drops, the session offers to reconnect and resumes its session file.
   - Limits: csh/tcsh login shells are not supported (bash, zsh, dash, ksh and fish are; fish
     is untested on a real host). Windows clients are untested: Windows' OpenSSH cannot share
-    connections, so every command opens its own connection there.
+    connections, so every command opens its own connection there (keys or an agent are needed,
+    as a password would be asked for each time), and a tunnel in the background tells whether
+    the host is connected and forwards to the hidden pi, which listens on a loopback port.
 - **Skills** (Code mode): a Skills button under the Chat | Code switch shows all skills: the
   ones that come with Pistachio, your own library (`~/.pi/agent/skills` and `~/.agents/skills`)
   and those of your projects (`.pi/skills` and `.agents/skills`), here or on the SSH host. With a

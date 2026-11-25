@@ -6,6 +6,23 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- SSH sessions can use the models of ChatGPT/Codex and GitHub Copilot logins, Google Vertex and
+  Amazon Bedrock that this computer has, as they could others. The host needs pi 1.5 or newer.
+  (#25)
+- Windows: SSH sessions can use this computer's models, and a connected host stays connected. Not
+  yet tested on a real Windows computer. (#31)
+
+### Changed
+
+- SSH sessions: before pi starts on a host, it is checked that this computer is what answers where
+  it will send its model requests. On a shared host, someone else could have listened there after
+  the connection was lost. Each connection also gets a token of its own, and the last one's no
+  longer works.
+- The model menu of an SSH session leaves out models that only pi on the host knows about, and that
+  this computer could not provide.
+
 ## [0.5.1] - 2026-11-25
 
 ### Added

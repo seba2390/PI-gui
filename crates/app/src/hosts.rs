@@ -821,6 +821,14 @@ impl Hosts {
         matches!(self.links.get(id), Some(LinkState::Linked(_)))
     }
 
+    /// This computer's models that pi on `id` was given, if it uses them.
+    pub fn served_models(&self, id: &HostId) -> Option<relay::Served> {
+        match self.links.get(id) {
+            Some(LinkState::Linked(link)) => Some(link.models.clone()),
+            _ => None,
+        }
+    }
+
     /// Why pi on `id` uses the host's own models instead of this computer's.
     pub fn link_error(&self, id: &HostId) -> Option<SharedString> {
         match self.links.get(id) {
@@ -844,6 +852,7 @@ impl Hosts {
             dir: pi_sessions::app_dir()
                 .unwrap_or_else(std::env::temp_dir)
                 .join("relay"),
+            tcp: relay::TCP,
         };
         let previous = match self.links.get(id) {
             Some(LinkState::Linked(link)) => Some(link.clone()),
