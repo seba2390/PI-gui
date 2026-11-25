@@ -15,10 +15,13 @@ path = "src/main.rs"
 [dependencies]
 gpui-kit.workspace = true
 deepsearch.workspace = true
+documents.workspace = true
 pi-config.workspace = true
 pi-rpc.workspace = true
 pi-sessions.workspace = true
+python-env.workspace = true
 remote.workspace = true
+searxng.workspace = true
 transcript.workspace = true
 titles.workspace = true
 workspace.workspace = true

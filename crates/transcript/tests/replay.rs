@@ -121,6 +121,8 @@ fn describe(transcript: &Transcript, with_timing: bool) -> String {
             ItemKind::Notice(notice) => {
                 writeln!(out, "NOTICE {:?}: {}", notice.kind, notice.text).unwrap();
             }
+            ItemKind::Check(check) => writeln!(out, "CHECK {}", check.text).unwrap(),
+            ItemKind::Step(step) => writeln!(out, "STEP {} {}", step.title, step.detail).unwrap(),
             ItemKind::TurnSummary(summary) => {
                 let timing = if with_timing {
                     format_duration(summary.duration)
@@ -294,4 +296,32 @@ fn compaction_is_a_status_and_one_notice() {
         "NOTICE Error: Compaction failed: Nothing to compact\n\
          NOTICE Warning: Compaction cancelled\n"
     );
+}
+
+/// What an extension adds at the end of a turn shows when it says so.
+#[test]
+fn messages_of_extensions_at_the_end_of_a_turn_show() {
+    let mut transcript = Transcript::new();
+    for (kind, display) in [
+        ("custom_message", true),
+        ("custom_message", false),
+        ("custom", true),
+    ] {
+        let line = serde_json::json!({"type": "entry_appended", "entry": {
+            "type": kind, "customType": "check", "content": "Checked.", "display": display,
+        }});
+        match Incoming::from_slice(line.to_string().as_bytes()).unwrap() {
+            Incoming::Event(event) => transcript.apply(&event, Instant::now()),
+            _ => panic!("not an event"),
+        }
+    }
+    let notices: Vec<_> = transcript
+        .items()
+        .iter()
+        .filter_map(|item| match &item.kind {
+            ItemKind::Notice(notice) => Some(notice.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(notices, ["Checked."]);
 }

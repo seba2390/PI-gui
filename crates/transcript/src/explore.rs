@@ -144,6 +144,7 @@ mod tests {
                 model: String::new(),
                 stop_reason: StopReason::ToolUse,
                 error: None,
+                standing: crate::model::Standing::Answer,
             }),
         }
     }

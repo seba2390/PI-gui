@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::{App, ClipboardItem, Entity, Window};
 use pi_rpc::protocol::{Model, ThinkingLevel};
-use transcript::{BlockKind, ItemKind, NoticeKind};
+use transcript::{ItemKind, NoticeKind};
 
 use super::dialogs::{PickerItem, open_picker};
 use super::session::{AfterFork, Lifecycle, PiSession};
@@ -505,26 +505,28 @@ const CHAT_LOGIN: &str = "Signing in (and out) happens in pi's terminal, which c
     For an API key or a model server of your own, choose “Add model…” in the model menu. \
     Afterwards, /reload makes this chat use it.";
 
-/// `/thinking <level>`: one of the levels the model offers (any of pi's while those are not
-/// known yet).
+/// `/thinking <level>`: one of the levels pi accepts for the model (any of pi's while those are
+/// not known yet). The usage names the ones that differ, like the thinking menu.
 fn set_thinking(args: &str, session: &Entity<PiSession>, cx: &mut App) -> CommandOutcome {
-    let offered = match session.read(cx).thinking_levels() {
-        [] => ThinkingLevel::ALL.to_vec(),
-        levels => levels.to_vec(),
+    let (accepted, shown) = {
+        let session = session.read(cx);
+        match session.accepted_thinking_levels() {
+            [] => (ThinkingLevel::ALL.to_vec(), ThinkingLevel::ALL.to_vec()),
+            levels => (levels.to_vec(), session.thinking_levels()),
+        }
     };
-    if let Some(level) = offered
-        .iter()
-        .copied()
+    if let Some(level) = accepted
+        .into_iter()
         .find(|level| level.as_str().eq_ignore_ascii_case(args))
     {
         session.update(cx, |session, cx| session.set_thinking_level(level, cx));
         return CommandOutcome::Handled;
     }
-    let offered: Vec<_> = offered.iter().map(|level| level.as_str()).collect();
+    let shown: Vec<_> = shown.iter().map(|level| level.as_str()).collect();
     notice(
         session,
         NoticeKind::Warning,
-        format!("Usage: /thinking <{}>", offered.join(", ")),
+        format!("Usage: /thinking <{}>", shown.join(", ")),
         cx,
     );
     CommandOutcome::Keep
@@ -646,18 +648,7 @@ fn last_assistant_text(session: &PiSession) -> Option<String> {
         .iter()
         .rev()
         .find_map(|item| match &item.kind {
-            ItemKind::Assistant(assistant) => {
-                let text = assistant
-                    .blocks
-                    .iter()
-                    .filter_map(|block| match &block.kind {
-                        BlockKind::Text(text) => Some(text.text.as_str()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n\n");
-                (!text.trim().is_empty()).then_some(text)
-            }
+            ItemKind::Assistant(assistant) => assistant.answer().filter(|text| !text.is_empty()),
             _ => None,
         })
 }

@@ -5,6 +5,7 @@
 //! methods. Views observe it and render; they never hold protocol state.
 
 pub use deepsearch::config::Mode as WebMode;
+use deepsearch::effort::Effort;
 use pi_sessions::Mode;
 use remote::HostId;
 use std::collections::{BTreeMap, VecDeque};
@@ -189,6 +190,7 @@ pub struct PiSession {
     transcript: Transcript,
     state: Option<SessionState>,
     models: Vec<Model>,
+    /// All levels pi offers for the model; see [`Self::thinking_levels`].
     thinking_levels: Vec<ThinkingLevel>,
     stats: Option<SessionStats>,
     commands: Vec<SlashCommand>,
@@ -551,13 +553,33 @@ impl PiSession {
         &self.models
     }
 
+    /// The thinking level, as the one of [`Self::thinking_levels`] that does the same.
     pub fn thinking_level(&self) -> Option<ThinkingLevel> {
-        self.transcript
+        let level = self
+            .transcript
             .thinking_level()
-            .or_else(|| self.state.as_ref().map(|state| state.thinking_level))
+            .or_else(|| self.state.as_ref().map(|state| state.thinking_level))?;
+        Some(self.shown_thinking_level(level))
     }
 
-    pub fn thinking_levels(&self) -> &[ThinkingLevel] {
+    /// The one of [`Self::thinking_levels`] that does the same as `level`.
+    pub fn shown_thinking_level(&self, level: ThinkingLevel) -> ThinkingLevel {
+        match self.model() {
+            Some(model) => model.shown_thinking_level(level, &self.thinking_levels),
+            None => level,
+        }
+    }
+
+    /// The thinking levels that differ on the model.
+    pub fn thinking_levels(&self) -> Vec<ThinkingLevel> {
+        match self.model() {
+            Some(model) => model.distinct_thinking_levels(&self.thinking_levels),
+            None => self.thinking_levels.clone(),
+        }
+    }
+
+    /// All levels pi accepts, also those that do the same as another on the model.
+    pub fn accepted_thinking_levels(&self) -> &[ThinkingLevel] {
         &self.thinking_levels
     }
 
@@ -579,6 +601,21 @@ impl PiSession {
             .get(deepsearch::STATUS_KEY)
             .and_then(|text| WebMode::parse(text))
             .unwrap_or_default()
+    }
+
+    /// How much effort this chat's deep search makes.
+    pub fn web_effort(&self) -> Effort {
+        self.extension_status
+            .get(deepsearch::EFFORT_KEY)
+            .and_then(|text| Effort::parse(text))
+            .unwrap_or_default()
+    }
+
+    /// What deep search is doing right now.
+    pub fn web_progress(&self) -> Option<&str> {
+        self.extension_status
+            .get(deepsearch::PROGRESS_KEY)
+            .map(String::as_str)
     }
 
     /// Whether this chat's pi loaded web search (it offers the `/websearch` command).
@@ -603,6 +640,9 @@ impl PiSession {
         // puts the previous mode back.
         let previous = self.web_mode();
         self.show_web_mode(mode, cx);
+        if mode != WebMode::Off {
+            crate::search_server::start_if_used(cx);
+        }
         let command = format!("/{} {}", deepsearch::COMMAND, mode.as_str());
         cx.spawn(async move |this, cx| {
             let result = client
@@ -626,6 +666,52 @@ impl PiSession {
             });
         })
         .detach();
+    }
+
+    /// Sets the effort of this chat's deep search, from the next message on.
+    pub fn set_web_effort(&mut self, effort: Effort, cx: &mut Context<Self>) {
+        if !self.web_search_available() || self.web_effort() == effort {
+            return;
+        }
+        let Some(client) = self.client.clone() else {
+            return;
+        };
+        // Shown right away, like the mode.
+        let previous = self.web_effort();
+        self.show_web_effort(effort, cx);
+        let command = format!("/{} effort {}", deepsearch::COMMAND, effort.as_str());
+        cx.spawn(async move |this, cx| {
+            let result = client
+                .prompt(command, Vec::new(), Some(StreamingBehavior::FollowUp))
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if let Err(error) = result {
+                    this.show_web_effort(previous, cx);
+                    this.report(&error, cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn show_web_effort(&mut self, effort: Effort, cx: &mut Context<Self>) {
+        self.extension_status
+            .insert(deepsearch::EFFORT_KEY.into(), effort.as_str().into());
+        cx.emit(SessionEvent::MetaChanged);
+        cx.notify();
+    }
+
+    /// As if pi had loaded web search and set this.
+    #[cfg(test)]
+    pub fn set_web_for_tests(&mut self, mode: WebMode, effort: Effort, cx: &mut Context<Self>) {
+        self.commands = vec![
+            serde_json::from_value(serde_json::json!({
+                "name": deepsearch::COMMAND, "source": "extension",
+            }))
+            .unwrap(),
+        ];
+        self.show_web_mode(mode, cx);
+        self.show_web_effort(effort, cx);
     }
 
     pub fn session_file(&self) -> Option<PathBuf> {
@@ -851,6 +937,9 @@ impl PiSession {
         } else {
             StreamingBehavior::Steer
         });
+        if self.mode == Mode::Chat && self.web_mode() != WebMode::Off {
+            crate::search_server::start_if_used(cx);
+        }
         let (text, images) = (prompt.text.clone(), prompt.images.clone());
         self.queued.sending(&text, prompt.follow_up);
         self.sending = Some(Sending {
@@ -1101,16 +1190,15 @@ impl PiSession {
 
     /// Shift+Tab: next available thinking level.
     pub fn cycle_thinking_level(&mut self, cx: &mut Context<Self>) {
-        let (Some(current), false) = (self.thinking_level(), self.thinking_levels.is_empty())
-        else {
+        let levels = self.thinking_levels();
+        let (Some(current), false) = (self.thinking_level(), levels.is_empty()) else {
             return;
         };
-        let index = self
-            .thinking_levels
+        let index = levels
             .iter()
             .position(|level| *level == current)
             .unwrap_or(0);
-        let next = self.thinking_levels[(index + 1) % self.thinking_levels.len()];
+        let next = levels[(index + 1) % levels.len()];
         self.set_thinking_level(next, cx);
     }
 
@@ -1876,6 +1964,7 @@ fn spawn_options(
             chat_args(config, &mut options);
         } else {
             builtin_skill_args(config, &mut options);
+            document_args(config, &mut options);
         }
         return (options, mode);
     };
@@ -1909,6 +1998,37 @@ fn builtin_skill_args(config: &AppConfig, options: &mut SpawnOptions) {
             config.builtin_skills_dir.display()
         ),
     }
+}
+
+/// The extension that has `read` return PDF files as Markdown ([`documents::EXTENSION_SOURCE`]).
+/// Chats have no `read`, and pi on an SSH host no parser.
+fn document_args(config: &AppConfig, options: &mut SpawnOptions) {
+    let Some(exe) = &config.exe else {
+        return;
+    };
+    match documents::install_extension(&config.documents_dir) {
+        Ok(extension) => {
+            options
+                .extra_args
+                .extend(["--extension".into(), extension.into()]);
+            options
+                .env
+                .push((documents::BIN_ENV.into(), exe.clone().into()));
+            document_dir_env(config, options);
+        }
+        Err(error) => log::warn!(
+            "PDF files are not read as Markdown: could not write the extension to {}: {error}",
+            config.documents_dir.display()
+        ),
+    }
+}
+
+/// Where the helper finds the settings of document parsing.
+fn document_dir_env(config: &AppConfig, options: &mut SpawnOptions) {
+    options.env.push((
+        documents::config::DIR_ENV.into(),
+        config.documents_dir.clone().into(),
+    ));
 }
 
 /// pi's arguments and environment for a chat: the web tools only (see [`spawn_options`]).
@@ -1948,6 +2068,7 @@ fn chat_args(config: &AppConfig, options: &mut SpawnOptions) {
         deepsearch::config::DIR_ENV.into(),
         config.deepsearch_dir.clone().into(),
     ));
+    document_dir_env(config, options);
 }
 
 #[cfg(test)]
@@ -2009,8 +2130,23 @@ mod tests {
             [
                 "--skill".into(),
                 std::ffi::OsString::from(config.builtin_skills_dir.join("add-skill")),
+                "--extension".into(),
+                config.documents_dir.join("extension.ts").into(),
             ]
         );
+        assert!(config.documents_dir.join("extension.ts").exists());
+        for (key, value) in [
+            (
+                documents::BIN_ENV,
+                std::ffi::OsString::from("/app/pistachio"),
+            ),
+            (
+                documents::config::DIR_ENV,
+                config.documents_dir.clone().into(),
+            ),
+        ] {
+            assert!(code.env.contains(&(key.into(), value)), "{key}");
+        }
         assert!(
             config
                 .builtin_skills_dir

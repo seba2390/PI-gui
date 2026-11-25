@@ -23,7 +23,7 @@ const LIVE_OUTPUT: usize = 64 * 1024;
 /// The live transcript of one pi session.
 #[derive(Debug, Clone)]
 pub struct Transcript {
-    items: Vec<TranscriptItem>,
+    pub(crate) items: Vec<TranscriptItem>,
     next_id: u64,
     next_version: u64,
     revision: u64,
@@ -42,6 +42,8 @@ pub struct Transcript {
     session_name: Option<String>,
     thinking_level: Option<ThinkingLevel>,
     last_usage: Option<Usage>,
+    /// Deep search is at work on an answer since this item (see [`crate::research`]).
+    pub(crate) researching: Option<usize>,
 }
 
 impl Default for Transcript {
@@ -67,6 +69,7 @@ impl Transcript {
             session_name: None,
             thinking_level: None,
             last_usage: None,
+            researching: None,
         }
     }
 
@@ -260,6 +263,7 @@ impl Transcript {
                     }
                     tool.duration_ms = *duration_ms;
                 });
+                self.note_research(item, result.get("details"));
             }
             Event::QueueUpdate {
                 steering,
@@ -278,6 +282,18 @@ impl Transcript {
                 let running = self.running_bash.iter().find(|(known, _)| known == id);
                 if let Some(&(_, index)) = running {
                     self.edit_bash(index, |bash| append_output(&mut bash.output, delta));
+                }
+            }
+            Event::EntryAppended { entry } => {
+                // A message of an extension that comes at the end of a turn (others come as
+                // messages).
+                if entry["type"] == "custom_message" {
+                    self.custom_message(
+                        entry["customType"].as_str().unwrap_or_default(),
+                        entry["content"].as_str().unwrap_or_default(),
+                        entry["display"] == true,
+                        entry.get("details"),
+                    );
                 }
             }
             Event::SessionInfoChanged { name } => self.set_session_name(name.clone()),
@@ -420,6 +436,7 @@ impl Transcript {
                     model: assistant.model.clone(),
                     stop_reason: assistant.stop_reason,
                     error: None,
+                    standing: self.new_standing(),
                 }));
                 self.current_assistant = Some(index);
                 if !assistant.content.is_empty() {
@@ -440,6 +457,7 @@ impl Transcript {
                         model: assistant.model.clone(),
                         stop_reason: assistant.stop_reason,
                         error: None,
+                        standing: self.new_standing(),
                     }))
                 });
                 self.reconcile_assistant(index, assistant, now, true);
@@ -465,6 +483,7 @@ impl Transcript {
                     model: assistant.model.clone(),
                     stop_reason: assistant.stop_reason,
                     error: None,
+                    standing: self.new_standing(),
                 }));
                 self.reconcile_assistant(index, assistant, now, true);
             }
@@ -477,9 +496,12 @@ impl Transcript {
                     full_output: bash.full_output_path.clone().filter(|_| bash.truncated),
                 }));
             }
-            AgentMessage::Custom(custom) if custom.display => {
-                self.push_notice(NoticeKind::Info, custom.content.text());
-            }
+            AgentMessage::Custom(custom) => self.custom_message(
+                &custom.custom_type,
+                &custom.content.text(),
+                custom.display,
+                custom.details.as_ref(),
+            ),
             AgentMessage::CompactionSummary(summary) => {
                 self.push_notice(
                     NoticeKind::Compaction,
@@ -493,7 +515,7 @@ impl Transcript {
             AgentMessage::BranchSummary(summary) => {
                 self.push_notice(NoticeKind::BranchSummary, summary.summary.clone());
             }
-            AgentMessage::System(_) | AgentMessage::Custom(_) | AgentMessage::Unknown => {}
+            AgentMessage::System(_) | AgentMessage::Unknown => {}
         }
     }
 
@@ -506,6 +528,7 @@ impl Transcript {
                 model: String::new(),
                 stop_reason: pi_rpc::protocol::StopReason::Pending,
                 error: None,
+                standing: self.new_standing(),
             }));
             self.current_assistant = Some(index);
             index
@@ -567,6 +590,7 @@ impl Transcript {
             } => {
                 let block = self.edit_block(index, *content_index, new_tool(id, tool_name), |_| {});
                 self.tools.insert(id.clone(), (index, block));
+                self.settle_remark(index);
             }
             AssistantMessageEvent::ToolcallDelta {
                 content_index,
@@ -666,6 +690,9 @@ impl Transcript {
                 item.model.clone_from(&message.model);
             }
         }
+        if is_final {
+            self.settle_remark(index);
+        }
         self.touch(index);
     }
 
@@ -689,6 +716,7 @@ impl Transcript {
                 tool.details.clone_from(&result.details);
             }
         });
+        self.note_research(item, result.details.as_ref());
     }
 
     fn settle(&mut self, aborted: bool, now: Instant) {
@@ -727,11 +755,20 @@ impl Transcript {
             }
         }
         self.current_assistant = None;
+        self.end_research();
         if let Some(started) = self.run_started.take() {
             self.push(ItemKind::TurnSummary(TurnSummary {
                 duration: now.saturating_duration_since(started),
                 aborted,
             }));
+            // It shows what belongs to the turn's end.
+            for index in (0..self.items.len()).rev() {
+                match &self.items[index].kind {
+                    ItemKind::User(_) => break,
+                    ItemKind::Check(_) => self.touch(index),
+                    _ => {}
+                }
+            }
         }
         self.status = RunStatus::Idle;
         self.revision += 1;
@@ -766,7 +803,7 @@ impl Transcript {
         version
     }
 
-    fn touch(&mut self, index: usize) {
+    pub(crate) fn touch(&mut self, index: usize) {
         self.items[index].version = self.bump();
         self.revision += 1;
     }
@@ -826,6 +863,7 @@ impl Transcript {
                 model: String::new(),
                 stop_reason: pi_rpc::protocol::StopReason::Stop,
                 error: None,
+                standing: self.new_standing(),
             }))
         });
         let next_index = match &self.items[index].kind {

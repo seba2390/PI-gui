@@ -4,6 +4,7 @@ mod commands;
 pub mod composer;
 mod context_panel;
 pub mod dialogs;
+mod document;
 mod file_links;
 mod file_picker;
 mod find;
@@ -12,6 +13,7 @@ mod math;
 pub(crate) mod mention;
 pub mod models_dialog;
 mod queued;
+mod report;
 mod rows;
 pub mod session;
 #[cfg(all(test, unix))]
@@ -327,6 +329,24 @@ impl ChatView {
         let start = start.min(all.len() - 1);
         images::open_viewer(all.into(), start, window, cx);
         true
+    }
+
+    /// Opens how the last report was checked (`PISTACHIO_OPEN=report-check`, for layout checks).
+    /// Returns whether there was one.
+    pub fn open_report_check(chat: &Entity<Self>, window: &mut Window, cx: &mut App) -> bool {
+        let session = chat.read(cx).session.clone();
+        let items = session.read(cx).transcript().items();
+        let check = items.iter().rev().find_map(|item| match &item.kind {
+            ItemKind::Check(check) => Some(check.clone()),
+            _ => None,
+        });
+        match check {
+            Some(check) => {
+                report::open(check, window, cx);
+                true
+            }
+            None => false,
+        }
     }
 
     /// The composer, e.g. to insert an `@path` mention from the Files tab.

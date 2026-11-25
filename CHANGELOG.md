@@ -6,6 +6,56 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-25
+
+### Added
+
+- Deep search has an effort slider next to it in the message box: Light, Standard, Thorough or Max.
+  More effort is more searches, pages and results per search, and a stricter check of the report.
+  Each chat remembers its own; Settings → Web search has the one new chats start with. Effort is
+  also a floor: the question is split into sub-questions, and a model that wants to report before
+  it has searched and read enough for them, on enough different sites, is sent back to its research.
+- Deep search checks its reports: whether the links work and were read, what the sources say about
+  the claims (the key ones in Standard, all of them from Thorough on), and which claims, also in
+  tables and bullets, have no source that was read. What it finds goes back to the model once or
+  more. A symbol below the report opens how it did: what was searched and read, how many claims are
+  backed, and what is still wrong, with the reasons and sources. A check that fails or is stopped
+  says so.
+- Only deep search's final report is written into the chat as the answer. Until then the chat shows
+  the work: what was planned, searched, read and checked, and drafts as rows that open. If it is
+  stopped, the latest complete draft is the answer, marked as not checked.
+- Deep search reads PDF files.
+- Settings → Document parsing chooses what reads PDF files. The built-in reader stays the default;
+  PyMuPDF4LLM, Docling and MinerU can be downloaded for better tables, columns, formulas and scans.
+  Each shows what it is good at, its size and its license before, is checked against checksums, runs
+  without network, and can be removed. If it is missing, fails or takes too long, the built-in
+  reader is used and the result says so.
+- PDF files can be attached to chats. The chip says “Reading…” until it is done, and a long document
+  is shortened to its outline and what matches the message. With Docling, Word, PowerPoint and Excel
+  files can be attached too.
+- pi reads PDF files as Markdown in Code sessions on this computer.
+- PDF files that chats find on the web are read by the chosen parser.
+- Long research no longer fills up the context: older pages are cut down to their key passages, and
+  nothing is shown to the model twice. The “Working…” line says what it is doing.
+- SearXNG can run on this computer, with one click and without Docker (macOS and Linux). Choosing
+  it in Settings → Web search checks whether one answers at the address. If not, it shows what is
+  missing and asks: Download and run gets SearXNG, a Python of its own and the packages it needs
+  (about 80 MB) and starts it, Cancel keeps the service from before. A light shows whether it runs,
+  and its “⋮” menu starts, stops, updates and removes it or changes the address. Only this computer
+  can reach it. It starts when a chat searches and stops with Pistachio. It does not come with the
+  app.
+
+### Changed
+
+- The thinking menu lists only the levels that differ on the model. Ones that its
+  `thinkingLevelMap` in `models.json` sends as another level are left out: with minimal sent as
+  low and high as xhigh, it has off, low, medium and xhigh. Shift+Tab steps through the same ones.
+- Settings → Web search shows only what the chosen service needs: the SearXNG address, the Brave or
+  the Tavily API key. The others keep what was entered. Searching the settings for one finds it.
+- Settings → Web search has two sections that open with a click on their title: Advanced search
+  options (the limits per message, and the text per page, now with sliders) and Advanced deep search
+  settings (what each effort level may and has to do, and how its report is checked).
+
 ## [0.4.9] - 2026-11-24
 
 ### Changed
@@ -449,7 +499,8 @@ chats, skills and model management. Changes since the last private build:
 - A corrupt `hosts.json` is kept as a backup.
 - A remembered terminal height can no longer squeeze out the chat.
 
-[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.4.9...HEAD
+[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/seba2390/pistachio/compare/v0.4.9...v0.5.0
 [0.4.9]: https://github.com/seba2390/pistachio/compare/v0.4.8...v0.4.9
 [0.4.8]: https://github.com/seba2390/pistachio/compare/v0.4.7...v0.4.8
 [0.4.7]: https://github.com/seba2390/pistachio/compare/v0.4.6...v0.4.7

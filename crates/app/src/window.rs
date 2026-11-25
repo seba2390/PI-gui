@@ -246,6 +246,7 @@ impl MainWindow {
         let chat = cx.new(|cx| ChatView::idle(cwd.clone(), mode, window, cx));
         let right_panel = cx.new(|cx| RightPanel::new(cwd, window, cx));
         let chat_subscription = cx.subscribe_in(&chat, window, Self::on_chat_event);
+        let document_parsers = crate::document_parsers::document_parsers(cx);
         let subscriptions = vec![
             cx.subscribe_in(&sidebar, window, Self::on_sidebar_event),
             cx.subscribe_in(
@@ -271,6 +272,20 @@ impl MainWindow {
                 window,
                 |_, _, event: &crate::stt::models::SpeechModelsEvent, window, cx| {
                     crate::stt::ui::notify_download(event, window, cx);
+                },
+            ),
+            cx.subscribe_in(
+                &crate::search_server::search_server(cx),
+                window,
+                |_, _, event: &crate::search_server::SearchServerEvent, window, cx| {
+                    crate::search_server::notify(event, window, cx);
+                },
+            ),
+            cx.subscribe_in(
+                &document_parsers,
+                window,
+                |_, _, event: &crate::document_parsers::DocumentParsersEvent, window, cx| {
+                    crate::document_parsers::notify(event, window, cx);
                 },
             ),
             cx.subscribe_in(
@@ -456,6 +471,19 @@ impl MainWindow {
                 "manage-hosts" => self.open_manage_hosts(window, cx),
                 "skills" => self.toggle_skills(window, cx),
                 "settings" => self.open_settings(&OpenSettings, window, cx),
+                "settings-web" => {
+                    self.open_settings(&OpenSettings, window, cx);
+                    if let Some(settings) = self.settings.as_ref().map(|s| s.0.clone()) {
+                        settings.update(cx, |settings, _| settings.start_on_web_search());
+                    }
+                }
+                "web-advanced" => {
+                    if let Some(settings) = self.settings.as_ref().map(|s| s.0.clone()) {
+                        settings.update(cx, |settings, _| settings.open_advanced());
+                    }
+                }
+                "searxng-setup" => crate::settings::open_searxng_setup(window, cx),
+                "searxng-get" => crate::settings::use_local_searxng(cx),
                 "settings-ssh" => {
                     self.open_settings(&OpenSettings, window, cx);
                     if let Some(settings) = self.settings.as_ref().map(|s| s.0.clone()) {
@@ -472,6 +500,12 @@ impl MainWindow {
                     self.open_settings(&OpenSettings, window, cx);
                     if let Some(settings) = self.settings.as_ref().map(|s| s.0.clone()) {
                         settings.update(cx, |settings, _| settings.start_on_names());
+                    }
+                }
+                "settings-documents" => {
+                    self.open_settings(&OpenSettings, window, cx);
+                    if let Some(settings) = self.settings.as_ref().map(|s| s.0.clone()) {
+                        settings.update(cx, |settings, _| settings.start_on_documents());
                     }
                 }
                 "speech-download" => crate::stt::ui::open_download_dialog(window, cx),
@@ -491,15 +525,23 @@ impl MainWindow {
                         self.open_in_files(path, None, window, cx);
                     }
                 }
-                other if other.starts_with("image-viewer:") => {
-                    let start = other["image-viewer:".len()..].parse().unwrap_or(0);
+                other if other == "report-check" || other.starts_with("image-viewer:") => {
+                    let start = other
+                        .strip_prefix("image-viewer:")
+                        .map(|start| start.parse().unwrap_or(0));
                     // The session loads in the background; a scripted check waits (up to a few
-                    // seconds) for its pictures.
+                    // seconds) for its pictures or report.
                     cx.spawn_in(window, async move |this, cx| {
                         for _ in 0..50 {
                             let opened = this
                                 .update_in(cx, |this, window, cx| {
-                                    ChatView::open_images(&this.chat.clone(), start, window, cx)
+                                    let chat = this.chat.clone();
+                                    match start {
+                                        Some(start) => {
+                                            ChatView::open_images(&chat, start, window, cx)
+                                        }
+                                        None => ChatView::open_report_check(&chat, window, cx),
+                                    }
                                 })
                                 .unwrap_or(true);
                             if opened {

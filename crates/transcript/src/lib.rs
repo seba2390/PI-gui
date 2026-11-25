@@ -11,6 +11,7 @@ mod format;
 mod history;
 mod model;
 mod reducer;
+pub mod research;
 pub mod search;
 pub mod shell;
 pub mod tool;
@@ -18,8 +19,9 @@ pub mod tool;
 pub use context::ContextEstimate;
 pub use format::{format_duration, format_tokens};
 pub use model::{
-    AssistantItem, BashItem, BashStatus, Block, BlockKind, Image, ItemId, ItemKind, NestedEntry,
-    Notice, NoticeKind, Queue, RunStatus, TextBlock, ThinkingBlock, ToolBlock, ToolStatus,
+    AboutReport, AssistantItem, BashItem, BashStatus, Block, BlockKind, CheckItem, ClaimCounts,
+    Image, ItemId, ItemKind, LinkCounts, NestedEntry, Notice, NoticeKind, Problem, ProblemKind,
+    Queue, RunStatus, Standing, StepItem, TextBlock, ThinkingBlock, ToolBlock, ToolStatus,
     TranscriptItem, TurnSummary, UserItem,
 };
 pub use reducer::Transcript;

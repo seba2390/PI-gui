@@ -14,6 +14,7 @@ mod code_colors;
 mod code_highlight;
 mod config;
 mod demo;
+mod document_parsers;
 mod hosts;
 mod model_store;
 mod naming;
@@ -23,6 +24,7 @@ mod persist;
 mod pi_place;
 mod relay;
 mod remote_ui;
+mod search_server;
 mod settings;
 mod shell_env;
 mod sidebar;
@@ -42,6 +44,10 @@ use gpui_kit::*;
 fn main() {
     // Started by the deep search pi extension to run a web tool: do it and exit, no UI.
     if let Some(code) = deepsearch::cli::run_if_requested() {
+        std::process::exit(code);
+    }
+    // Started by a chat, or by the pi extension of Code sessions, to read a document.
+    if let Some(code) = documents::cli::run_if_requested() {
         std::process::exit(code);
     }
     // Started by ssh as its askpass program (a password or passphrase prompt): hand the
@@ -85,6 +91,7 @@ fn main() {
         settings::init_text_size(cx);
         actions::init(cx);
         cx.set_global(config);
+        search_server::init(cx);
         settings::apply_pi_program(cx);
         cx.set_global(ui_state::UiState::load(
             ui_state::UiState::path().as_deref(),

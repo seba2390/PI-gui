@@ -59,6 +59,7 @@ fn open(
         });
         cx.set_global(UiState::default());
         assert_eq!(UiState::path(), None);
+        crate::search_server::init(cx);
         crate::stt::init(cx);
         crate::naming::init(cx);
         let hosts = cx.new(|_| Hosts::for_tests(hosts));

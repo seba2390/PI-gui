@@ -4,8 +4,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use pi_rpc::protocol::StopReason;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use crate::tool::ToolKind;
 
 /// Stable identity of one transcript item, for UI state such as "expanded".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
@@ -27,6 +29,10 @@ pub enum ItemKind {
     /// A user-run shell command (`!cmd`), not an agent tool call.
     Bash(BashItem),
     Notice(Notice),
+    /// What an extension did for the answer besides the model's own steps.
+    Step(StepItem),
+    /// How a deep search's report was checked.
+    Check(CheckItem),
     /// "Worked for 1m 3s" after the agent settles.
     TurnSummary(TurnSummary),
 }
@@ -64,11 +70,175 @@ pub struct AssistantItem {
     pub model: String,
     pub stop_reason: StopReason,
     pub error: Option<String>,
+    /// What its text is.
+    #[serde(skip_serializing_if = "Standing::is_answer")]
+    pub standing: Standing,
 }
 
 impl AssistantItem {
     pub fn is_streaming(&self) -> bool {
         self.stop_reason == StopReason::Pending
+    }
+
+    /// Its text, if it is an answer (and not a step on the way to one).
+    pub fn answer(&self) -> Option<String> {
+        self.standing.is_shown().then(|| self.text())
+    }
+
+    /// All of its text.
+    pub fn text(&self) -> String {
+        self.blocks
+            .iter()
+            .filter_map(|block| match &block.kind {
+                BlockKind::Text(text) => Some(text.text.trim()),
+                _ => None,
+            })
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+
+    pub fn has_tools(&self) -> bool {
+        self.blocks
+            .iter()
+            .any(|block| matches!(block.kind, BlockKind::Tool(_)))
+    }
+}
+
+/// What the text of an assistant message is. Outside deep search it is always the answer; a
+/// report of deep search is only once it was checked (see [`crate::research`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+pub enum Standing {
+    #[default]
+    Answer,
+    /// The answer, but it was not checked.
+    Unchecked,
+    /// Being written or checked.
+    Held,
+    /// A report that another one replaces.
+    Draft,
+    /// Said along the way, between steps.
+    Remark,
+}
+
+impl Standing {
+    #[allow(clippy::trivially_copy_pass_by_ref)] // How serde calls it.
+    fn is_answer(&self) -> bool {
+        *self == Self::Answer
+    }
+
+    /// Whether the text is for the user to read, not part of the work.
+    pub fn is_shown(self) -> bool {
+        matches!(self, Self::Answer | Self::Unchecked)
+    }
+}
+
+/// A step of an extension: what it did, and the lines behind it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StepItem {
+    pub title: String,
+    pub detail: String,
+    pub lines: Vec<String>,
+}
+
+impl StepItem {
+    pub fn kind(&self) -> ToolKind {
+        match self.title.as_str() {
+            "Planned" => ToolKind::List,
+            "Checked" => ToolKind::Search,
+            "Continuing research" => ToolKind::Web,
+            _ => ToolKind::Write,
+        }
+    }
+}
+
+/// What deep search says about its report.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct CheckItem {
+    /// Otherwise the report is the answer as it is.
+    pub checked: bool,
+    /// All of it as text.
+    pub text: String,
+    /// The same in parts; chats from before there were any have only the text.
+    pub about: Option<Box<AboutReport>>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AboutReport {
+    pub effort: String,
+    pub searches: u32,
+    pub pages: u32,
+    pub sites: u32,
+    pub links: LinkCounts,
+    /// From the effort on that checks them.
+    pub claims: Option<ClaimCounts>,
+    pub problems: Vec<Problem>,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LinkCounts {
+    pub total: u32,
+    pub broken: u32,
+    pub unread: u32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ClaimCounts {
+    pub total: u32,
+    pub backed: u32,
+    pub partly: u32,
+    pub unbacked: u32,
+    pub unsourced: u32,
+    pub unchecked: u32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Problem {
+    pub kind: ProblemKind,
+    pub text: String,
+    pub why: String,
+    pub urls: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProblemKind {
+    Unbacked,
+    Partly,
+    Unsourced,
+    Broken,
+    Unread,
+    #[default]
+    #[serde(other)]
+    Other,
+}
+
+impl ProblemKind {
+    /// In the order they are shown.
+    pub const ALL: [Self; 6] = [
+        Self::Unbacked,
+        Self::Partly,
+        Self::Unsourced,
+        Self::Broken,
+        Self::Unread,
+        Self::Other,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Unbacked => "Not backed by their source",
+            Self::Partly => "Only partly backed",
+            Self::Unsourced => "Without a source that was read",
+            Self::Broken => "Broken links",
+            Self::Unread => "Cited, but not read",
+            Self::Other => "Other",
+        }
     }
 }
 

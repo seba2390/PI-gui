@@ -221,6 +221,9 @@ pub struct CustomMessage {
     pub display: bool,
     #[serde(default)]
     pub timestamp: Option<i64>,
+    /// What the extension that sent it keeps with it.
+    #[serde(default)]
+    pub details: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

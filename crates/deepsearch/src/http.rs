@@ -10,7 +10,9 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
 
 use ureq::Agent;
+use ureq::config::ConfigBuilder;
 use ureq::http::Uri;
+use ureq::typestate::AgentScope;
 use ureq::unversioned::resolver::{DefaultResolver, ResolvedSocketAddrs, Resolver};
 use ureq::unversioned::transport::{DefaultConnector, NextTimeout};
 
@@ -18,12 +20,22 @@ use crate::config::Fetch;
 
 /// An agent for the configured search service (which may be on the local network).
 pub fn backend_agent(timeout_secs: u64, user_agent: &str) -> Agent {
+    backend_config(timeout_secs, user_agent).build().new_agent()
+}
+
+/// [`backend_agent`] for a service on this computer, which a proxy could not reach.
+pub fn local_agent(timeout_secs: u64, user_agent: &str) -> Agent {
+    backend_config(timeout_secs, user_agent)
+        .proxy(None)
+        .build()
+        .new_agent()
+}
+
+fn backend_config(timeout_secs: u64, user_agent: &str) -> ConfigBuilder<AgentScope> {
     Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(timeout_secs)))
         .user_agent(user_agent)
         .http_status_as_error(false)
-        .build()
-        .new_agent()
 }
 
 /// An agent for pages the model asks to read.

@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
+use deepsearch::effort::Effort;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{
     Escape, IndentInline, InputEvent, MoveDown, MoveUp, Textarea, TextareaState,
@@ -20,7 +21,9 @@ use gpui_kit::component::list::{List, ListState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::progress::ProgressCircle;
+use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
 use gpui_kit::component::speech::{SpeechEvent, SpeechState, SpeechStatus, SpeechWaveform};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, IndexPath, Sizable as _, h_flex, v_flex,
 };
@@ -29,6 +32,7 @@ use gpui_kit::*;
 use pi_rpc::protocol::ImageContent;
 
 use super::commands::{self, CommandOutcome, Suggestion, SuggestionList};
+use super::document::{AttachedDocument, Reading};
 use super::file_picker::{self, FilePicker, Pick};
 use super::mention::{self, History};
 use super::session::{Lifecycle, PiSession, WebMode};
@@ -78,20 +82,30 @@ struct Attachment {
     /// Images are sent as image content; other files as `@path` references,
     /// which is how pi's terminal refers to files.
     image: Option<ImageContent>,
-    /// In chat mode the model has no `read` tool, so text files are pasted into the prompt.
+    /// In chat mode the model has no `read` tool, so text files and documents are pasted into
+    /// the prompt.
     inline: Option<InlineText>,
 }
 
-/// A text attachment's contents for chat mode, or why it could not be included.
+/// An attachment's contents for chat mode, or why it could not be included.
 enum InlineText {
     Text(String),
-    Skipped(&'static str),
+    Document(AttachedDocument),
+    Skipped(String),
+}
+
+impl InlineText {
+    fn skipped(reason: &str) -> Self {
+        Self::Skipped(reason.to_owned())
+    }
 }
 
 /// Local files being read to attach, which the composer may be emptied before.
 struct Loading {
     id: u64,
     paths: Vec<PathBuf>,
+    /// A document, which can take a while: it has a chip of its own.
+    document: Option<Reading>,
 }
 
 /// What is typed and attached in a composer but not sent.
@@ -132,8 +146,9 @@ impl Draft {
     }
 }
 
-/// Text attachments larger than this are not pasted into a chat prompt.
-const MAX_INLINE_BYTES: u64 = 256 * 1024;
+/// Text attachments larger than this are not pasted into a chat prompt, and documents only in
+/// part.
+pub(super) const MAX_INLINE_BYTES: usize = 256 * 1024;
 
 pub struct Composer {
     session: Entity<PiSession>,
@@ -162,6 +177,10 @@ pub struct Composer {
     dictation_focus: FocusHandle,
     /// The dictation shortcut between its press and release (hold to talk, tap to toggle).
     push_to_talk: crate::stt::shortcut::PushToTalk,
+    /// Deep search's effort, as the index of an [`Effort`].
+    effort: Entity<SliderState>,
+    /// The effort is being changed: what the session says is older.
+    effort_moving: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -181,6 +200,8 @@ struct Mention {
 
 /// Files offered for an `@` mention at once.
 const MENTION_RESULTS: usize = 8;
+/// The distance between two stops of the effort slider.
+const EFFORT_STOP: f32 = 28.;
 /// The `/` list's height: about 8 rows, then it scrolls.
 const SUGGESTIONS_HEIGHT: Rems = rems(16.5);
 
@@ -237,6 +258,25 @@ impl Composer {
         ));
         subscriptions.push(cx.observe(&speech, |_, _, cx| cx.notify()));
         subscriptions.push(cx.observe(&crate::stt::models::models(cx), |_, _, cx| cx.notify()));
+        let effort = effort_value(session.read(cx).web_effort());
+        let effort = cx.new(|_| {
+            SliderState::new()
+                .min(0.)
+                .max(effort_value(Effort::Max))
+                .step(1.)
+                .default_value(effort)
+        });
+        subscriptions.push(cx.subscribe(&effort, Self::on_effort));
+        subscriptions.push(
+            cx.observe_in(&session, window, |this, session, window, cx| {
+                let effort = session.read(cx).web_effort();
+                let value = effort_value(effort);
+                if !this.effort_moving && effort_at(this.effort.read(cx).value().end()) != effort {
+                    this.effort
+                        .update(cx, |effort, cx| effort.set_value(value, window, cx));
+                }
+            }),
+        );
         let weak = cx.weak_entity();
         let root = session.read(cx).cwd().to_path_buf();
         let location = match session.read(cx).host().cloned() {
@@ -270,6 +310,8 @@ impl Composer {
             dictation: None,
             dictation_focus: cx.focus_handle(),
             push_to_talk: crate::stt::shortcut::PushToTalk::default(),
+            effort,
+            effort_moving: false,
             _subscriptions: subscriptions,
         }
     }
@@ -653,6 +695,19 @@ impl Composer {
             }
         }
 
+        // Still being read: the message waits here for it.
+        if let Some(loading) = self.loading.first() {
+            let name = loading
+                .document
+                .as_ref()
+                .map_or("a file".into(), |document| document.name.clone());
+            window.push_notification(
+                format!("Not sent yet: {name} is still being read. Wait for it, or remove it."),
+                cx,
+            );
+            return;
+        }
+
         // pi has stopped: keep the message (and attachments) here instead of queueing it
         // where it would never be sent.
         if let Lifecycle::Exited { .. } = self.session.read(cx).lifecycle() {
@@ -671,6 +726,9 @@ impl Composer {
                 (Some(image), _) => images.push(image),
                 (None, Some(InlineText::Text(text))) => {
                     references.push(inline_file_block(&attachment.name, &text));
+                }
+                (None, Some(InlineText::Document(document))) => {
+                    references.push(document.block(&attachment.name, &text));
                 }
                 (None, Some(InlineText::Skipped(reason))) => {
                     references.push(format!(
@@ -879,12 +937,16 @@ impl Composer {
     fn attach_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
         // Without local file access (chat, or pi on another machine) text files are pasted in.
         let inline = !self.session.read(cx).is_local_code();
-        let id = self.next_loading;
-        self.next_loading += 1;
-        self.loading.push(Loading {
-            id,
-            paths: paths.clone(),
-        });
+        let (documents, paths): (Vec<_>, Vec<_>) = paths
+            .into_iter()
+            .partition(|path| inline && AttachedDocument::is_one(path));
+        for path in documents {
+            self.read_document(path, cx);
+        }
+        if paths.is_empty() {
+            return;
+        }
+        let id = self.start_loading(paths.clone(), None);
         cx.spawn(async move |this, cx| {
             let attachments = cx
                 .background_executor()
@@ -895,15 +957,68 @@ impl Composer {
                         .collect::<Vec<_>>()
                 })
                 .await;
-            let _ = this.update(cx, |this, cx| {
-                // Taken with the draft meanwhile: they are read again where it went.
-                let Some(index) = this.loading.iter().position(|loading| loading.id == id) else {
-                    return;
-                };
-                this.loading.remove(index);
-                this.attachments.extend(attachments);
-                cx.notify();
+            let _ = this.update(cx, |this, cx| this.loaded(id, attachments, cx));
+        })
+        .detach();
+    }
+
+    fn start_loading(&mut self, paths: Vec<PathBuf>, document: Option<Reading>) -> u64 {
+        let id = self.next_loading;
+        self.next_loading += 1;
+        self.loading.push(Loading {
+            id,
+            paths,
+            document,
+        });
+        id
+    }
+
+    fn loaded(&mut self, id: u64, attachments: Vec<Attachment>, cx: &mut Context<Self>) {
+        // Removed, or taken with the draft meanwhile: they are read again where it went.
+        let Some(index) = self.loading.iter().position(|loading| loading.id == id) else {
+            return;
+        };
+        self.loading.remove(index);
+        self.attachments.extend(attachments);
+        cx.notify();
+    }
+
+    /// Reads a document for a chat with the parser in the settings.
+    fn read_document(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let name = attachment_name(&path);
+        let (reading, stopped) = Reading::new(name.clone());
+        let id = self.start_loading(vec![path.clone()], Some(reading));
+        cx.notify();
+        let (exe, dir) = {
+            let config = cx.global::<AppConfig>();
+            (config.exe.clone(), config.documents_dir.clone())
+        };
+        let (tx, rx) = async_channel::bounded(1);
+        // A thread of its own: it can take minutes.
+        let spawned = std::thread::Builder::new()
+            .name("read-document".into())
+            .spawn({
+                let path = path.clone();
+                move || {
+                    let read = AttachedDocument::read(exe.as_ref(), &dir, &path, &stopped);
+                    let _ = tx.send_blocking(read);
+                }
             });
+        cx.spawn(async move |this, cx| {
+            let read = match spawned {
+                Ok(_) => rx.recv().await.unwrap_or_else(|e| Err(e.to_string())),
+                Err(error) => Err(error.to_string()),
+            };
+            let attachment = Attachment {
+                path,
+                name,
+                image: None,
+                inline: Some(match read {
+                    Ok(document) => InlineText::Document(document),
+                    Err(reason) => InlineText::Skipped(reason),
+                }),
+            };
+            let _ = this.update(cx, |this, cx| this.loaded(id, vec![attachment], cx));
         })
         .detach();
     }
@@ -956,6 +1071,9 @@ impl Composer {
                 )
                 .when_some(web_mode, |left, mode| {
                     left.child(self.render_web_mode(mode, cx))
+                        .when(mode == WebMode::Deep, |left| {
+                            left.child(self.render_effort(cx))
+                        })
                 });
             return self.toolbar_layout(left, cx).into_any_element();
         }
@@ -1060,6 +1178,81 @@ impl Composer {
         )
     }
 
+    fn on_effort(&mut self, _: Entity<SliderState>, event: &SliderEvent, cx: &mut Context<Self>) {
+        match event {
+            SliderEvent::Change(_) => self.effort_moving = true,
+            SliderEvent::Release(value) => {
+                self.effort_moving = false;
+                let effort = effort_at(value.end());
+                self.session
+                    .update(cx, |session, cx| session.set_web_effort(effort, cx));
+            }
+        }
+        cx.notify();
+    }
+
+    /// Deep search's effort: a slider with the name of the level it is at.
+    fn render_effort(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let effort = effort_at(self.effort.read(cx).value().end());
+        // The slider gives its first and last stop half as much room as those between: the rest
+        // of theirs is beside it.
+        let beside = |id: &'static str, end: Effort, cx: &mut Context<Self>| {
+            div()
+                .id(id)
+                .debug_selector(move || id.into())
+                .flex_none()
+                .w(px(EFFORT_STOP / 2.))
+                .h_6()
+                .cursor_pointer()
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.effort.update(cx, |effort, cx| {
+                        effort.set_value(effort_value(end), window, cx);
+                    });
+                    this.session
+                        .update(cx, |session, cx| session.set_web_effort(end, cx));
+                }))
+        };
+        let before = beside("web-effort-first", Effort::Light, cx);
+        let after = beside("web-effort-last", Effort::Max, cx);
+        h_flex()
+            .id("web-effort")
+            .debug_selector(|| "web-effort".into())
+            .flex_none()
+            .tooltip(move |window, cx| {
+                let text = format!("Effort: {}. {}", effort.label(), effort.summary());
+                Tooltip::new(text).build(window, cx)
+            })
+            .child(before)
+            .child(
+                div()
+                    .debug_selector(|| "web-effort-track".into())
+                    .relative()
+                    .flex_none()
+                    .w(px(EFFORT_STOP * effort_value(Effort::Max)))
+                    .child(effort_stops(effort, cx))
+                    .child(
+                        // Only its knob: the stops are the track.
+                        Slider::new(&self.effort)
+                            .bg(transparent_black())
+                            .accessibility_label(format!("Deep search effort: {}", effort.label())),
+                    ),
+            )
+            .child(after)
+            .child(
+                // As wide as the longest name, so nothing moves with the slider, and clear of the
+                // knob at its end. The letters' middle, not the line's, is level with the track.
+                div()
+                    .relative()
+                    .top(px(-1.5))
+                    .w(rems(4.5))
+                    .pl_2()
+                    .whitespace_nowrap()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(effort.label()),
+            )
+    }
+
     /// The attach button with its searchable list of the working folder's files.
     fn render_attach_popover(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let picker = self.picker.clone();
@@ -1141,6 +1334,14 @@ impl Composer {
         let ready = matches!(session.lifecycle(), Lifecycle::Ready | Lifecycle::Starting);
         let has_input =
             !self.input.read(cx).value().trim().is_empty() || !self.attachments.is_empty();
+        let reading = self.is_reading();
+        let send_label = if reading {
+            "Wait until the attached files are read"
+        } else if running {
+            "Steer (enter) · follow-up (alt+enter)"
+        } else {
+            "Send (enter)"
+        };
         let right = h_flex()
             .gap_1()
             .child(self.render_model_picker(cx))
@@ -1165,17 +1366,9 @@ impl Composer {
                         .small()
                         .icon(IconName::ArrowUp)
                         .rounded(cx.theme().radius_full())
-                        .disabled(!has_input || !ready)
-                        .accessibility_label(if running {
-                            "Steer (enter) · follow-up (alt+enter)"
-                        } else {
-                            "Send (enter)"
-                        })
-                        .tooltip(if running {
-                            "Steer (enter) · follow-up (alt+enter)"
-                        } else {
-                            "Send (enter)"
-                        })
+                        .disabled(!has_input || !ready || reading)
+                        .accessibility_label(send_label)
+                        .tooltip(send_label)
                         .on_click(cx.listener(|this, _, window, cx| this.submit(false, window, cx)))
                 },
             ));
@@ -1266,7 +1459,7 @@ impl Composer {
 
     fn render_thinking_picker(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let session = self.session.read(cx);
-        let levels = session.thinking_levels().to_vec();
+        let levels = session.thinking_levels();
         let current = session.thinking_level();
         let reasoning = session.model().is_some_and(|model| model.reasoning);
         let handle = self.session.clone();
@@ -1365,20 +1558,23 @@ impl Composer {
             .iter()
             .enumerate()
             .map(|(index, attachment)| {
-                h_flex()
-                    .gap_1()
-                    .pl_2()
-                    .pr_1()
-                    .py_0p5()
-                    .rounded_md()
-                    .bg(cx.theme().secondary)
-                    .text_xs()
+                let (remark, why) = attachment.remark();
+                chip(cx)
+                    .id(("attachment", index))
+                    .when_some(why, |this, why| {
+                        this.tooltip(move |window, cx| Tooltip::new(why.clone()).build(window, cx))
+                    })
                     .child(if attachment.image.is_some() {
                         Icon::from(AppIcon::Image).xsmall()
                     } else {
                         Icon::new(IconName::File).xsmall()
                     })
                     .child(attachment.name.clone())
+                    .children(
+                        remark.map(|remark| {
+                            div().text_color(cx.theme().muted_foreground).child(remark)
+                        }),
+                    )
                     .child(
                         Button::new(("remove-attachment", index))
                             .accessibility_label(format!("Remove {}", attachment.name))
@@ -1392,8 +1588,49 @@ impl Composer {
                                 }
                             })),
                     )
-            });
-        h_flex().flex_wrap().gap_1().px_3().pt_2().children(chips)
+            })
+            .collect::<Vec<_>>();
+        let reading = self.loading.iter().filter_map(|loading| {
+            let name = loading.document.as_ref()?.name.clone();
+            let id = loading.id;
+            Some(
+                chip(cx)
+                    .debug_selector(|| "reading-document".into())
+                    .child(Icon::new(IconName::File).xsmall())
+                    .child(name.clone())
+                    .child(
+                        div()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Reading…"),
+                    )
+                    .child(
+                        Button::new(("stop-reading", usize::try_from(id).unwrap_or_default()))
+                            .accessibility_label(format!("Remove {name}"))
+                            .quiet(cx)
+                            .xsmall()
+                            .icon(IconName::Close)
+                            // Dropping it stops the reading.
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.loading.retain(|loading| loading.id != id);
+                                cx.notify();
+                            })),
+                    ),
+            )
+        });
+        h_flex()
+            .flex_wrap()
+            .gap_1()
+            .px_3()
+            .pt_2()
+            .children(chips)
+            .children(reading)
+    }
+
+    /// Documents are still being read.
+    fn is_reading(&self) -> bool {
+        self.loading
+            .iter()
+            .any(|loading| loading.document.is_some())
     }
 
     /// The commands that complete what is typed, best first; none after Esc, or while the
@@ -1747,13 +1984,20 @@ impl Composer {
     }
 
     fn render_status(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        // Deep search's status drives its toolbar button instead.
+        // Deep search's status drives its toolbar button and the "Working…" line instead.
         let statuses = self
             .session
             .read(cx)
             .extension_status()
             .iter()
-            .filter(|(key, _)| key.as_str() != deepsearch::STATUS_KEY)
+            .filter(|(key, _)| {
+                ![
+                    deepsearch::STATUS_KEY,
+                    deepsearch::EFFORT_KEY,
+                    deepsearch::PROGRESS_KEY,
+                ]
+                .contains(&key.as_str())
+            })
             .map(|(_, text)| text.clone())
             .collect::<Vec<_>>();
         if statuses.is_empty() {
@@ -1866,7 +2110,7 @@ impl Render for Composer {
         let suggestions = self.render_suggestions(cx);
         let mention = self.render_mention(cx);
         let status = self.render_status(cx);
-        let has_attachments = !self.attachments.is_empty();
+        let has_attachments = !self.attachments.is_empty() || self.is_reading();
         v_flex()
             .key_context(COMPOSER_CONTEXT)
             .on_action(cx.listener(Self::send_follow_up))
@@ -2014,14 +2258,45 @@ fn merge_restored(restored: &str, draft: &str, replace: bool) -> String {
     }
 }
 
-fn load_attachment(path: PathBuf, inline: bool) -> Attachment {
-    let name: SharedString = path
-        .file_name()
+fn chip(cx: &App) -> Div {
+    h_flex()
+        .gap_1()
+        .pl_2()
+        .pr_1()
+        .py_0p5()
+        .rounded_md()
+        .bg(cx.theme().secondary)
+        .text_xs()
+}
+
+impl Attachment {
+    /// What its chip says besides the name, and why.
+    fn remark(&self) -> (Option<&'static str>, Option<SharedString>) {
+        match &self.inline {
+            Some(InlineText::Skipped(reason)) => (
+                Some("not included"),
+                Some(format!("It is not included: {reason}.").into()),
+            ),
+            Some(InlineText::Document(document)) => match document.note() {
+                Some(note) => (Some("built-in reader"), Some(note.to_owned().into())),
+                None => (None, None),
+            },
+            _ => (None, None),
+        }
+    }
+}
+
+fn attachment_name(path: &std::path::Path) -> SharedString {
+    path.file_name()
         .map_or_else(
             || path.display().to_string(),
             |name| name.to_string_lossy().into_owned(),
         )
-        .into();
+        .into()
+}
+
+fn load_attachment(path: PathBuf, inline: bool) -> Attachment {
+    let name = attachment_name(&path);
     let mime = match path
         .extension()
         .and_then(|ext| ext.to_str())
@@ -2052,19 +2327,26 @@ fn load_attachment(path: PathBuf, inline: bool) -> Attachment {
 
 fn read_inline_text(path: &std::path::Path) -> InlineText {
     match std::fs::metadata(path) {
-        Ok(meta) if meta.len() > MAX_INLINE_BYTES => InlineText::Skipped("larger than 256 KB"),
+        Ok(meta) if meta.len() > MAX_INLINE_BYTES as u64 => {
+            InlineText::skipped("larger than 256 KB")
+        }
         Ok(_) => match std::fs::read(path).map(String::from_utf8) {
             Ok(Ok(text)) => InlineText::Text(text),
-            Ok(Err(_)) => InlineText::Skipped("not a text file"),
-            Err(_) => InlineText::Skipped("could not be read"),
+            Ok(Err(_)) => InlineText::skipped("not a text file"),
+            Err(_) => InlineText::skipped("could not be read"),
         },
-        Err(_) => InlineText::Skipped("could not be read"),
+        Err(_) => InlineText::skipped("could not be read"),
     }
 }
 
-/// A file pasted into a chat prompt: its name, then its contents in a fenced block whose
-/// fence is longer than any backtick run inside, so the contents can't close it early.
+/// A file pasted into a chat prompt: its name, then its contents.
 fn inline_file_block(name: &str, contents: &str) -> String {
+    fenced(&format!("`{name}`:"), contents)
+}
+
+/// `contents` below `heading`, in a fenced block whose fence is longer than any backtick run
+/// inside, so the contents can't close it early.
+pub(super) fn fenced(heading: &str, contents: &str) -> String {
     let longest = contents
         .split(|c| c != '`')
         .map(str::len)
@@ -2072,7 +2354,7 @@ fn inline_file_block(name: &str, contents: &str) -> String {
         .unwrap_or(0);
     let fence = "`".repeat(longest.max(2) + 1);
     let body = contents.strip_suffix('\n').unwrap_or(contents);
-    format!("`{name}`:\n{fence}\n{body}\n{fence}")
+    format!("{heading}\n{fence}\n{body}\n{fence}")
 }
 
 /// Builds the folder menu: recent working folders (instant, no disk access) and a fallback to
@@ -2178,6 +2460,53 @@ pub(crate) fn folder_label(
 /// Element id for a dropdown whose items depend on `key`. gpui-kit keeps a built menu per
 /// trigger id and only rebuilds it after certain dismissals, so a stale menu could be shown
 /// (e.g. the previous model's thinking levels); a content-derived id always gets a fresh one.
+/// The effort slider's track: a line with a dot per level, filled up to `effort`.
+fn effort_stops(effort: Effort, cx: &App) -> Div {
+    const DOT: f32 = 8.;
+    const LINE: f32 = 3.;
+    let colors = palette(cx);
+    let rest = cx.theme().muted_foreground.opacity(0.45);
+    let line =
+        |width: f32, color: Hsla| div().absolute().left_0().w(px(width)).h(px(LINE)).bg(color);
+    let dots = Effort::ALL.map(|level| {
+        div()
+            .absolute()
+            .left(px(EFFORT_STOP * effort_value(level) - DOT / 2.))
+            .size(px(DOT))
+            .rounded_full()
+            .map(|dot| {
+                if level <= effort {
+                    dot.bg(colors.accent)
+                } else {
+                    // Hollow: the line does not show through.
+                    dot.bg(colors.surface).border_1().border_color(rest)
+                }
+            })
+    });
+    h_flex()
+        .absolute()
+        .inset_0()
+        .child(line(EFFORT_STOP * effort_value(Effort::Max), rest))
+        .child(line(EFFORT_STOP * effort_value(effort), colors.accent))
+        .children(dots)
+}
+
+#[allow(clippy::cast_precision_loss)] // One of four.
+fn effort_value(effort: Effort) -> f32 {
+    Effort::ALL
+        .iter()
+        .position(|other| *other == effort)
+        .unwrap_or_default() as f32
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // One of four.
+fn effort_at(value: f32) -> Effort {
+    Effort::ALL
+        .get(value.round() as usize)
+        .copied()
+        .unwrap_or_default()
+}
+
 fn web_mode_label(mode: WebMode) -> &'static str {
     match mode {
         WebMode::Off => "Off",
@@ -2281,6 +2610,14 @@ fn folder_menu(
 #[cfg(test)]
 mod inline_tests {
     use super::inline_file_block;
+
+    #[test]
+    fn every_effort_has_its_place_on_the_slider() {
+        use super::{Effort, effort_at, effort_value};
+        for effort in Effort::ALL {
+            assert_eq!(effort_at(effort_value(effort)), effort);
+        }
+    }
 
     #[test]
     fn dictation_shortcut_matches_exactly() {
@@ -2570,6 +2907,87 @@ mod toolbar_tests {
         assert!(least.size.width > px(56.), "the name is gone");
     }
 
+    /// The effort slider is there in deep search only, and follows the session.
+    #[gpui_kit::test]
+    fn deep_search_has_an_effort_slider(cx: &mut TestAppContext) {
+        use super::{Effort, WebMode, effort_at};
+
+        cx.update(|cx| {
+            gpui_kit::component::init(cx);
+            cx.set_global(crate::config::AppConfig::for_tests("pi".into()));
+            cx.set_global(crate::settings::AppSettings::default());
+            let hosts = cx.new(|_| crate::hosts::Hosts::for_tests(Vec::new()));
+            cx.set_global(crate::hosts::HostsHandle(hosts));
+            crate::stt::models::init(cx);
+        });
+        let session = cx.new(|_| PiSession::idle(PathBuf::from("/chat"), Mode::Chat));
+        let shown = session.clone();
+        let mut composer = None;
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|cx| Composer::new(shown, window, cx));
+            composer = Some(view.clone());
+            Root::new(view, window, cx)
+        });
+        let composer = composer.unwrap();
+        let mut show = |mode, effort| {
+            session.update(cx, |session, cx| {
+                session.set_web_for_tests(mode, effort, cx);
+            });
+            cx.run_until_parked();
+            let at = cx.read(|cx| effort_at(composer.read(cx).effort.read(cx).value().end()));
+            (cx.debug_bounds("web-effort").is_some(), at)
+        };
+        assert_eq!(
+            show(WebMode::Search, Effort::Standard),
+            (false, Effort::Standard)
+        );
+        assert_eq!(show(WebMode::Deep, Effort::Max), (true, Effort::Max));
+        assert_eq!(show(WebMode::Deep, Effort::Light), (true, Effort::Light));
+        assert!(!show(WebMode::Off, Effort::Light).0);
+
+        // Moving it is not undone by what the session says meanwhile.
+        show(WebMode::Deep, Effort::Light);
+        let track = cx.debug_bounds("web-effort-track").unwrap();
+        let end = gpui_kit::point(track.right() - px(2.), track.center().y);
+        cx.simulate_mouse_down(
+            end,
+            gpui_kit::MouseButton::Left,
+            gpui_kit::Modifiers::default(),
+        );
+        session.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        let effort = |cx: &VisualTestContext| {
+            effort_at(cx.read(|cx| composer.read(cx).effort.read(cx).value().end()))
+        };
+        assert_eq!(effort(cx), Effort::Max);
+        cx.simulate_mouse_up(
+            end,
+            gpui_kit::MouseButton::Left,
+            gpui_kit::Modifiers::default(),
+        );
+
+        // Every stop has as much room as the next one, the ends' partly beside the track.
+        let bounds = |name, cx: &mut VisualTestContext| cx.debug_bounds(name).unwrap();
+        let (first, last) = (
+            bounds("web-effort-first", cx),
+            bounds("web-effort-last", cx),
+        );
+        assert_eq!((first.right(), last.left()), (track.left(), track.right()));
+        let stop = track.size.width / 3.;
+        for (index, expected) in Effort::ALL.into_iter().enumerate() {
+            #[allow(clippy::cast_precision_loss)] // One of four.
+            let left = first.left() + stop * index as f32;
+            for x in [left + px(3.), left + stop - px(3.)] {
+                cx.simulate_click(
+                    gpui_kit::point(x, track.center().y),
+                    gpui_kit::Modifiers::default(),
+                );
+                cx.run_until_parked();
+                assert_eq!(effort(cx), expected, "{x:?}");
+            }
+        }
+    }
+
     /// A short name is as wide as it is, in any window.
     #[gpui_kit::test]
     fn a_short_folder_name_stays_whole(cx: &mut TestAppContext) {
@@ -2764,5 +3182,154 @@ mod draft_tests {
         assert_eq!(names(&local, cx), ["notes.txt"]);
         assert!(cx.read(|cx| local.read(cx).attachments[0].inline.is_none()));
         assert_eq!(cx.update(|window, cx| window.notifications(cx).len()), 1);
+    }
+
+    /// A chat whose documents are read by `script` (the app's helper: JSON on stdin and stdout).
+    #[cfg(unix)]
+    fn chat<'a>(
+        dir: &Path,
+        script: &str,
+        cx: &'a mut TestAppContext,
+    ) -> (Entity<Composer>, &'a mut VisualTestContext) {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let exe = dir.join("app");
+        std::fs::write(&exe, format!("#!/bin/sh\n{script}\n")).unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let session = PiSession::idle(std::env::temp_dir(), Mode::Chat);
+        let ([composer], cx) = composers([session], cx);
+        cx.update(|_, cx| cx.global_mut::<AppConfig>().exe = Some(exe));
+        (composer, cx)
+    }
+
+    #[cfg(unix)]
+    fn remark(composer: &Entity<Composer>, cx: &VisualTestContext) -> Option<&'static str> {
+        cx.read(|cx| composer.read(cx).attachments[0].remark().0)
+    }
+
+    /// A chip says that a document is read, and Enter waits for it.
+    #[cfg(unix)]
+    #[gpui_kit::test]
+    fn a_document_is_read_before_it_is_sent(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let pdf = dir.path().join("report.pdf");
+        std::fs::write(&pdf, "%PDF-1.4").unwrap();
+        let go = dir.path().join("go");
+        let reply =
+            r##"{"ok":true,"markdown":"# Hi","parser":"builtin","note":"Docling failed."}"##;
+        let script = format!(
+            "read line; while ! test -e '{}'; do sleep 0.05; done; echo '{reply}'",
+            go.display()
+        );
+        let (composer, cx) = chat(dir.path(), &script, cx);
+        act(&composer, cx, |composer, window, cx| {
+            composer.set_text("What is this?", window, cx);
+            composer.attach_paths(vec![pdf], cx);
+            assert!(composer.is_reading() && composer.has_draft(cx));
+        });
+        assert!(cx.debug_bounds("reading-document").is_some());
+        act(&composer, cx, |composer, window, cx| {
+            composer.submit(false, window, cx);
+        });
+        assert_eq!(cx.update(|window, cx| window.notifications(cx).len()), 1);
+        assert_eq!(cx.read(|cx| composer.read(cx).text(cx)), "What is this?");
+
+        std::fs::write(go, "").unwrap();
+        settle(&composer, cx);
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("reading-document").is_none());
+        assert_eq!(names(&composer, cx), ["report.pdf"]);
+        assert_eq!(remark(&composer, cx), Some("built-in reader"));
+        cx.read(|cx| {
+            let inline = &composer.read(cx).attachments[0].inline;
+            let Some(InlineText::Document(document)) = inline else {
+                panic!("not read");
+            };
+            assert_eq!(document.note(), Some("Docling failed."));
+            let block = document.block("report.pdf", "What is this?");
+            assert!(
+                block.ends_with("Docling failed.\n```\n# Hi\n```"),
+                "{block}"
+            );
+        });
+    }
+
+    /// Removing a document, or leaving the chat, stops reading it.
+    #[cfg(unix)]
+    #[gpui_kit::test]
+    fn reading_a_document_stops_with_its_chip(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let pdf = dir.path().join("report.pdf");
+        std::fs::write(&pdf, "%PDF-1.4").unwrap();
+        let stopped = dir.path().join("stopped");
+        // Ends with its input, like the real one.
+        let script = format!("cat > /dev/null; echo >> '{}'", stopped.display());
+        let (composer, cx) = chat(dir.path(), &script, cx);
+        for leave in [false, true] {
+            act(&composer, cx, |composer, _, cx| {
+                composer.attach_paths(vec![pdf.clone()], cx);
+            });
+            // Until the helper runs.
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            act(&composer, cx, |composer, window, cx| {
+                if leave {
+                    assert_eq!(
+                        composer.take_draft(window, cx).unread,
+                        std::slice::from_ref(&pdf)
+                    );
+                } else {
+                    composer.loading.clear();
+                }
+            });
+            assert!(!cx.read(|cx| composer.read(cx).has_draft(cx)));
+            for _ in 0..500 {
+                let lines = std::fs::read_to_string(&stopped).unwrap_or_default();
+                if lines.lines().count() > usize::from(leave) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            let lines = std::fs::read_to_string(&stopped).unwrap();
+            assert_eq!(lines.lines().count(), 1 + usize::from(leave));
+            cx.run_until_parked();
+            assert_eq!(names(&composer, cx), [""; 0]);
+        }
+    }
+
+    /// A document that cannot be read says why, and one in a Code session is only named.
+    #[cfg(unix)]
+    #[gpui_kit::test]
+    fn documents_that_are_not_read(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let docx = dir.path().join("letter.docx");
+        std::fs::write(&docx, "PK").unwrap();
+        let script = r#"echo '{"ok":false,"error":"only Docling reads Office files"}'"#;
+        let (composer, cx) = chat(dir.path(), script, cx);
+        act(&composer, cx, |composer, _, cx| {
+            composer.attach_paths(vec![docx], cx);
+        });
+        settle(&composer, cx);
+        assert_eq!(remark(&composer, cx), Some("not included"));
+        cx.read(|cx| {
+            let (_, why) = composer.read(cx).attachments[0].remark();
+            assert_eq!(
+                why.unwrap(),
+                "It is not included: only Docling reads Office files."
+            );
+        });
+    }
+
+    #[gpui_kit::test]
+    fn a_document_in_code_is_a_path(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let pdf = dir.path().join("report.pdf");
+        std::fs::write(&pdf, "%PDF-1.4").unwrap();
+        let ([composer], cx) = composers([code()], cx);
+        act(&composer, cx, |composer, _, cx| {
+            composer.attach_paths(vec![pdf], cx);
+            assert!(!composer.is_reading());
+        });
+        settle(&composer, cx);
+        assert!(cx.read(|cx| composer.read(cx).attachments[0].inline.is_none()));
     }
 }

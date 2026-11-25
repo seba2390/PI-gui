@@ -16,7 +16,7 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
 - Tools that run other tools (subagents, code mode) show that work inside their own row: a
   live step count while running, and every nested call and reply when expanded.
 - Composer: attachments, working-folder picker (a long name fades out), model and thinking
-  pickers, context-window wheel,
+  pickers (only the thinking levels that differ on the model), context-window wheel,
   `/` command completion, inline `@file` completion (paths with spaces are quoted like pi does),
   ↑ / ↓ through earlier prompts, and `!cmd` shell commands (with live output; Esc stops them).
   Messages typed while pi starts, compacts or is busy sending are listed above the input as
@@ -34,15 +34,44 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
     or run anything on your computer. Chats run pi in a dedicated empty folder
     (`~/.pi/agent/pistachio/chat`) with only deep search's two web tools (`--tools
     web_search,web_fetch --no-mcp`), which stay off until you turn web search on. Text
-    attachments are pasted into the prompt instead of being referenced by path, and `!`
-    shell commands are disabled.
+    attachments are pasted into the prompt instead of being referenced by path (PDF files as
+    Markdown, see [Documents](#documents)), and `!` shell commands are disabled.
   - **Web search** (Chat): the globe button next to the paperclip chooses how the model uses
     the web, per chat (remembered in the session; `/websearch off|search|deep` works too):
     - **Search**: a quick lookup when needed (a few searches and pages), then a concise answer
       with links.
     - **Deep search**: a thorough investigation: the model plans sub-questions, searches from
-      several angles, reads many pages, cross-checks key facts and reports back with a
-      structured, sourced report. Takes minutes rather than seconds.
+      several angles, reads many pages (also PDFs), cross-checks key facts and reports back with a
+      structured, sourced report. A slider next to it sets the effort (`/websearch effort
+      light|standard|thorough|max` too): from 10 searches and pages to 160, with more results per
+      search. Effort is a soft floor too. The question is split into sub-questions (a simple one
+      is only one), and for each of them the effort level asks for a number of searches and pages,
+      and for different sites. A model that wants to report before that, or leaves a sub-question
+      open, is sent back to its research with what is missing: until it is done, the budget is used
+      up, nothing new turns up, the search service no longer answers, or it was sent back a set number of times (once in Light, up to 8
+      times in Max). With APIs like OpenAI's it has to call a tool while its research is short, so
+      it writes no reports that would only be sent back. Settings → Web search → Advanced deep
+      search settings has all of these numbers.
+
+      Then the report is checked: links are tried, and from Standard on the model judges, from the
+      sources' own passages and without the conversation, whether they back its claims (the key
+      ones; all of them from Thorough on; one by one in Max). Quotes it gives as proof are looked up
+      on the page. Table rows and bullets are claims too, whether they cite with links, page names in
+      brackets, numbers or a line of sources below them. Ones without a source are problems, and a
+      page that was not read is no source. The report goes back to be corrected with what was found.
+      These questions to the model have time and token limits (`check` in `config.json`); a check
+      that fails or is stopped ends the run with a note that says so.
+
+      Until the report is final it is not shown as an answer. The chat shows the work instead:
+      searches, pages, the plan, the checks, and drafts as rows that open. The “Working…” line says
+      what is going on (“Checking the report: 12 of 40 claims”). Then the final report is written
+      into the chat once. A symbol at the end of the turn opens how it was checked. If the check fails or you press Esc,
+      the latest complete draft is the answer, marked as not checked. The session keeps every
+      draft, so other programs (pi's terminal) may show them.
+
+      Long research stays within the context: older pages are cut down to the passages that
+      mattered, replaced drafts are left out, and results and passages the model has seen are not
+      shown again.
 
     The model searches (`web_search`) and reads pages (`web_fetch`); the work is done in Rust
     by the app itself, and a small embedded pi extension only connects the tools to pi. Pages
@@ -52,15 +81,28 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
     reads. Settings live in `~/.pi/agent/pistachio/deepsearch/` and apply to the next message,
     no restart:
     - `config.json`: `backend` (`duckduckgo` by default, no key; `searxng` with
-      `searxng.url`, e.g. a self-hosted instance with `json` enabled in its `settings.yml`;
+      `searxng.url`, e.g. a self-hosted instance with `json` enabled in its `settings.yml`, or with
+      `searxng.local` the one Pistachio runs on this computer;
       `brave` or `tavily` with an API key or `api_key_env`), `default_mode` for new chats,
-      `modes.search` / `modes.deep` limits (`max_searches`, `max_fetches` per message),
+      `default_effort`, `modes.search` limits (`max_searches`, `max_fetches` per message), `deep`
+      (what each effort level may and has to do: searches, pages, results, checked claims, revisions,
+      sub-questions, sites),
       results per search, page text per read (`fetch.max_chars`; lower it for small context
       windows), `fetch.allow_private_networks` and timeouts. Settings added in later versions
       are filled in automatically.
     - `prompt-search.md` and `prompt-deep.md`: each mode's instructions (`{{date}}`,
-      `{{max_searches}}` and `{{max_fetches}}` are filled in). Delete a file to get the
+      `{{max_searches}}`, `{{max_fetches}}` and the effort's `{{depth}}` are filled in). Delete a file to get the
       default back.
+    - **SearXNG on this computer** (macOS and Linux, no Docker): choosing SearXNG in Settings
+      checks whether one answers at the address. If not, it shows what is missing and asks whether
+      to download and run it; Cancel keeps the service from before. Its row has a light (green
+      running, amber busy, red stopped or not usable) and a “⋮” menu: start or stop, update, change
+      the address, remove. It does not come with the app: on request SearXNG, a Python of its own
+      and the packages it needs (about 80 MB, 190 MB on disk), each pinned and checked against its
+      checksum, go to the `searxng` folder here; your own Python is not touched, and Remove deletes
+      all of it. Only this computer can reach it, on a free port. It starts with the first message
+      of a chat that searches and stops when the app quits (also if it crashes) or another service
+      is chosen. Its settings are `searxng/settings.yml`, yours to edit.
     - Try settings without the GUI: `pistachio --deepsearch-tool search <query>` and
       `pistachio --deepsearch-tool fetch <url> [what to look for]` print what the model would
       see.
@@ -184,6 +226,50 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
 - macOS and Linux, plus an experimental Windows build. GPU-rendered with [GPUI](https://gpui.rs) via
   [gpui-kit](https://gpui-kit.com).
 
+## Documents
+
+PDF files are read as Markdown: the ones you attach to a chat, the ones chats find on the web, and
+the ones pi reads in Code sessions on this computer. Settings → Document parsing chooses what reads
+them. The built-in reader is the default and needs no download; the others are downloaded on request
+and can be removed again (macOS and Linux):
+
+| Parser | Good at | Download (on disk) | License |
+|---|---|---|---|
+| Built-in ([pdf-extract](https://crates.io/crates/pdf-extract)) | plain text, page by page | none | MIT |
+| [PyMuPDF4LLM](https://github.com/pymupdf/pymupdf) | fast; headings, columns and tables of PDFs made on a computer | 143 MB (320 MB) | AGPL-3.0 |
+| [Docling](https://github.com/docling-project/docling) | complex layouts, tables, scans; also Word, PowerPoint and Excel files | 788 MB (1.8 GB); Linux 3.7 GB (8.5 GB) | MIT |
+| [MinerU](https://github.com/opendatalab/MinerU) | academic papers: formulas, dense columns, long tables, scans | 1.0 GB (1.3 GB) | MinerU Open Source License (Apache-2.0 with added terms) |
+
+Sizes are of a Mac; Linux differs little, except that Docling comes with NVIDIA's libraries there
+(that is how PyTorch is published for Linux). MinerU runs its small models ("basic"), not the
+language model that needs a strong GPU. Macs with an Intel processor only have PyMuPDF4LLM (an older
+version), because the others are not published for them any more; parsers need macOS 14 or newer,
+and Windows has only the built-in reader. Settings says what is not available.
+
+They do not come with Pistachio. The licenses fit because each is an optional program that you
+download and that runs as a separate process; nothing of it is part of Pistachio. Downloading asks
+first and shows the size and license. uv, a private Python, the packages and the models come from
+GitHub, PyPI and Hugging Face, each pinned and checked against its checksum, and go to
+`~/.pi/agent/pistachio/documents/`; your own Python is not touched. A new installation must read a
+small test document before it replaces an old one. Parsers run one process per document, without
+network, and for at most 10 minutes (2 for a PDF from the web). If the chosen one is missing, fails
+or takes too long, the built-in reader is used and the result says so.
+
+- **Chats:** an attached PDF shows “Reading…” until it is done; it can be removed meanwhile, and the
+  message is not sent before. A document of more than 256 KB of text is shortened to its outline,
+  its start and the parts that match your message, and the message says so. With Docling, Word,
+  PowerPoint and Excel files (`.docx`, `.pptx`, `.xlsx`) can be attached the same way. Files on this
+  computer attached to a session on an SSH host are read too.
+- **Web search:** PDFs found on the web are read with the same parser; the model gets the passages
+  that match, with tables kept whole.
+- **Code:** an attached PDF stays an `@path`. When pi reads a PDF, a small embedded extension returns
+  its Markdown; `offset` and `limit` are lines of that. Other files are pi's own business, and so are
+  all files in sessions on an SSH host.
+- `config.json` in that folder has the parser and the limits: `timeout_secs`, `web_timeout_secs` and
+  `max_file_bytes` (100 MB). The text of the last documents is kept in `cache` there (24 at most),
+  because long ones are read in parts.
+- Try it without the GUI: `pistachio --documents-tool parse paper.pdf` prints the Markdown.
+
 ## Speech to text
 
 The microphone button at the right of the message box dictates instead of typing, and so does
@@ -252,9 +338,10 @@ mouse.
 - **pi & models:** which `pi` to run (`PISTACHIO_PI_BIN` still wins), the model and thinking
   level pi starts with (saved in pi's own `settings.json`, like `/settings` in the terminal),
   and shortcuts to add models or edit `models.json`.
-- **Web search:** the search service (DuckDuckGo, SearXNG, Brave or Tavily, with API keys
-  stored only on this computer), whether new chats search, limits per message, and local
-  network access.
+- **Web search:** the search service (DuckDuckGo, SearXNG, Brave or Tavily) and the address or
+  API key the chosen one needs (keys are stored only on this computer) or a SearXNG on this
+  computer, whether new chats search and with how much effort, limits
+  per message, and local network access.
 - **SSH connections:** whether saved connections connect when the app opens (off by
   default), and the saved hosts with their status, connecting, adding and managing them.
 - **Speech to text:** the dictation models (download, use, remove), how long a silence ends
@@ -262,6 +349,8 @@ mouse.
 - **Conversation names:** automatic names for new conversations (off by default), whether the
   conversation's own model or a small model on this computer makes them, and the local models
   (download, use, remove).
+- **Document parsing:** what reads PDF files, and the parsers that can be downloaded (size, license,
+  download, use, update, remove).
 
 The app's own settings live in `~/.pi/agent/pistachio/settings.json`.
 

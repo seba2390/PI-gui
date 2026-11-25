@@ -26,7 +26,8 @@ def emit(record):
 
 assert sys.argv[1:3] == ["--mode", "rpc"], sys.argv
 model = {"id": "fake-1", "name": "Fake", "provider": "test", "reasoning": True,
-         "input": ["text"], "contextWindow": 1000, "maxTokens": 100}
+         "input": ["text"], "contextWindow": 1000, "maxTokens": 100,
+         "thinkingLevelMap": {"minimal": "low", "low": "low", "high": "xhigh", "xhigh": "xhigh"}}
 
 # Request ids of the `bash` commands still running.
 hanging = []
@@ -53,6 +54,8 @@ for line in sys.stdin:
         reply["data"] = {"model": model, "thinkingLevel": "low", "sessionId": "s1"}
     elif kind == "get_available_models":
         reply["data"] = {"models": [model]}
+    elif kind == "get_available_thinking_levels":
+        reply["data"] = {"levels": ["off", "minimal", "low", "medium", "high", "xhigh"]}
     elif kind == "prompt" and compacting:
         reply.update(success=False, error="Cannot submit a prompt while compaction is in progress.")
     elif kind == "prompt" and command["message"].startswith("refuse"):

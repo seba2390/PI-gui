@@ -71,6 +71,8 @@ script/measure-memory.sh                 # memory of a running instance and its 
 script/perf.sh [release|debug] [runs] [baseline.json]   # time startup, navigation and quitting
 script/make-icon.sh                      # regenerate the .icns / PNG from icon.svg
 script/set-version.sh 0.5.0              # bump the version (Cargo.toml, Cargo.lock, README install links)
+script/update-searxng.sh                 # move the pins of the SearXNG the app can download
+script/update-parsers.sh                 # move the pins of the document parsers the app can download
 script/release.sh 0.5.0                  # release a version (see Releasing)
 ```
 
@@ -85,10 +87,12 @@ checks scriptable:
   folder) in the Files tab's viewer.
 - Sessions and popovers: `latest`, `new-chat` (like ⌘N), `attach`, `context`; `find:<text>` opens the find bar
   searching for `<text>`; `send:<text>` sends `<text>` as a message; `image-viewer:<n>` opens the picture viewer on the session's
-  `<n>`th picture.
+  `<n>`th picture; `report-check` opens how the session's last deep search report was checked.
 - Dialogs: `add-host`, `manage-hosts`, `add-model`, `add-provider`, `edit-models`.
 - Skills page: `skills`, `new-skill`, `open-skill:<path>`; the Settings page: `settings`
-  (`settings-speech` and `settings-names` open those pages); `type-name:<text>` plays the
+  (`settings-web`, `settings-speech`, `settings-names` and `settings-documents` open those pages; after `settings-web`,
+  `web-advanced` opens its advanced sections,
+  `searxng-setup` asks whether to download SearXNG and `searxng-get` downloads and runs it); `type-name:<text>` plays the
   sidebar's typing animation for the open session 2.5 s after start (nothing is saved).
 - SSH: `ssh:<alias>`, `remote:<alias>:<folder>` and `remote-latest:<alias>` open a remote
   session once connected. Panels listed after them apply to that session.
@@ -133,6 +137,14 @@ These tests are all `#[ignore]`d. Run them with `PISTACHIO_SSH_TEST_HOST=<alias>
 `PISTACHIO_PREVIEW_CHECK=<folder of session copies> cargo test -p pistachio preview_matches_pi --
 --ignored` runs real pi on each session file and checks that the history Pistachio previews
 from the file matches pi's (use copies: pi may migrate files it opens).
+
+`script/test-deepsearch.py` runs deep search's extension in real pi, with a scripted model, search
+service and pages on this computer (`cargo build` first). It covers what no unit test can: sending
+the model back, revisions, a model that does not answer, Esc and more.
+
+`cargo test -p documents --test live -- --ignored --test-threads 1` really downloads the document
+parsers (2 GB, into a temporary folder) and reads a PDF with each; add `pymupdf4llm`, `docling` or
+`mineru` for one of them.
 
 `TITLES_PI_MODEL=<provider/model> cargo test -p titles real_pi -- --ignored --nocapture` names
 a few sample first messages with real pi and that model (the conversation-model namer).

@@ -40,7 +40,7 @@ pub fn status_dot(status: Option<&HostStatus>, cx: &App) -> Div {
         Some(HostStatus::Failed(_)) => colors.error,
         Some(HostStatus::Idle) => cx.theme().muted_foreground.opacity(0.5),
     };
-    div().size(px(7.)).flex_none().rounded_full().bg(color)
+    crate::ui::light(color)
 }
 
 /// A one-line explanation of a status, for tooltips.

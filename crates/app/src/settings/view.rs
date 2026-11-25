@@ -1,25 +1,29 @@
 //! The Settings page, shown in the chat column: General, pi & models, Web search, SSH
-//! connections, Speech to text and Conversation names. Every change is saved right away.
+//! connections, Speech to text, Conversation names and Document parsing. Every change is saved
+//! right away.
 
 use std::path::{Path, PathBuf};
 
 use deepsearch::config::{BackendKind, Config as WebConfig, Mode as WebMode};
+use deepsearch::effort::Effort;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::setting::{
-    NumberFieldOptions, RenderOptions, SelectIndex, SettingField, SettingGroup, SettingItem,
-    SettingPage, Settings,
+    RenderOptions, SelectIndex, SettingField, SettingGroup, SettingItem, SettingPage, Settings,
 };
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use pi_config::settings::{StartupDefaults, THINKING_LEVELS};
+use searxng::{Installed, Probe};
 
-use super::{AppSettings, StartMode, TextSize, ThemeChoice};
+use super::{AppSettings, StartMode, TextSize, ThemeChoice, local_search, web_advanced};
 use crate::code_colors::CodeColors;
 use crate::config::AppConfig;
+use crate::document_parsers::{DocumentParsers, document_parsers};
 use crate::remote_ui::SavedHostAction;
+use crate::search_server::{Running, SearchServerEvent, search_server};
 use crate::ui::spinner::IndicatorStyle;
 use crate::ui::{AppIcon, PiField, QuietButton as _, buttons};
 
@@ -37,9 +41,18 @@ struct WebSearchState {
     dir: Option<PathBuf>,
     config: WebConfig,
     error: Option<String>,
+    /// SearXNG was just chosen and may have to be set up first.
+    choosing: Option<Choosing>,
 }
 
 impl Global for WebSearchState {}
+
+/// Choosing SearXNG instead of `before`, which comes back when it is not set up after all.
+struct Choosing {
+    before: BackendKind,
+    /// The user was asked whether to download it.
+    asked: bool,
+}
 
 /// The startup model and thinking level in pi's `settings.json` on this computer.
 struct PiStartupState {
@@ -57,6 +70,8 @@ pub struct SettingsView {
     models: Vec<(SharedString, SharedString)>,
     /// `pi --version` of the configured `pi`, once known.
     pi_version: Option<String>,
+    /// The sections of web search that few people change.
+    pub(super) advanced: web_advanced::Advanced,
     /// The page shown first (scripted runs open Speech to text directly).
     start_page: usize,
     /// The Code colors palette under the pointer in the open picker; the preview shows it.
@@ -102,10 +117,13 @@ impl SettingsView {
         };
         let brave_key = key_input(brave, "From BRAVE_API_KEY if empty", window, cx);
         let tavily_key = key_input(tavily, "From TAVILY_API_KEY if empty", window, cx);
+        let parsers = document_parsers(cx);
+        parsers.update(cx, DocumentParsers::refresh);
         let subscriptions = vec![
-            // Speech to text and conversation names: download progress and installed models.
+            // Speech to text, conversation names and document parsers: download progress and installed models.
             cx.observe(&crate::stt::models::models(cx), |_, _, cx| cx.notify()),
             cx.observe(&crate::naming::models(cx), |_, _, cx| cx.notify()),
+            cx.observe(&parsers, |_, _, cx| cx.notify()),
             cx.subscribe(&brave_key, |_, input, event: &InputEvent, cx| {
                 if let InputEvent::Change = event {
                     let key = input.read(cx).value().trim().to_owned();
@@ -123,7 +141,23 @@ impl SettingsView {
                 }
             }),
             cx.observe(&crate::hosts::hosts(cx), |_, _, cx| cx.notify()),
+            // The chosen search service's field.
+            cx.observe_global_in::<WebSearchState>(window, |_, window, cx| {
+                check_searxng(false, cx);
+                offer_searxng(window, cx);
+                cx.notify();
+            }),
+            cx.observe_in(&search_server(cx), window, |_, _, window, cx| {
+                offer_searxng(window, cx);
+                cx.notify();
+            }),
+            cx.subscribe(&search_server(cx), |_, _, event, cx| match event {
+                SearchServerEvent::Ready => keep_service(cx),
+                SearchServerEvent::Cancelled => download_cancelled(cx),
+                SearchServerEvent::Failed(_) => {}
+            }),
         ];
+        check_searxng(true, cx);
         let models = models
             .into_iter()
             .map(|(provider, id, name)| {
@@ -141,6 +175,7 @@ impl SettingsView {
             tavily_key,
             models,
             pi_version: None,
+            advanced: web_advanced::Advanced::default(),
             start_page: 0,
             pi_field: cx.new(|_| PiField::plain()),
             code_colors_hover: None,
@@ -533,69 +568,69 @@ impl SettingsView {
             )
     }
 
-    fn web_search_page(&self) -> SettingPage {
-        let (brave, tavily) = (self.brave_key.clone(), self.tavily_key.clone());
-        let number = |min: f64, max: f64| NumberFieldOptions {
-            min,
-            max,
-            step: 1.0,
+    /// The search service, and what the chosen one needs.
+    fn search_service_group(&self, cx: &App) -> SettingGroup {
+        let key_field = |name: &'static str, input: &Entity<InputState>| {
+            let input = input.clone();
+            SettingField::render(move |_, _, _| {
+                div()
+                    .debug_selector(|| name.into())
+                    .child(Input::new(&input).mask_toggle().w(px(260.)))
+            })
         };
+        let key_hint = "Stored only on this computer, readable by you alone.";
+        let service = SettingItem::new(
+            "Service",
+            SettingField::dropdown(
+                options(&[
+                    ("duckduckgo", "DuckDuckGo (no key)"),
+                    ("searxng", "SearXNG (no key)"),
+                    ("brave", "Brave Search (API key)"),
+                    ("tavily", "Tavily (API key)"),
+                ]),
+                |cx| backend_value(cx.global::<WebSearchState>().config.backend).into(),
+                |value, cx| {
+                    let backend = match value.as_ref() {
+                        "searxng" => BackendKind::Searxng,
+                        "brave" => BackendKind::Brave,
+                        "tavily" => BackendKind::Tavily,
+                        _ => BackendKind::Duckduckgo,
+                    };
+                    choose_service(backend, cx);
+                },
+            ),
+        )
+        // Found by the settings search also while another one is chosen.
+        .keywords([
+            "DuckDuckGo",
+            "SearXNG address",
+            "Brave API key",
+            "Tavily API key",
+        ]);
+        let needs = match web_config(cx).backend {
+            BackendKind::Duckduckgo => Vec::new(),
+            BackendKind::Searxng => vec![local_search::item()],
+            BackendKind::Brave => vec![
+                SettingItem::new("Brave API key", key_field("brave-key", &self.brave_key))
+                    .description(key_hint),
+            ],
+            BackendKind::Tavily => vec![
+                SettingItem::new("Tavily API key", key_field("tavily-key", &self.tavily_key))
+                    .description(key_hint),
+            ],
+        };
+        SettingGroup::new()
+            .title("Search service")
+            .item(service)
+            .items(needs)
+    }
+
+    fn web_search_page(&self, weak: &WeakEntity<Self>, cx: &App) -> SettingPage {
+        let page = weak.clone();
         SettingPage::new("Web search")
             .icon(AppIcon::Globe)
             .description("For chats with web search on (the globe next to the paperclip).")
-            .group(
-                SettingGroup::new()
-                    .title("Search service")
-                    .item(SettingItem::new(
-                        "Service",
-                        SettingField::dropdown(
-                            options(&[
-                                ("duckduckgo", "DuckDuckGo (no key)"),
-                                ("searxng", "SearXNG (your instance)"),
-                                ("brave", "Brave Search (API key)"),
-                                ("tavily", "Tavily (API key)"),
-                            ]),
-                            |cx| backend_value(cx.global::<WebSearchState>().config.backend).into(),
-                            |value, cx| {
-                                let backend = match value.as_ref() {
-                                    "searxng" => BackendKind::Searxng,
-                                    "brave" => BackendKind::Brave,
-                                    "tavily" => BackendKind::Tavily,
-                                    _ => BackendKind::Duckduckgo,
-                                };
-                                update_web(cx, |config| config.backend = backend);
-                            },
-                        ),
-                    ))
-                    .item(
-                        SettingItem::new(
-                            "SearXNG address",
-                            SettingField::input(
-                                |cx| cx.global::<WebSearchState>().config.searxng.url.clone().into(),
-                                |value, cx| {
-                                    let url = value.trim().to_owned();
-                                    update_web(cx, |config| config.searxng.url = url);
-                                },
-                            ),
-                        )
-                        .description("Its settings.yml must allow the json format."),
-                    )
-                    .item(
-                        SettingItem::new(
-                            "Brave API key",
-                            SettingField::render(move |_, _, _| {
-                                Input::new(&brave).mask_toggle().w(px(260.))
-                            }),
-                        )
-                        .description("Stored only on this computer, readable by you alone."),
-                    )
-                    .item(SettingItem::new(
-                        "Tavily API key",
-                        SettingField::render(move |_, _, _| {
-                            Input::new(&tavily).mask_toggle().w(px(260.))
-                        }),
-                    )),
-            )
+            .group(self.search_service_group(cx))
             .group(
                 SettingGroup::new().title("New chats").item(SettingItem::new(
                     "Web search",
@@ -608,66 +643,24 @@ impl SettingsView {
                             }
                         },
                     ),
+                ))
+                .item(SettingItem::new(
+                    "Deep search effort",
+                    SettingField::dropdown(
+                        Effort::ALL
+                            .map(|effort| (effort.as_str().into(), effort.label().into()))
+                            .into(),
+                        |cx| web_config(cx).default_effort.as_str().into(),
+                        |value, cx| {
+                            if let Some(effort) = Effort::parse(&value) {
+                                update_web(cx, |config| config.default_effort = effort);
+                            }
+                        },
+                    ),
                 )),
             )
-            .group(
-                SettingGroup::new()
-                    .title("Limits per message")
-                    .description("The model is told to answer with what it found once a limit is reached.")
-                    .item(SettingItem::new(
-                        "Search: searches",
-                        SettingField::number_input(
-                            number(1., 50.),
-                            |cx| f64::from(cx.global::<WebSearchState>().config.modes.search.max_searches),
-                            |value, cx| update_web(cx, |c| c.modes.search.max_searches = to_u32(value)),
-                        ),
-                    ))
-                    .item(SettingItem::new(
-                        "Search: pages read",
-                        SettingField::number_input(
-                            number(0., 50.),
-                            |cx| f64::from(cx.global::<WebSearchState>().config.modes.search.max_fetches),
-                            |value, cx| update_web(cx, |c| c.modes.search.max_fetches = to_u32(value)),
-                        ),
-                    ))
-                    .item(SettingItem::new(
-                        "Deep search: searches",
-                        SettingField::number_input(
-                            number(1., 200.),
-                            |cx| f64::from(cx.global::<WebSearchState>().config.modes.deep.max_searches),
-                            |value, cx| update_web(cx, |c| c.modes.deep.max_searches = to_u32(value)),
-                        ),
-                    ))
-                    .item(SettingItem::new(
-                        "Deep search: pages read",
-                        SettingField::number_input(
-                            number(0., 200.),
-                            |cx| f64::from(cx.global::<WebSearchState>().config.modes.deep.max_fetches),
-                            |value, cx| update_web(cx, |c| c.modes.deep.max_fetches = to_u32(value)),
-                        ),
-                    ))
-                    .item(
-                        SettingItem::new(
-                            "Text per page (characters)",
-                            SettingField::number_input(
-                                NumberFieldOptions {
-                                    min: 1000.,
-                                    max: 100_000.,
-                                    step: 1000.,
-                                },
-                                |cx| {
-                                    #[allow(clippy::cast_precision_loss)]
-                                    let chars = cx.global::<WebSearchState>().config.fetch.max_chars as f64;
-                                    chars
-                                },
-                                |value, cx| {
-                                    update_web(cx, |c| c.fetch.max_chars = to_u32(value) as usize);
-                                },
-                            ),
-                        )
-                        .description("Lower it for models with a small context window."),
-                    ),
-            )
+            .group(web_advanced::search_group(&self.advanced, weak))
+            .group(web_advanced::deep_group(&self.advanced, weak))
             .group(
                 SettingGroup::new()
                     .title("Network")
@@ -683,8 +676,14 @@ impl SettingsView {
                             "Off by default: pages the model asks for can then reach devices on your network.",
                         ),
                     )
-                    .item(SettingItem::render(move |_, _, cx| {
-                        div().when_some(cx.global::<WebSearchState>().error.clone(), |this, error| {
+                    .item(SettingItem::render(move |_, window, cx| {
+                        let room = page
+                            .upgrade()
+                            .map(|view| view.read(cx).advanced.room(window));
+                        div()
+                            .debug_selector(|| "web-network".into())
+                            .pb(room.unwrap_or_default())
+                            .when_some(cx.global::<WebSearchState>().error.clone(), |this, error| {
                             this.text_sm().text_color(cx.theme().danger).child(error)
                         })
                     })),
@@ -737,6 +736,16 @@ impl SettingsView {
         self.pi_field.clone()
     }
 
+    /// Opens on the Web search page (before the first render).
+    pub fn start_on_web_search(&mut self) {
+        self.start_page = 2;
+    }
+
+    /// Opens every section of the Web search page.
+    pub fn open_advanced(&mut self) {
+        self.advanced.open_all();
+    }
+
     /// Opens on the SSH connections page (before the first render).
     pub fn start_on_ssh(&mut self) {
         self.start_page = 3;
@@ -750,6 +759,11 @@ impl SettingsView {
     /// Opens on the Conversation names page (before the first render).
     pub fn start_on_names(&mut self) {
         self.start_page = 5;
+    }
+
+    /// Opens on the Document parsing page (before the first render).
+    pub fn start_on_documents(&mut self) {
+        self.start_page = 6;
     }
 
     fn speech_page(&self) -> SettingPage {
@@ -828,10 +842,11 @@ impl Render for SettingsView {
                 .pages([
                     self.general_page(&weak),
                     self.pi_page(&weak, cx),
-                    self.web_search_page(),
+                    self.web_search_page(&weak, cx),
                     self.ssh_page(&weak),
                     self.speech_page(),
                     naming_page(cx),
+                    super::documents::page(),
                 ]),
         )
     }
@@ -1230,9 +1245,108 @@ fn backend_value(backend: BackendKind) -> &'static str {
     }
 }
 
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn to_u32(value: f64) -> u32 {
-    value.round().clamp(0., f64::from(u32::MAX)) as u32
+pub(super) fn web_config(cx: &App) -> &WebConfig {
+    &cx.global::<WebSearchState>().config
+}
+
+/// Makes chats search with `backend`. SearXNG may have to be set up for that: [`offer_searxng`].
+fn choose_service(backend: BackendKind, cx: &mut App) {
+    let before = web_config(cx).backend;
+    // Also when it was chosen before: it may not be set up.
+    let choosing = (backend == BackendKind::Searxng).then_some(Choosing {
+        before,
+        asked: false,
+    });
+    cx.global_mut::<WebSearchState>().choosing = choosing;
+    if backend == BackendKind::Searxng {
+        // What answered the last time it was chosen may have changed.
+        search_server(cx).update(cx, |server, _| server.forget_probe());
+    }
+    update_web(cx, |config| config.backend = backend);
+}
+
+/// Once it is known that the SearXNG just chosen cannot be used: uses the one that is installed
+/// on this computer, or asks whether to download it.
+fn offer_searxng(window: &mut Window, cx: &mut App) {
+    let state = cx.global::<WebSearchState>();
+    let Some(choosing) = &state.choosing else {
+        return;
+    };
+    if choosing.asked || state.config.backend != BackendKind::Searxng {
+        return;
+    }
+    let installed = search_server(cx).read(cx).installed() != Installed::No;
+    if !local_search::is_local(cx) {
+        match local_search::probed(cx) {
+            None => return,
+            Some(Probe::Ready) => return keep_service(cx),
+            Some(_) => {}
+        }
+    }
+    if searxng::catalog::platform().is_some() && installed {
+        keep_service(cx);
+        return local_search::use_local(cx);
+    }
+    if let Some(choosing) = &mut cx.global_mut::<WebSearchState>().choosing {
+        choosing.asked = true;
+    }
+    if searxng::catalog::platform().is_some() {
+        local_search::open_setup(window, cx);
+    } else {
+        local_search::open_address_dialog(window, cx);
+    }
+}
+
+/// The SearXNG just chosen is set up.
+pub(super) fn keep_service(cx: &mut App) {
+    cx.global_mut::<WebSearchState>().choosing = None;
+}
+
+/// The user did not set up the SearXNG they just chose: the service from before searches again.
+pub(super) fn go_back_to_previous_service(cx: &mut App) {
+    let state = cx.global_mut::<WebSearchState>();
+    if let Some(choosing) = state.choosing.take() {
+        let missing = is_missing(cx);
+        update_web(cx, |config| {
+            config.backend = choosing.before;
+            config.searxng.local &= !missing;
+        });
+    }
+}
+
+/// [`go_back_to_previous_service`], also when the page it was chosen on is gone.
+fn download_cancelled(cx: &mut App) {
+    go_back_to_previous_service(cx);
+    if is_missing(cx) {
+        update_web(cx, |config| {
+            config.backend = BackendKind::Duckduckgo;
+            config.searxng.local = false;
+        });
+    }
+}
+
+/// Chats are to search with the SearXNG on this computer, and there is none.
+fn is_missing(cx: &App) -> bool {
+    local_search::is_local(cx) && search_server(cx).read(cx).installed() == Installed::No
+}
+
+/// Checks the SearXNG that is used, now or after a change of the settings: whether the address
+/// answers, or what state the one on this computer is in. That one stops when it is not used.
+fn check_searxng(opened: bool, cx: &mut App) {
+    let config = web_config(cx);
+    let used = config.backend == BackendKind::Searxng;
+    let (local, url) = (config.searxng.local, config.searxng.url.clone());
+    search_server(cx).update(cx, |server, cx| {
+        if opened {
+            server.refresh(cx);
+        }
+        if used && !local {
+            server.probe(&url, opened, cx);
+        }
+        if !(used && local) && matches!(server.running(), Running::Here(_)) {
+            server.stop(cx);
+        }
+    });
 }
 
 fn startup_model(cx: &App) -> String {
@@ -1253,12 +1367,17 @@ fn load_web_search(cx: &mut App) {
         ),
     };
     let dir = error.is_none().then_some(dir);
-    cx.set_global(WebSearchState { dir, config, error });
+    cx.set_global(WebSearchState {
+        dir,
+        config,
+        error,
+        choosing: None,
+    });
 }
 
 /// Changes web search's settings and saves them (unless the file could not be read: then
 /// saving would replace what the user wrote).
-fn update_web(cx: &mut App, f: impl FnOnce(&mut WebConfig)) {
+pub(super) fn update_web(cx: &mut App, f: impl FnOnce(&mut WebConfig)) {
     let state = cx.global_mut::<WebSearchState>();
     let before = state.config.clone();
     f(&mut state.config);
@@ -1332,4 +1451,275 @@ fn write_pi_settings(path: &Path, defaults: &StartupDefaults) -> std::io::Result
         std::fs::set_permissions(&tmp, meta.permissions())?;
     }
     std::fs::rename(tmp, path)
+}
+
+#[cfg(test)]
+mod tests {
+    use deepsearch::config::BackendKind;
+    use gpui_kit::component::Root;
+    use gpui_kit::{AppContext as _, TestAppContext, VisualTestContext};
+
+    use super::{
+        AppConfig, AppSettings, Path, SettingsView, choose_service, download_cancelled,
+        search_server, update_web, web_config,
+    };
+    use crate::ui::dialog::testing as dialog;
+
+    /// The Web search page, with its settings in `dir`.
+    fn open<'a>(dir: &Path, cx: &'a mut TestAppContext) -> &'a mut VisualTestContext {
+        cx.executor().allow_parking();
+        cx.update(|cx| {
+            gpui_kit::component::init(cx);
+            cx.set_reduce_motion(true);
+            let mut config = AppConfig::for_tests("/nonexistent/pi".into());
+            config.deepsearch_dir = dir.to_path_buf();
+            cx.set_global(config);
+            cx.set_global(AppSettings::default());
+            crate::search_server::init(cx);
+            crate::stt::init(cx);
+            crate::naming::init(cx);
+            let hosts = cx.new(|_| crate::hosts::Hosts::for_tests(Vec::new()));
+            cx.set_global(crate::hosts::HostsHandle(hosts));
+        });
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|cx| {
+                let mut view = SettingsView::new(Vec::new(), window, cx);
+                view.start_on_web_search();
+                view
+            });
+            Root::new(view, window, cx)
+        });
+        cx.run_until_parked();
+        cx
+    }
+
+    /// Choosing a search service shows what it needs, and only that, right away; the others
+    /// keep what was entered.
+    #[gpui_kit::test]
+    fn only_the_chosen_search_service_is_shown(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let cx = open(dir.path(), cx);
+        for (backend, shown) in [
+            (BackendKind::Duckduckgo, (false, false)),
+            (BackendKind::Brave, (true, false)),
+            (BackendKind::Tavily, (false, true)),
+            (BackendKind::Searxng, (false, false)),
+            (BackendKind::Brave, (true, false)),
+        ] {
+            cx.update(|_, cx| {
+                update_web(cx, |config| {
+                    config.backend = backend;
+                    config.searxng.url = "http://127.0.0.1:9".into();
+                    config.brave.api_key.get_or_insert_with(|| "key".into());
+                });
+            });
+            cx.run_until_parked();
+            let visible = ["brave-key", "tavily-key"].map(|key| cx.debug_bounds(key).is_some());
+            assert_eq!((visible[0], visible[1]), shown, "{backend:?}");
+        }
+        let key = cx.read(|cx| web_config(cx).brave.api_key.clone());
+        assert_eq!(key.as_deref(), Some("key"));
+    }
+
+    /// The advanced sections are closed until their title is clicked, which stays where it is.
+    #[gpui_kit::test]
+    fn the_advanced_sections_open_and_close(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let cx = open(dir.path(), cx);
+        for (title, inside) in [
+            ("web-search-options", "text-per-page"),
+            ("deep-search-options", "deep-searches-standard"),
+        ] {
+            let place = cx.debug_bounds(title).unwrap();
+            for open in [true, false] {
+                let row = cx.debug_bounds(title).unwrap();
+                cx.simulate_click(row.center(), gpui_kit::Modifiers::default());
+                dialog::draw(cx);
+                assert_eq!(cx.debug_bounds(inside).is_some(), open, "{inside}");
+                assert_eq!(cx.debug_bounds(title).unwrap(), place, "{title}");
+            }
+        }
+    }
+
+    /// A slider saves where it is let go.
+    #[gpui_kit::test]
+    fn a_slider_sets_the_text_per_page(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let cx = open(dir.path(), cx);
+        let title = cx.debug_bounds("web-search-options").unwrap();
+        cx.simulate_click(title.center(), gpui_kit::Modifiers::default());
+        dialog::draw(cx);
+        let chars = |cx: &mut VisualTestContext| cx.read(|cx| web_config(cx).fetch.max_chars);
+        assert_eq!(chars(cx), 12_000);
+        let slider = cx.debug_bounds("text-per-page").unwrap();
+        // The slider's middle: the value is beside it.
+        let at = gpui_kit::point(slider.left() + gpui_kit::px(95.), slider.center().y);
+        cx.simulate_click(at, gpui_kit::Modifiers::default());
+        dialog::draw(cx);
+        let set = chars(cx);
+        assert!((45_000..=55_000).contains(&set), "{set}");
+        let (saved, _) = deepsearch::config::load(dir.path()).unwrap();
+        assert_eq!(saved.fetch.max_chars, set);
+    }
+
+    /// Addresses where a SearXNG answers, and where nothing does.
+    fn addresses() -> (String, String) {
+        use std::io::{Read as _, Write as _};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let running = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for mut stream in listener.incoming().flatten() {
+                let _ = stream.read(&mut [0; 2048]);
+                let body = r#"{"error": "No query"}"#;
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+        let free = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        (running, format!("http://{}", free.local_addr().unwrap()))
+    }
+
+    /// Chooses SearXNG, with `url` as its address, after Brave.
+    fn choose_searxng(url: &str, cx: &mut VisualTestContext) {
+        cx.update(|_, cx| {
+            update_web(cx, |config| {
+                config.backend = BackendKind::Brave;
+                config.searxng.local = false;
+                config.searxng.url = url.into();
+            });
+            choose_service(BackendKind::Searxng, cx);
+        });
+        dialog::draw(cx);
+    }
+
+    fn service(cx: &mut VisualTestContext) -> (BackendKind, bool) {
+        cx.read(|cx| (web_config(cx).backend, web_config(cx).searxng.local))
+    }
+
+    #[gpui_kit::test]
+    fn a_searxng_that_answers_is_used(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let cx = open(dir.path(), cx);
+        let (running, nothing) = addresses();
+        choose_searxng(&running, cx);
+        assert!(!dialog::is_open(cx));
+        assert!(cx.debug_bounds("searxng-on").is_some());
+        assert!(cx.debug_bounds("searxng-menu").is_some());
+        assert_eq!(service(cx), (BackendKind::Searxng, false));
+
+        // Losing it later shows, but does not interrupt.
+        cx.update(|_, cx| update_web(cx, |config| config.searxng.url = nothing));
+        dialog::draw(cx);
+        assert!(!dialog::is_open(cx));
+        assert!(cx.debug_bounds("searxng-on").is_none());
+        assert!(cx.debug_bounds("searxng-off").is_some());
+    }
+
+    /// Without one the user is asked whether to download it, and Cancel and Esc go back to the
+    /// service from before.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[gpui_kit::test]
+    fn a_missing_searxng_is_offered(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let cx = open(dir.path(), cx);
+        let (running, nothing) = addresses();
+        for cancel in [true, false] {
+            choose_searxng(&nothing, cx);
+            assert!(dialog::is_open(cx));
+            assert_eq!(service(cx), (BackendKind::Searxng, false));
+            if cancel {
+                dialog::click("searxng-setup-cancel", cx);
+            } else {
+                dialog::press("escape", cx);
+            }
+            assert!(!dialog::is_open(cx));
+            assert_eq!(service(cx), (BackendKind::Brave, false));
+        }
+
+        // Choosing it again asks again.
+        cx.update(|_, cx| update_web(cx, |config| config.backend = BackendKind::Searxng));
+        dialog::draw(cx);
+        assert!(!dialog::is_open(cx));
+        cx.update(|_, cx| choose_service(BackendKind::Searxng, cx));
+        dialog::draw(cx);
+        assert!(dialog::is_open(cx));
+        dialog::click("searxng-setup-cancel", cx);
+        assert_eq!(service(cx), (BackendKind::Searxng, false));
+
+        // Another address instead.
+        choose_searxng(&nothing, cx);
+        dialog::click("searxng-setup-address", cx);
+        assert!(dialog::is_open(cx));
+        dialog::click("searxng-address-cancel", cx);
+        assert_eq!(service(cx), (BackendKind::Brave, false));
+        choose_searxng(&nothing, cx);
+        dialog::click("searxng-setup-address", cx);
+        cx.simulate_keystrokes("secondary-a backspace");
+        // Without "http://", which is added.
+        cx.simulate_input(running.trim_start_matches("http://"));
+        dialog::press("enter", cx);
+        assert!(!dialog::is_open(cx));
+        assert_eq!(service(cx), (BackendKind::Searxng, false));
+        assert_eq!(cx.read(|cx| web_config(cx).searxng.url.clone()), running);
+        assert!(cx.debug_bounds("searxng-on").is_some());
+    }
+
+    /// The one that was downloaded before is used without asking; a cancelled download leaves
+    /// nothing chosen that is not there.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[gpui_kit::test]
+    fn an_installed_searxng_is_used(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let cx = open(dir.path(), cx);
+        let (_, nothing) = addresses();
+        cx.update(|_, cx| {
+            update_web(cx, |config| {
+                config.backend = BackendKind::Searxng;
+                config.searxng.local = true;
+            });
+            download_cancelled(cx);
+        });
+        assert_eq!(service(cx), (BackendKind::Duckduckgo, false));
+
+        let app = dir.path().join("searxng/app");
+        std::fs::create_dir_all(app.join("python/bin")).unwrap();
+        std::fs::write(app.join("python/bin/python3"), "").unwrap();
+        std::fs::write(app.join(".installed"), "older").unwrap();
+        cx.update(|_, cx| {
+            search_server(cx).update(cx, crate::search_server::SearchServer::refresh);
+        });
+        choose_searxng(&nothing, cx);
+        assert!(!dialog::is_open(cx));
+        assert_eq!(service(cx), (BackendKind::Searxng, true));
+        // This one cannot start: the light is red, and the row says why.
+        assert!(cx.debug_bounds("searxng-off").is_some());
+        cx.update(|_, cx| {
+            let server = search_server(cx).read(cx);
+            assert!(server.error().unwrap().contains("could not start"));
+        });
+
+        // "⋮" has Start, Update, Change address… and Remove….
+        let choose = |downs: usize, cx: &mut VisualTestContext| {
+            let menu = cx.debug_bounds("searxng-menu").unwrap();
+            cx.simulate_click(menu.center(), gpui_kit::Modifiers::default());
+            dialog::draw(cx);
+            cx.simulate_keystrokes(&vec!["down"; downs].join(" "));
+            cx.simulate_keystrokes("enter");
+            dialog::draw(cx);
+        };
+        choose(3, cx);
+        assert!(dialog::is_open(cx));
+        dialog::click("searxng-address-cancel", cx);
+        assert_eq!(service(cx), (BackendKind::Searxng, true));
+        choose(4, cx);
+        assert!(dialog::is_open(cx));
+        dialog::click("searxng-remove", cx);
+        assert!(!dialog::is_open(cx));
+        assert_eq!(service(cx), (BackendKind::Duckduckgo, false));
+        assert!(!dir.path().join("searxng").exists());
+    }
 }

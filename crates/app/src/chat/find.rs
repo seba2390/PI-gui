@@ -19,7 +19,7 @@ use gpui_kit::component::{ActiveTheme as _, Disableable as _, IconName, Sizable 
 use gpui_kit::*;
 use transcript::explore::RowRole;
 use transcript::search::{self, Field};
-use transcript::{BlockKind, ItemKind};
+use transcript::{BlockKind, ItemKind, Standing};
 
 use super::{BlockKey, ChatView};
 use crate::theme::palette;
@@ -218,6 +218,12 @@ impl ChatView {
             let mut plain = search::plain_fields(item);
             let markdown_blocks: Vec<usize> = match &item.kind {
                 ItemKind::User(_) => vec![0],
+                // Not what is folded away: drafts of a report.
+                ItemKind::Assistant(assistant)
+                    if matches!(assistant.standing, Standing::Held | Standing::Draft) =>
+                {
+                    Vec::new()
+                }
                 ItemKind::Assistant(assistant) => assistant
                     .blocks
                     .iter()

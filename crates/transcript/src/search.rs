@@ -230,6 +230,7 @@ mod tests {
                 model: String::new(),
                 stop_reason: pi_rpc::protocol::StopReason::Stop,
                 error: None,
+                standing: crate::model::Standing::Answer,
             }),
         };
         let fields: Vec<(usize, Field, String)> = plain_fields(&item)

@@ -3,9 +3,11 @@
 
 use std::collections::{HashMap, HashSet};
 
+use serde::{Deserialize, Serialize};
+
 use crate::extract::{Block, BlockKind};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Passage {
     /// The nearest heading above the passage.
     pub heading: Option<String>,
