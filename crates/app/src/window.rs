@@ -494,6 +494,12 @@ impl MainWindow {
                 "manage-hosts" => self.open_manage_hosts(window, cx),
                 "skills" => self.toggle_skills(window, cx),
                 "settings" => self.open_settings(&OpenSettings, window, cx),
+                "settings-models" => {
+                    self.open_settings(&OpenSettings, window, cx);
+                    if let Some(settings) = self.settings.as_ref().map(|s| s.0.clone()) {
+                        settings.update(cx, |settings, _| settings.start_on_models());
+                    }
+                }
                 "settings-web" => {
                     self.open_settings(&OpenSettings, window, cx);
                     if let Some(settings) = self.settings.as_ref().map(|s| s.0.clone()) {
@@ -1850,15 +1856,19 @@ impl MainWindow {
         if self.skills_open {
             self.close_skills(cx);
         }
-        let models = self
-            .chat
-            .read(cx)
-            .session()
-            .read(cx)
-            .models()
-            .iter()
-            .map(|model| (model.provider.clone(), model.id.clone(), model.name.clone()))
-            .collect();
+        // The page is about this computer's models.
+        let models = if self.models_host(cx).is_none() {
+            self.chat
+                .read(cx)
+                .session()
+                .read(cx)
+                .models()
+                .iter()
+                .map(|model| (model.provider.clone(), model.id.clone(), model.name.clone()))
+                .collect()
+        } else {
+            Vec::new()
+        };
         let view = cx.new(|cx| SettingsView::new(models, window, cx));
         let subscription = cx.subscribe_in(&view, window, Self::on_settings_event);
         self.settings = Some((view, subscription));

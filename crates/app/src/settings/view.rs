@@ -67,8 +67,14 @@ impl Global for PiStartupState {}
 pub struct SettingsView {
     brave_key: Entity<InputState>,
     tavily_key: Entity<InputState>,
-    /// `(provider/id, label)` of the models the visible session knows, for the startup model.
+    /// `(provider/id, label)` of the models to choose the startup model from.
     models: Vec<(SharedString, SharedString)>,
+    /// The models (`provider`, `id`, `name`) of the visible session, when it uses this
+    /// computer's.
+    session_models: Vec<(String, String, String)>,
+    /// The models (`provider`, `id`) pi lists on this computer, once it has.
+    listed_models: Option<Vec<(String, String)>>,
+    _list_models: Task<()>,
     /// The providers in models.json on this computer.
     pub(super) connected: super::models::Connected,
     /// `pi --version` of the configured `pi`, once known.
@@ -94,9 +100,10 @@ pub struct SettingsView {
 impl EventEmitter<SettingsEvent> for SettingsView {}
 
 impl SettingsView {
-    /// `models` are the visible session's models (`provider`, `id`, `name`).
+    /// `session_models` are the visible session's models (`provider`, `id`, `name`), when it
+    /// uses this computer's.
     pub fn new(
-        models: Vec<(String, String, String)>,
+        session_models: Vec<(String, String, String)>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -161,23 +168,15 @@ impl SettingsView {
             }),
         ];
         check_searxng(true, cx);
-        let connected = super::models::Connected::load(models.iter().map(|model| &*model.0), cx);
-        let models = models
-            .into_iter()
-            .map(|(provider, id, name)| {
-                let value: SharedString = format!("{provider}/{id}").into();
-                let label: SharedString = if name.is_empty() || name == id {
-                    value.clone()
-                } else {
-                    format!("{name} ({provider})").into()
-                };
-                (value, label)
-            })
-            .collect();
+        let connected =
+            super::models::Connected::load(session_models.iter().map(|model| &*model.0), cx);
         let mut this = Self {
             brave_key,
             tavily_key,
-            models,
+            models: Vec::new(),
+            session_models,
+            listed_models: None,
+            _list_models: Task::ready(()),
             connected,
             pi_version: None,
             advanced: web_advanced::Advanced::default(),
@@ -190,13 +189,72 @@ impl SettingsView {
             _subscriptions: subscriptions,
         };
         this.probe_pi_version(cx);
+        this.update_models();
+        this.list_models(cx);
         this
     }
 
     /// models.json was saved.
     pub fn models_changed(&mut self, cx: &mut Context<Self>) {
         self.connected.reload(cx);
+        self.listed_models = None;
+        self.update_models();
+        self.list_models(cx);
         cx.notify();
+    }
+
+    /// Sets what the startup model is chosen from.
+    fn update_models(&mut self) {
+        self.models = pi_config::available::choices(
+            self.listed_models.as_deref(),
+            self.connected.providers(),
+            &self.session_models,
+        )
+        .into_iter()
+        .map(|choice| (choice.value.into(), choice.label.into()))
+        .collect();
+    }
+
+    /// Asks the configured `pi` in the background which models it has on this computer: there
+    /// may be no session, or one that uses the models of its SSH host.
+    fn list_models(&mut self, cx: &mut Context<Self>) {
+        let (program, env) = {
+            let config = cx.global::<AppConfig>();
+            (config.pi_program.clone(), config.child_env.clone())
+        };
+        self._list_models = cx.spawn(async move |this, cx| {
+            let listed = cx
+                .background_executor()
+                .spawn(async move {
+                    let mut command = std::process::Command::new(&program);
+                    command
+                        .arg("--list-models")
+                        .envs(env.vars().iter().cloned())
+                        .stdin(std::process::Stdio::null());
+                    // No project's settings.
+                    if let Some(dir) = pi_sessions::agent_dir().filter(|dir| dir.is_dir()) {
+                        command.current_dir(dir);
+                    }
+                    let output = command.output().ok()?;
+                    let text = String::from_utf8_lossy(&output.stdout);
+                    output
+                        .status
+                        .success()
+                        .then(|| pi_config::available::parse_list(&text))?
+                })
+                .await;
+            let Some(listed) = listed else {
+                log::warn!("pi --list-models did not list the models");
+                return;
+            };
+            let _ = this.update(cx, |this, cx| {
+                this.connected
+                    .set_available(listed.iter().map(|model| &*model.0));
+                this.listed_models = Some(listed);
+                this.update_models();
+                cx.notify();
+            });
+        });
     }
 
     /// Asks the configured `pi` for its version in the background.
@@ -450,7 +508,7 @@ impl SettingsView {
         let mut model_options: Vec<(SharedString, SharedString)> =
             vec![("".into(), "Let pi choose".into())];
         model_options.extend(self.models.iter().cloned());
-        // A model set earlier that the visible session does not list still shows.
+        // A model set earlier that pi does not have now still shows.
         let current = startup_model(cx);
         if !current.is_empty() && !model_options.iter().any(|(value, _)| *value == current) {
             model_options.push((current.clone().into(), current.into()));
@@ -464,7 +522,7 @@ impl SettingsView {
                 )
                 .collect();
         let models_hint = if self.models.is_empty() {
-            "Open a session to list its models here."
+            "Connect models below to choose one."
         } else {
             "The model new sessions start with."
         };
@@ -496,7 +554,7 @@ impl SettingsView {
             )
             .group(
                 SettingGroup::new()
-                    .title("Startup model (this computer)")
+                    .title("Startup model")
                     .description(
                         "Saved in pi's settings.json, like pi's /settings in the terminal.",
                     )
@@ -752,6 +810,11 @@ impl SettingsView {
     /// Opens on the Conversation names page (before the first render).
     pub fn start_on_names(&mut self) {
         self.start_page = 5;
+    }
+
+    /// Opens on the pi & models page (before the first render).
+    pub fn start_on_models(&mut self) {
+        self.start_page = 1;
     }
 
     /// Opens on the Document parsing page (before the first render).
@@ -1453,7 +1516,7 @@ mod tests {
     use gpui_kit::{AppContext as _, TestAppContext, VisualTestContext};
 
     use super::{
-        AppConfig, AppSettings, Path, SettingsView, choose_service, update_web, web_config,
+        AppConfig, AppSettings, Path, PathBuf, SettingsView, choose_service, update_web, web_config,
     };
     // Only for the tests of the SearXNG that can be downloaded.
     #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -1462,11 +1525,19 @@ mod tests {
 
     /// The Web search page, with its settings in `dir`.
     fn open<'a>(dir: &Path, cx: &'a mut TestAppContext) -> &'a mut VisualTestContext {
+        open_with("/nonexistent/pi".into(), dir, cx)
+    }
+
+    fn open_with<'a>(
+        pi: PathBuf,
+        dir: &Path,
+        cx: &'a mut TestAppContext,
+    ) -> &'a mut VisualTestContext {
         cx.executor().allow_parking();
         cx.update(|cx| {
             gpui_kit::component::init(cx);
             cx.set_reduce_motion(true);
-            let mut config = AppConfig::for_tests("/nonexistent/pi".into());
+            let mut config = AppConfig::for_tests(pi);
             config.deepsearch_dir = dir.to_path_buf();
             cx.set_global(config);
             cx.set_global(AppSettings::default());
@@ -1486,6 +1557,33 @@ mod tests {
         });
         cx.run_until_parked();
         cx
+    }
+
+    /// Every model pi has can be the startup model, also when there is no session.
+    #[cfg(unix)]
+    #[gpui_kit::test]
+    fn the_startup_models_do_not_need_a_session(cx: &mut TestAppContext) {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let pi = dir.path().join("pi");
+        std::fs::write(
+            &pi,
+            "#!/bin/sh\n[ \"$1\" = --list-models ] || exit 1\n\
+             echo 'provider  model    context  max-out  thinking  images'\n\
+             echo 'test-box  model-a  262.1K   32.8K    yes       yes   '\n\
+             echo 'test-box  model-b  1.0M     65.5K    yes       yes   '\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&pi, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let cx = open_with(pi, dir.path(), cx);
+        let values: Vec<String> = cx.update(|window, cx| {
+            let root = window.root::<Root>().flatten().unwrap();
+            let view = root.read(cx).view().clone();
+            let view = view.downcast::<SettingsView>().unwrap();
+            let models = &view.read(cx).models;
+            models.iter().map(|(value, _)| value.to_string()).collect()
+        });
+        assert_eq!(values, ["test-box/model-a", "test-box/model-b"]);
     }
 
     /// Choosing a search service shows what it needs, and only that, right away; the others
