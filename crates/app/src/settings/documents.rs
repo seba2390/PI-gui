@@ -184,7 +184,8 @@ fn row(parser: Parser, state: State, busy: bool, cx: &App) -> Div {
         .disabled(busy && matches!(action, Action::Download | Action::Update))
         .on_click(move |_, window, cx| action.run(parser, window, cx));
         match action {
-            Action::Use | Action::Download | Action::Update => button.outline(),
+            Action::Download => button.icon(AppIcon::Download).outline(),
+            Action::Use | Action::Update => button.outline(),
             Action::Cancel | Action::Remove => button.ghost(),
         }
     });

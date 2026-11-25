@@ -6,6 +6,10 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The buttons that download models and document parsers have the download symbol.
+
 ## [0.5.0] - 2026-11-25
 
 ### Added

@@ -12,6 +12,7 @@ use super::catalog::{self, DEFAULT_MODEL, MODELS, Model};
 use super::models::models;
 use crate::settings::AppSettings;
 use crate::theme::palette;
+use crate::ui::AppIcon;
 use crate::ui::dialog::open_form_dialog;
 
 /// Asks whether to download a model, showing each one's size, speed and languages.
@@ -70,6 +71,7 @@ impl Render for DownloadDialog {
                     )
                     .child(
                         Button::new("speech-download-start")
+                            .icon(AppIcon::Download)
                             .label(format!("Download {}", selected.size_label()))
                             .primary()
                             .on_click(move |_, window, cx| {
@@ -304,6 +306,7 @@ pub fn settings_model_rows(cx: &App) -> AnyElement {
                     .into_any_element()
             } else {
                 Button::new(SharedString::from(format!("speech-get-{}", model.id)))
+                    .icon(AppIcon::Download)
                     .label(format!("Download {}", model.size_label()))
                     .outline()
                     .xsmall()
