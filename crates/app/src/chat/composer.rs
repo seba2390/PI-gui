@@ -3222,7 +3222,7 @@ mod draft_tests {
     use std::path::{Path, PathBuf};
 
     use gpui_kit::component::{Root, WindowExt as _};
-    use gpui_kit::{AppContext as _, Entity, Modifiers, TestAppContext, VisualTestContext, Window};
+    use gpui_kit::{AppContext as _, Entity, TestAppContext, VisualTestContext, Window};
     use pi_rpc::protocol::ImageContent;
     use pi_sessions::Mode;
 
@@ -3579,7 +3579,7 @@ mod draft_tests {
             });
             assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
             let picture = cx.debug_bounds("attachment-picture").unwrap();
-            cx.simulate_click(picture.center(), Modifiers::none());
+            cx.simulate_click(picture.center(), gpui_kit::Modifiers::none());
             assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
         }
     }

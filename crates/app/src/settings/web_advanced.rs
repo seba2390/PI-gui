@@ -413,7 +413,8 @@ impl Number {
         self
     }
 
-    #[cfg(test)]
+    /// Only the tests of the documents settings use it, and those need macOS or Linux.
+    #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
     pub(super) fn choose(&self, value: u32, cx: &mut App) {
         (self.set)(value, cx);
     }
