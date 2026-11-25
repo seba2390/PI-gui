@@ -90,6 +90,8 @@ type Run = {
   forced: boolean;
   // Calls in a row that found nothing new.
   barren: number;
+  // Searches that failed: in all, in a row, and why.
+  failed: { total: number; row: number; why: string };
   // The length of each draft.
   drafts: number[];
   // What the check of the draft before this one said.
@@ -294,6 +296,7 @@ function newRun(effort: Effort, limits: DeepBudget, check: CheckLimits, question
     force: true,
     forced: false,
     barren: 0,
+    failed: { total: 0, row: 0, why: "" },
     drafts: [],
     note: "",
     done: false,
@@ -321,7 +324,11 @@ function floor(run: Run) {
   };
 }
 
+// The search service does not answer any more: there is no point in asking for more research.
+const searchIsDown = (run: Run) => run.failed.row > 3;
+
 function isShort(run: Run): boolean {
+  if (searchIsDown(run)) return false;
   const least = floor(run);
   return run.queries.size < least.searches || run.pages.size < least.pages || run.sites.size < least.sites;
 }
@@ -516,6 +523,13 @@ export default function (pi: any) {
     if (!run || !TOOLS.includes(event.toolName)) return;
     const details = { ...(event.details ?? {}), deep: run.effort };
     if (event.isError) run.barren += 1;
+    if (event.toolName === "web_search") {
+      run.failed.row = event.isError ? run.failed.row + 1 : 0;
+      if (event.isError) {
+        run.failed.total += 1;
+        run.failed.why = textOf(event.content).trim().slice(0, 200);
+      }
+    }
     progress(ctx, `Researching: ${done(run)}`);
     if (event.isError || !run.questions) return { details };
     const least = floor(run);
@@ -667,9 +681,11 @@ Answer with only a JSON array of strings, e.g. ["What does X cost in shops today
   // The answer is what the model wrote last, as it is.
   const unchecked = (run: Run, why: string, back = 0) => {
     run.done = true;
-    const about = { ...research(run), notes: [`Not checked: ${why}`] };
+    const about = { ...research(run), notes: [`Not checked: ${why}`, ...failedSearches(run)] };
     return message(`This report was not checked: ${why}`, { stage: "final", checked: false, back, about }, true);
   };
+
+  const failedSearches = (run: Run) => (run.failed.total ? [`${plural(run.failed.total, "search")} failed: ${run.failed.why}`] : []);
 
   const research = (run: Run) => ({
     effort: run.effort,
@@ -835,7 +851,7 @@ Answer with only a JSON array of strings, e.g. ["What does X cost in shops today
           links: { total: links.length, broken: broken.length, unread: unread.length },
           ...(judges ? { claims: counts } : {}),
           problems,
-          notes: links.some((link) => link.state === "read") ? [] : ["It cites none of the pages that were read."],
+          notes: failedSearches(run),
         },
       };
     } finally {
@@ -871,7 +887,7 @@ Answer with only a JSON array of strings, e.g. ["What does X cost in shops today
       const found = run.pages.size > run.before.pages || run.seen.size > run.before.seen;
       run.idle = found ? 0 : run.idle + (called ? 2 : 1);
     }
-    if (!searchesLeft || !pagesLeft || run.idle > 1) {
+    if (!searchesLeft || !pagesLeft || run.idle > 1 || searchIsDown(run)) {
       run.covered = true;
       return;
     }
@@ -959,7 +975,7 @@ Answer with only a JSON array of strings, e.g. ["What does X cost in shops today
       }
 
       const { problems, step, summary, about } = await checkReport(current, report, ctx, signal);
-      const uncited = about.notes.length > 0;
+      const uncited = about.links.total <= about.links.broken + about.links.unread;
       if ((problems.length || uncited) && current.revisions < current.limits.max_revisions) {
         current.revisions += 1;
         current.note = `${summary}.`;
@@ -982,6 +998,7 @@ Answer with only a JSON array of strings, e.g. ["What does X cost in shops today
       if (ctx.model?.reasoning && current.limits.max_claims > 12 && (level === "off" || level === "minimal")) {
         about.notes.push(`Thinking was ${level}. With more of it, deep search usually finds and checks more.`);
       }
+      if (uncited) about.notes.push("It cites none of the pages that were read.");
       const left = problems.slice(0, 5).map((problem) => `- ${brief(problem)}`);
       const more = problems.length - left.length;
       const note = [

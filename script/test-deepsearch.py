@@ -57,6 +57,8 @@ class Case:
     # Stops the run when a status with this text shows up.
     stop_at = None
     verdict = "supported"
+    # Whether the search service answers.
+    searches = True
 
     def __init__(self):
         self.calls = 0
@@ -267,6 +269,22 @@ class Rambles(Case):
         assert "Writing it again" not in result.steps, result.steps
 
 
+class NoSearch(Case):
+    """The search service refuses: it is said, and the model is not sent back for what cannot be."""
+
+    searches = False
+
+    def reply(self, n, body):
+        if n < 4:
+            return self.tools(self.search(f"try {n}"))
+        return self.tools(self.fetch(0)) if n == 4 else self.report([0])
+
+    def expect(self, result):
+        assert result.finals == [True], result.finals
+        assert "Continuing research" not in result.steps, result.steps
+        assert result.about["notes"][0].startswith("4 searches failed"), result.about["notes"]
+
+
 class NoResearch(Case):
     """A reply without any research is only that."""
 
@@ -292,7 +310,7 @@ class Gone(Case):
 CASES = {
     "stops": Stops, "no-tool-choice": NoToolChoice, "refuses": Refuses, "revise": Revise,
     "wrong": Wrong, "stub": Stub, "silent": Silent, "garbled": Garbled,
-    "esc-in-check": EscInCheck, "esc-in-research": EscInResearch, "rambles": Rambles,
+    "esc-in-check": EscInCheck, "esc-in-research": EscInResearch, "rambles": Rambles, "no-search": NoSearch,
     "no-research": NoResearch, "gone": Gone,
 }
 
@@ -314,6 +332,8 @@ def handler(case, stopping):
 
         def do_GET(self):
             path = urllib.parse.urlparse(self.path).path
+            if path == "/search" and not case.searches:
+                return self.send(429, "text/plain", "too many")
             if path == "/search":
                 results = [
                     {"url": url, "title": f"Shop {n}", "content": "What it costs"}

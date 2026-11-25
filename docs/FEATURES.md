@@ -48,7 +48,7 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
       is only one), and for each of them the effort level asks for a number of searches and pages,
       and for different sites. A model that wants to report before that, or leaves a sub-question
       open, is sent back to its research with what is missing: until it is done, the budget is used
-      up, nothing new turns up, or it was sent back a set number of times (once in Light, up to 8
+      up, nothing new turns up, the search service no longer answers, or it was sent back a set number of times (once in Light, up to 8
       times in Max). With APIs like OpenAI's it has to call a tool while its research is short, so
       it writes no reports that would only be sent back. Settings → Web search → Advanced deep
       search settings has all of these numbers.
