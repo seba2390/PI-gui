@@ -20,7 +20,7 @@ use pi_rpc::protocol::{
 };
 use pi_rpc::{ClientEvent, PiClient, PiProcess, RpcError, SpawnOptions};
 use pi_sessions::prompt;
-use transcript::{BashStatus, NoticeKind, RunStatus, Transcript};
+use transcript::{BashStatus, InFlight, NoticeKind, RunStatus, Transcript};
 
 use super::queued::QueuedPrompts;
 use crate::config::{AppConfig, ChildEnv};
@@ -189,6 +189,8 @@ pub struct PiSession {
     client: Option<PiClient>,
     lifecycle: Lifecycle,
     transcript: Transcript,
+    /// The run's reply and tools that pi has not saved yet, for a side chat.
+    in_flight: InFlight,
     state: Option<SessionState>,
     models: Vec<Model>,
     /// All levels pi offers for the model; see [`Self::thinking_levels`].
@@ -222,6 +224,9 @@ pub struct PiSession {
     reported_busy: bool,
     /// `(provider, model id)` to switch to once pi has started (after adding a model).
     pending_model: Option<(String, String)>,
+    /// The model and thinking level of the conversation a side chat came from, set once pi
+    /// has started where they differ from what pi restored.
+    inherited: Option<Inherited>,
     _event_pump: Task<()>,
     /// The resumed session's history as read from its file, shown until pi answers.
     preview: Preview,
@@ -232,6 +237,23 @@ pub struct PiSession {
     /// Starts pi once the login shell's environment is known and, on a host, its settings for
     /// this computer's models are written.
     _start_task: Task<()>,
+}
+
+/// The model (`provider`, `id`) and thinking level a side chat takes over.
+type Inherited = (Option<(String, String)>, Option<ThinkingLevel>);
+
+/// A side chat's file, written and ready to open ([`PiSession::side_chat`]).
+#[derive(Debug, Clone)]
+pub struct SideChatStart {
+    pub cwd: PathBuf,
+    /// The new session file (on `host` for a remote session).
+    pub file: PathBuf,
+    pub host: Option<HostId>,
+    /// The original's model (`provider`, `id`) and thinking level, to take over.
+    pub model: Option<(String, String)>,
+    pub thinking_level: Option<ThinkingLevel>,
+    /// The prompts it took over (shown folded).
+    pub inherited_prompts: usize,
 }
 
 /// Automatic naming looks at the first prompt only.
@@ -299,6 +321,7 @@ impl PiSession {
             client: None,
             lifecycle: Lifecycle::Starting,
             transcript: Transcript::new(),
+            in_flight: InFlight::default(),
             state: None,
             models: Vec::new(),
             thinking_levels: Vec::new(),
@@ -315,6 +338,7 @@ impl PiSession {
             compaction: Compaction::default(),
             reported_busy: false,
             pending_model: None,
+            inherited: None,
             _event_pump: Task::ready(()),
             preview: Preview::None,
             _preview_task: Task::ready(()),
@@ -424,6 +448,7 @@ impl PiSession {
             client: None,
             lifecycle: Lifecycle::Idle,
             transcript: Transcript::new(),
+            in_flight: InFlight::default(),
             state: None,
             models: Vec::new(),
             thinking_levels: Vec::new(),
@@ -440,6 +465,7 @@ impl PiSession {
             compaction: Compaction::default(),
             reported_busy: false,
             pending_model: None,
+            inherited: None,
             _event_pump: Task::ready(()),
             preview: Preview::None,
             _preview_task: Task::ready(()),
@@ -1464,6 +1490,134 @@ impl PiSession {
         .detach();
     }
 
+    /// Writes the file of a side chat of this conversation: everything it holds right now,
+    /// also what a run that is still going has not saved yet (see
+    /// [`pi_sessions::side_chat`]). This conversation goes on undisturbed.
+    pub fn side_chat(&self, cx: &mut Context<Self>) -> Task<Result<SideChatStart, String>> {
+        if self.is_empty() && self.in_flight.is_empty() {
+            return Task::ready(Err(
+                "There is nothing in this conversation to take into a side chat yet.".to_owned(),
+            ));
+        }
+        let Some(parent) = self.session_file() else {
+            return Task::ready(Err(
+                "This conversation has no session file to start a side chat from.".to_owned(),
+            ));
+        };
+        let Some(place) = crate::pi_place::PiPlace::for_host(self.host.as_ref(), cx) else {
+            return Task::ready(Err(
+                "The side chat cannot be written until the connection is ready.".to_owned(),
+            ));
+        };
+        let state = self.state.as_ref();
+        let model = state.and_then(|state| state.model.as_ref());
+        let now = std::time::SystemTime::now();
+        let now_ms = now
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .and_then(|since| i64::try_from(since.as_millis()).ok())
+            .unwrap_or_default();
+        // The moment that counts: what was on the screen when it was asked for.
+        let tail = self
+            .in_flight
+            .messages(model.map(|model| model.api.as_str()), now_ms);
+        let start = SideChatStart {
+            cwd: self.cwd.clone(),
+            file: PathBuf::new(),
+            host: self.host.clone(),
+            model: model.map(|model| (model.provider.clone(), model.id.clone())),
+            thinking_level: state.map(|state| state.thinking_level),
+            inherited_prompts: 0,
+        };
+        let client = self.client.clone();
+        cx.background_executor().spawn(async move {
+            let parent_text = parent.to_string_lossy().into_owned();
+            let text = place.read(&parent_text)?;
+            let messages;
+            let source = match &text {
+                Some(text) => pi_sessions::side_chat::Source::File(text),
+                // pi writes the file with the first reply; until then it has the messages.
+                None => {
+                    let client = client.ok_or("pi is not running in this conversation.")?;
+                    messages = client
+                        .get_messages_raw()
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    pi_sessions::side_chat::Source::Messages(&messages)
+                }
+            };
+            let file = pi_sessions::side_chat::build(source, &parent, &start.cwd, &tail, now)?;
+            let path = pi_sessions::side_chat::path_beside(&parent, &file.file_name);
+            place.write(&path.to_string_lossy(), &file.text, false)?;
+            Ok(SideChatStart {
+                file: path,
+                inherited_prompts: file.prompts,
+                ..start
+            })
+        })
+    }
+
+    /// Takes over the model and thinking level of the conversation this side chat came from,
+    /// once pi has started (pi restores them from the file; this covers what it cannot).
+    pub fn inherit(
+        &mut self,
+        model: Option<(String, String)>,
+        thinking_level: Option<ThinkingLevel>,
+        cx: &mut Context<Self>,
+    ) {
+        self.inherited = Some((model, thinking_level));
+        if self.lifecycle == Lifecycle::Ready {
+            self.apply_inherited(cx);
+        }
+    }
+
+    fn apply_inherited(&mut self, cx: &mut Context<Self>) {
+        let (Some((model, level)), Some(client)) = (self.inherited.take(), self.client.clone())
+        else {
+            return;
+        };
+        let current = self.state.as_ref().and_then(|state| state.model.as_ref());
+        let model = model
+            .filter(|(provider, id)| {
+                current.is_none_or(|current| current.provider != *provider || current.id != *id)
+            })
+            .and_then(|(provider, id)| {
+                self.models
+                    .iter()
+                    .any(|model| model.provider == provider && model.id == id)
+                    .then_some((provider, id))
+            });
+        let level = level.filter(|level| self.thinking_level() != Some(*level));
+        if model.is_none() && level.is_none() {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            if let Some((provider, id)) = model
+                && let Err(error) = client.set_model(provider, id).await
+            {
+                log::warn!("side chat: could not take over the model: {error}");
+            }
+            if let Some(level) = level
+                && let Err(error) = client.set_thinking_level(level).await
+            {
+                log::warn!("side chat: could not take over the thinking level: {error}");
+            }
+            let levels = client.get_available_thinking_levels().await;
+            let state = client.get_state().await;
+            let _ = this.update(cx, |this, cx| {
+                if let Ok(levels) = levels {
+                    this.thinking_levels = levels;
+                }
+                if let Ok(state) = state {
+                    this.state = Some(state);
+                }
+                cx.emit(SessionEvent::MetaChanged);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// Exports the conversation as HTML (to `path`, or next to the session) and opens it.
     pub fn export_html(&mut self, path: Option<String>, cx: &mut Context<Self>) {
         let Some(client) = self.client.clone() else {
@@ -1740,6 +1894,7 @@ impl PiSession {
                 this.report_busy(cx);
                 if this.lifecycle == Lifecycle::Ready {
                     this.apply_pending_model(cx);
+                    this.apply_inherited(cx);
                 }
                 // A replaced transcript restarts item ids: rebuild every row.
                 cx.emit(if replaced {
@@ -1804,6 +1959,7 @@ impl PiSession {
         match event {
             ClientEvent::Event(event) => {
                 self.transcript.apply(&event, Instant::now());
+                self.in_flight.apply(&event);
                 match *event {
                     pi_rpc::protocol::Event::AgentStart => {
                         self.runs_started += 1;
@@ -1850,6 +2006,7 @@ impl PiSession {
             ClientEvent::Disconnected => {
                 let message = self.exit_message(&RpcError::Disconnected);
                 self.transcript.force_settle(Instant::now());
+                self.in_flight = InFlight::default();
                 if self.lifecycle == Lifecycle::Ready {
                     self.transcript
                         .push_notice(NoticeKind::Error, message.clone());
@@ -2857,7 +3014,7 @@ mod tests {
         assert_eq!(super::about(&file), "(Attached: paper.pdf)");
     }
 
-    /// The "Add model" flow against real pi (`pi` on PATH): pi starts without the model, the
+    /// Adding a model, against real pi (`pi` on PATH): pi starts without the model, the
     /// model is added to models.json the way the dialog does it, pi is restarted (as the
     /// window does after saving), and the new model gets selected.
     /// `cargo test -p pistachio -- --ignored added_model_is_loaded_and_selected`
@@ -2892,8 +3049,7 @@ mod tests {
         }));
 
         let mut file = pi_config::ModelsFile::parse("").unwrap();
-        let provider = pi_config::NewProvider {
-            id: "pistachio-test".into(),
+        let provider = pi_config::ProviderSpec {
             name: "Pistachio test".into(),
             base_url: "http://127.0.0.1:9/v1".into(),
             api: "openai-completions".into(),
@@ -2905,8 +3061,8 @@ mod tests {
             context_window: Some(32_000),
             ..pi_config::ModelSpec::default()
         };
-        file.add_model("pistachio-test", Some(&provider), &model)
-            .unwrap();
+        file.add_provider("pistachio-test", &provider).unwrap();
+        file.set_model("pistachio-test", &model).unwrap();
         std::fs::write(agent.path().join("models.json"), file.to_text()).unwrap();
         drop(before);
 

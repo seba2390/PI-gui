@@ -35,4 +35,18 @@ jobs:
             git push origin "refs/tags/$tag"
           fi
           # A tag pushed with the workflow's token starts no workflow by itself.
-          gh workflow run release.yml --ref "$tag"
+          # GitHub sometimes answers with a server error, so this tries again for a few minutes. The
+          # answer can also get lost after the release started: it must not start twice, so each
+          # try is only made once it is known that none has.
+          since="$(date -u -d '1 minute ago' +%FT%TZ)"
+          for wait in 15 30 60 90 120 1; do
+            started="$(gh run list --workflow release.yml --branch "$tag" --created ">=$since" --json databaseId --jq length || true)"
+            if [[ "$started" == 0 ]]; then
+              if gh workflow run release.yml --ref "$tag"; then exit 0; fi
+            elif [[ -n "$started" ]]; then
+              exit 0
+            fi
+            sleep "$wait"
+          done
+          echo "Could not start the release: run the Release workflow on $tag by hand" >&2
+          exit 1

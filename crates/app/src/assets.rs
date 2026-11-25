@@ -39,6 +39,7 @@ static EMBEDDED: &[(&str, &[u8])] = embedded![
     "icons/database.svg",
     "icons/file-text.svg",
     "icons/flask-conical.svg",
+    "icons/key.svg",
     "icons/library.svg",
     "icons/palette.svg",
     "icons/puzzle.svg",

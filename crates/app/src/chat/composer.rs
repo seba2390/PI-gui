@@ -46,7 +46,7 @@ use super::session::{Lifecycle, PiSession, WebMode};
 use super::text_viewer;
 use crate::config::{AppConfig, RecentFolders};
 use crate::theme::palette;
-use crate::ui::{AppIcon, FadingText, QuietButton as _, spinner};
+use crate::ui::{AppIcon, FadingText, QuietButton as _, described_item, spinner};
 use gpui_kit::component::WindowExt as _;
 
 actions!(
@@ -77,10 +77,8 @@ pub enum ComposerEvent {
     BrowseRemote(HostId),
     /// Open "Manage SSH connections".
     ManageHosts,
-    /// Open the "Add model" dialog (on its form, or on the models.json editor).
-    AddModel {
-        edit_json: bool,
-    },
+    /// Open the Models dialog.
+    Models,
 }
 
 /// A file attached to the next prompt.
@@ -1366,9 +1364,16 @@ impl Composer {
                     .child(effort_stops(effort, cx))
                     .child(
                         // Only its knob: the stops are the track.
-                        Slider::new(&self.effort)
-                            .bg(transparent_black())
-                            .accessibility_label(format!("Deep search effort: {}", effort.label())),
+                        crate::ui::knob::outlined(
+                            Slider::new(&self.effort)
+                                .bg(transparent_black())
+                                .accessibility_label(format!(
+                                    "Deep search effort: {}",
+                                    effort.label()
+                                )),
+                            &self.effort,
+                            cx,
+                        ),
                     ),
             )
             .child(after)
@@ -1550,6 +1555,20 @@ impl Composer {
             .label(label)
             .dropdown_caret(true)
             .dropdown_menu_with_anchor(Anchor::BottomRight, move |mut menu, _, _| {
+                let composer = composer.clone();
+                let change = PopupMenuItem::new("Add or change models…")
+                    .icon(IconName::Plus)
+                    .on_click(move |_, _, cx| {
+                        let _ = composer.update(cx, |_, cx| cx.emit(ComposerEvent::Models));
+                    });
+                // A provider can have hundreds.
+                let long = models.len() > LONG_MODEL_MENU;
+                let change = if long {
+                    menu = menu.scrollable(true).item(change).separator();
+                    None
+                } else {
+                    Some(change)
+                };
                 if models.is_empty() {
                     menu = menu.label(empty.clone());
                 }
@@ -1557,9 +1576,10 @@ impl Composer {
                     let (handle, model) = (handle.clone(), model.clone());
                     let checked = current.as_deref() == Some(model.qualified_id().as_str());
                     menu = menu.item(
-                        crate::demo::menu_item(
-                            format!("{}  ·  {}", model.display_name(), model.provider),
+                        described_item(
                             format!("model:{}", model.id),
+                            model.display_name().to_owned(),
+                            model.provider.clone(),
                         )
                         .checked(checked)
                         .on_click(move |_, _, cx| {
@@ -1567,26 +1587,10 @@ impl Composer {
                         }),
                     );
                 }
-                let (add, edit) = (composer.clone(), composer.clone());
-                menu.separator()
-                    .item(
-                        PopupMenuItem::new("Add model…")
-                            .icon(IconName::Plus)
-                            .on_click(move |_, _, cx| {
-                                let _ = add.update(cx, |_, cx| {
-                                    cx.emit(ComposerEvent::AddModel { edit_json: false });
-                                });
-                            }),
-                    )
-                    .item(
-                        PopupMenuItem::new("Edit models.json…")
-                            .icon(IconName::File)
-                            .on_click(move |_, _, cx| {
-                                let _ = edit.update(cx, |_, cx| {
-                                    cx.emit(ComposerEvent::AddModel { edit_json: true });
-                                });
-                            }),
-                    )
+                match change {
+                    Some(change) => menu.separator().item(change),
+                    None => menu,
+                }
             });
         crate::demo::mark("model-picker", picker)
     }
@@ -2591,6 +2595,9 @@ fn load_attachment(path: PathBuf, inline: bool, dir: &Path, svg: &SvgRenderer) -
 
 /// Builds the folder menu: recent working folders (instant, no disk access) and a fallback to
 /// the system folder dialog, which macOS takes a noticeable moment to open.
+/// The model menu scrolls when it has more models than this.
+const LONG_MODEL_MENU: usize = 15;
+
 const FOLDER_MENU_WIDTH: f32 = 440.;
 
 /// The device menu: this computer, saved SSH hosts (with status dots) and "Add SSH connection…".

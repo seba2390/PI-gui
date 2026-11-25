@@ -7,7 +7,7 @@ use gpui_kit::component::button::Button;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use pi_sessions::SessionSummary;
+use pi_sessions::side_chat::Nested;
 
 use remote::HostId;
 
@@ -16,17 +16,31 @@ use crate::config::AppConfig;
 use crate::ui::QuietButton as _;
 use crate::ui::{AppIcon, relative_time};
 
+/// How much further each level of side chats starts its text.
+const SIDE_STEP: f32 = 22.;
+/// Where a side chat's line comes down: this far into its conversation's text.
+const LINE_X: f32 = 4.;
+/// Where a side chat's row (its highlight) starts, from where its line comes down.
+const ROW_X: f32 = 10.;
+/// A side chat's text, from the start of its row.
+const SIDE_PAD: f32 = 8.;
+/// The rows' height; the line turns into a side chat at its middle.
+const ROW_HEIGHT: f32 = 30.;
+
 /// A session: title on the left, age on the right; rename / trash replace the age on hover.
 /// `indent` is the nesting level (1 under a Code folder, 2 under a host's folder); `host` is
-/// the SSH host the session lives on.
+/// the SSH host the session lives on. Side chats (`row.depth` > 0) are indented further, row
+/// and highlight alike, with a line coming down from their conversation's text and curving
+/// into their left side.
 pub fn session_row(
     sidebar: &Sidebar,
-    session: &SessionSummary,
+    row: &Nested<'_>,
     indent: u8,
     host: Option<&HostId>,
     now: SystemTime,
     cx: &mut Context<Sidebar>,
 ) -> impl IntoElement + use<> {
+    let session = row.session;
     let active = sidebar.is_active(host, &session.path);
     let activity = sidebar.activity(host, &session.path);
     let colors = crate::theme::palette(cx);
@@ -49,6 +63,12 @@ pub fn session_row(
         None => "",
     };
     let title = sidebar.row_title(host.as_ref(), session);
+    let base = match indent {
+        0 => 8.,
+        1 => 30.,
+        _ => 44.,
+    };
+    let lines = side_chat_lines(row, base, theme.muted_foreground.opacity(0.6));
     let accessible_name = SharedString::from(format!(
         "{}{status}",
         match &title {
@@ -59,7 +79,7 @@ pub fn session_row(
             RowTitle::Plain(text) => text,
         }
     ));
-    h_flex()
+    let shown = h_flex()
         .id(ElementId::Name(id.clone()))
         .role(Role::Button)
         .aria_label(accessible_name)
@@ -67,14 +87,10 @@ pub fn session_row(
         .group("session-row")
         .relative()
         .w_full()
-        .h(px(30.))
+        .h(px(ROW_HEIGHT))
         .gap_2()
         .pr_2()
-        .map(|this| match indent {
-            0 => this.pl_2(),
-            1 => this.pl(px(30.)),
-            _ => this.pl(px(44.)),
-        })
+        .pl(px(if row.depth == 0 { base } else { SIDE_PAD }))
         .rounded_md()
         .cursor_pointer()
         .when(active, |this| this.bg(active_bg))
@@ -198,7 +214,73 @@ pub fn session_row(
                             cx.emit(delete.clone());
                         })),
                 ),
-        )
+        );
+    div()
+        .relative()
+        .w_full()
+        .pl(px(row_start(row.depth, base)))
+        .children(lines)
+        .child(shown)
+}
+
+/// Where the text of a row at `depth` starts (`base` at depth 0).
+#[allow(clippy::cast_precision_loss)] // a handful of levels
+fn text_start(depth: usize, base: f32) -> f32 {
+    base + SIDE_STEP * depth as f32
+}
+
+/// Where the row (and its highlight) of a side chat at `depth` starts; 0 for a conversation.
+fn row_start(depth: usize, base: f32) -> f32 {
+    if depth == 0 {
+        0.
+    } else {
+        text_start(depth, base) - SIDE_PAD
+    }
+}
+
+/// The lines of a side chat's row: one from its conversation's text down and, with a rounded
+/// corner, into its left side; and those of side chats further up that go on past it (or of
+/// later side chats of the same conversation). `base` is where a conversation's text starts.
+fn side_chat_lines(row: &Nested<'_>, base: f32, color: Hsla) -> Vec<Div> {
+    if row.depth == 0 {
+        return Vec::new();
+    }
+    // Rows are 2 px apart: the lines reach across the gaps.
+    let gap = px(2.);
+    let x = |level: usize| px(text_start(level - 1, base) + LINE_X);
+    let straight = |level: usize| {
+        div()
+            .absolute()
+            .left(x(level))
+            .top(-gap)
+            .bottom(-gap)
+            .w(px(1.))
+            .bg(color)
+    };
+    let mut lines: Vec<Div> = row
+        .through
+        .iter()
+        .enumerate()
+        .filter(|(_, through)| **through)
+        .map(|(i, _)| straight(i + 1))
+        .collect();
+    if !row.last {
+        lines.push(straight(row.depth));
+    }
+    let corner = px(ROW_X - 2.);
+    lines.push(
+        div()
+            .absolute()
+            .left(x(row.depth))
+            .top(-gap)
+            .h(px(ROW_HEIGHT / 2.) + gap)
+            .w(corner)
+            .border_l_1()
+            .border_b_1()
+            .border_color(color)
+            .rounded_bl(corner),
+    );
+    lines
 }
 
 /// A full-width action at the top of the sidebar ("Skills", "New chat"): icon and label

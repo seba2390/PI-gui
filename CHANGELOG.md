@@ -6,6 +6,40 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-11-25
+
+### Added
+
+- Settings → pi & models lists the servers and API keys that are connected, and whether the servers
+  answer. Clicking one changes or removes it.
+- Models can be tested with a short message before they are added.
+- Side chats: the "Side chat" tab on the chat's right edge (or `/side`, or ⌘⇧N) opens a second
+  conversation next to the one you are in, with everything it holds at that moment: messages,
+  thinking, tool calls and their results, also while the agent is still working. A reply still
+  being written comes along up to where it was, marked as cut off, and a tool still running
+  comes along with its output so far. The original keeps working undisturbed. The side chat
+  keeps the model and thinking level, works in Chat and Code (on the same folder) and over SSH,
+  and is listed in the sidebar under the conversation it came from. What it took over is folded
+  into one card (its first prompt), which opens on a click. (#43)
+
+### Changed
+
+- Adding models is new. It starts with two choices: a locally hosted model, on this device or
+  another one (Ollama, LM Studio and other servers are looked for on the device that is chosen, and
+  for any other server its address is enough), or a model of an API provider (Anthropic, OpenAI,
+  Google, OpenRouter and 19 others need only an API key, which is checked where the provider allows
+  it). A server's models are ticked in a list, several at once, with their context and abilities
+  filled in as far as the server says. What is connected is listed below the two choices and can be
+  changed and removed the same way, and what else is in `models.json` stays.
+- The model menu scrolls when it has many models.
+
+### Fixed
+
+- Slider knobs (deep search's effort, the web search settings) have a thin edge and a soft
+  shadow, so they no longer disappear against the white background of the light theme.
+- Long names in the model menu fade out at the menu's edge, also in the menus for adding models.
+  Before, they were drawn past it.
+
 ## [0.5.2] - 2026-11-25
 
 ### Added
@@ -561,7 +595,8 @@ chats, skills and model management. Changes since the last private build:
 - A corrupt `hosts.json` is kept as a backup.
 - A remembered terminal height can no longer squeeze out the chat.
 
-[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/seba2390/pistachio/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/seba2390/pistachio/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/seba2390/pistachio/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/seba2390/pistachio/compare/v0.4.9...v0.5.0

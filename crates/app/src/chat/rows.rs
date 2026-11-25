@@ -96,7 +96,11 @@ pub fn render_row(
         app: cx,
     };
 
+    let folded = chat.folded_rows();
     let content = match (items.get(row), chat.role(row)) {
+        // A side chat's history, folded into one card on its first row.
+        (Some(_), _) if row == 0 && folded > 0 => render_inherited(&items[..folded], &context),
+        (Some(_), _) if row < folded => return div().into_any_element(),
         // Folded into the "Explored" group of an earlier row.
         (Some(_), Some(RowRole::Hidden)) => return div().into_any_element(),
         // On the row that ends its turn.
@@ -106,6 +110,12 @@ pub fn render_row(
             return div().into_any_element();
         }
         (Some(_), Some(RowRole::Group(group))) => render_group(group, &context),
+        (Some(item), _) if row == 0 && chat.inherited_rows() > 0 => v_flex()
+            .w_full()
+            .gap_3()
+            .child(render_fold_bar(&context))
+            .child(render_item(item, &context, theme.muted, cx))
+            .into_any_element(),
         (Some(item), _) => render_item(item, &context, theme.muted, cx),
         (None, _) => render_working(&session.working_status(), session.web_progress(), &context),
     };
@@ -120,7 +130,7 @@ pub fn render_row(
     // The row above that shows something (folded rows render nothing).
     let previous = (0..row)
         .rev()
-        .find(|ix| !matches!(chat.role(*ix), Some(RowRole::Hidden)));
+        .find(|ix| !matches!(chat.role(*ix), Some(RowRole::Hidden)) && (*ix == 0 || *ix >= folded));
     let section_change = previous.is_some_and(|previous| {
         activity(previous) != on_rail
             && matches!(
@@ -175,6 +185,106 @@ pub fn render_row(
                 })
                 .child(content),
         )
+        .into_any_element()
+}
+
+/// A side chat's history from its conversation, folded: its first prompt, how much there is,
+/// and a click to show it all.
+fn render_inherited(items: &[TranscriptItem], cx: &RowContext<'_>) -> AnyElement {
+    let mut prompts = items.iter().filter_map(|item| match &item.kind {
+        ItemKind::User(user) => Some(user),
+        _ => None,
+    });
+    let first = prompts
+        .next()
+        .and_then(|user| user.title())
+        .unwrap_or("The conversation")
+        .to_owned();
+    let more = prompts.count();
+    let replies = items
+        .iter()
+        .filter(|item| matches!(item.kind, ItemKind::Assistant(_)))
+        .count();
+    let mut summary = format!(
+        "{replies} {}",
+        if replies == 1 { "reply" } else { "replies" }
+    );
+    if more > 0 {
+        summary = format!(
+            "{more} more {} · {summary}",
+            if more == 1 { "prompt" } else { "prompts" }
+        );
+    }
+    let theme = cx.app.theme();
+    let (hover, muted, foreground, accent) = (
+        theme.secondary_hover,
+        cx.muted,
+        cx.foreground,
+        cx.palette.accent,
+    );
+    let weak = cx.weak.clone();
+    v_flex()
+        .id("side-chat-history")
+        .role(Role::Button)
+        .aria_label(format!(
+            "Show the conversation this side chat continues: {first}"
+        ))
+        .w_full()
+        .gap_1()
+        .px_3()
+        .py_2p5()
+        .rounded_lg()
+        .border_1()
+        .border_color(cx.border)
+        .cursor_pointer()
+        .hover(move |style| style.bg(hover))
+        .on_click(move |_, _, cx| {
+            let _ = weak.update(cx, |chat, cx| chat.toggle_inherited(cx));
+        })
+        .child(
+            h_flex()
+                .gap_1p5()
+                .text_xs()
+                .text_color(muted)
+                .child(Icon::from(AppIcon::GitBranch).xsmall().text_color(accent))
+                .child("Continues the conversation"),
+        )
+        .child(
+            div()
+                .text_sm()
+                .text_color(foreground)
+                .truncate()
+                .child(first),
+        )
+        .child(
+            h_flex()
+                .gap_1()
+                .text_xs()
+                .text_color(muted)
+                .child(SharedString::from(summary))
+                .child("· Show")
+                .child(Icon::new(IconName::ChevronDown).xsmall()),
+        )
+        .into_any_element()
+}
+
+/// Above a side chat's history once it is shown: folds it again.
+fn render_fold_bar(cx: &RowContext<'_>) -> AnyElement {
+    let weak = cx.weak.clone();
+    let (hover, muted) = (cx.app.theme().foreground, cx.muted);
+    h_flex()
+        .id("side-chat-history-fold")
+        .role(Role::Button)
+        .gap_1()
+        .text_xs()
+        .text_color(muted)
+        .cursor_pointer()
+        .hover(move |style| style.text_color(hover))
+        .on_click(move |_, _, cx| {
+            let _ = weak.update(cx, |chat, cx| chat.toggle_inherited(cx));
+        })
+        .child(Icon::new(IconName::ChevronUp).xsmall())
+        .child("Hide the conversation this side chat continues")
         .into_any_element()
 }
 

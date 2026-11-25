@@ -27,6 +27,7 @@ actions!(
         OpenSettings,
         CheckForUpdates,
         FindInChat,
+        OpenSideChat,
     ]
 );
 
@@ -136,6 +137,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new(primary!("shift-e"), ShowFiles, Some(WINDOW_CONTEXT)),
         KeyBinding::new(primary!("l"), FocusComposer, Some(WINDOW_CONTEXT)),
         KeyBinding::new(primary!("f"), FindInChat, Some(WINDOW_CONTEXT)),
+        KeyBinding::new(primary!("shift-n"), OpenSideChat, Some(WINDOW_CONTEXT)),
         KeyBinding::new(primary!("1"), ShowChatMode, Some(WINDOW_CONTEXT)),
         KeyBinding::new(primary!("2"), ShowCodeMode, Some(WINDOW_CONTEXT)),
         KeyBinding::new(primary!("q"), Quit, None),
@@ -185,6 +187,7 @@ fn menus() -> Vec<Menu> {
         ]),
         Menu::new("File").items([
             MenuItem::action("New Chat / Session", NewChat),
+            MenuItem::action("New Side Chat", OpenSideChat),
             MenuItem::separator(),
             MenuItem::action("Close Window", CloseWindow),
         ]),
