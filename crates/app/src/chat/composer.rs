@@ -1366,9 +1366,16 @@ impl Composer {
                     .child(effort_stops(effort, cx))
                     .child(
                         // Only its knob: the stops are the track.
-                        Slider::new(&self.effort)
-                            .bg(transparent_black())
-                            .accessibility_label(format!("Deep search effort: {}", effort.label())),
+                        crate::ui::knob::outlined(
+                            Slider::new(&self.effort)
+                                .bg(transparent_black())
+                                .accessibility_label(format!(
+                                    "Deep search effort: {}",
+                                    effort.label()
+                                )),
+                            &self.effort,
+                            cx,
+                        ),
                     ),
             )
             .child(after)

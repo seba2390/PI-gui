@@ -510,11 +510,13 @@ fn slider(
         .flex_none()
         .gap_3()
         .child(
-            div().w(SLIDER_WIDTH).child(
+            div().w(SLIDER_WIDTH).child(crate::ui::knob::outlined(
                 Slider::new(&slider)
                     .bg(palette(cx).accent)
                     .accessibility_label(format!("{title}: {}", (number.shown)(label))),
-            ),
+                &slider,
+                cx,
+            )),
         )
         .child(
             // As wide as the longest value, so the sliders line up.

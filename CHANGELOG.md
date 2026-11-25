@@ -18,6 +18,8 @@ All notable changes to PI-gui are listed here. The format follows
 
 ### Fixed
 
+- Slider knobs (deep search's effort, the web search settings) have a thin edge and a soft
+  shadow, so they no longer disappear against the white background of the light theme.
 - Long names in the model menu, and long texts in the provider and API menus of "Add model", fade
   out at the menu's edge. Before, they were drawn past it.
 
