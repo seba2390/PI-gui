@@ -252,6 +252,8 @@ pub struct SideChatStart {
     /// The original's model (`provider`, `id`) and thinking level, to take over.
     pub model: Option<(String, String)>,
     pub thinking_level: Option<ThinkingLevel>,
+    /// The prompts it took over (shown folded).
+    pub inherited_prompts: usize,
 }
 
 /// Automatic naming looks at the first prompt only.
@@ -1525,6 +1527,7 @@ impl PiSession {
             host: self.host.clone(),
             model: model.map(|model| (model.provider.clone(), model.id.clone())),
             thinking_level: state.map(|state| state.thinking_level),
+            inherited_prompts: 0,
         };
         let client = self.client.clone();
         cx.background_executor().spawn(async move {
@@ -1548,6 +1551,7 @@ impl PiSession {
             place.write(&path.to_string_lossy(), &file.text, false)?;
             Ok(SideChatStart {
                 file: path,
+                inherited_prompts: file.prompts,
                 ..start
             })
         })

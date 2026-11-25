@@ -16,15 +16,22 @@ use crate::config::AppConfig;
 use crate::ui::QuietButton as _;
 use crate::ui::{AppIcon, relative_time};
 
-/// How far each level of side chats is indented.
-const SIDE_INDENT: f32 = 16.;
-/// Where a side chat's line runs, from the left of its conversation's row content.
-const LINE_X: f32 = 6.;
+/// How much further each level of side chats starts its text.
+const SIDE_STEP: f32 = 22.;
+/// Where a side chat's line comes down: this far into its conversation's text.
+const LINE_X: f32 = 4.;
+/// Where a side chat's row (its highlight) starts, from where its line comes down.
+const ROW_X: f32 = 10.;
+/// A side chat's text, from the start of its row.
+const SIDE_PAD: f32 = 8.;
+/// The rows' height; the line turns into a side chat at its middle.
+const ROW_HEIGHT: f32 = 30.;
 
 /// A session: title on the left, age on the right; rename / trash replace the age on hover.
 /// `indent` is the nesting level (1 under a Code folder, 2 under a host's folder); `host` is
-/// the SSH host the session lives on. Side chats (`row.depth` > 0) are indented further, with
-/// a line coming down from their conversation into their left side.
+/// the SSH host the session lives on. Side chats (`row.depth` > 0) are indented further, row
+/// and highlight alike, with a line coming down from their conversation's text and curving
+/// into their left side.
 pub fn session_row(
     sidebar: &Sidebar,
     row: &Nested<'_>,
@@ -61,8 +68,7 @@ pub fn session_row(
         1 => 30.,
         _ => 44.,
     };
-    #[allow(clippy::cast_precision_loss)] // a handful of levels
-    let depth = row.depth as f32;
+    let lines = side_chat_lines(row, base, theme.muted_foreground.opacity(0.6));
     let accessible_name = SharedString::from(format!(
         "{}{status}",
         match &title {
@@ -73,7 +79,7 @@ pub fn session_row(
             RowTitle::Plain(text) => text,
         }
     ));
-    h_flex()
+    let shown = h_flex()
         .id(ElementId::Name(id.clone()))
         .role(Role::Button)
         .aria_label(accessible_name)
@@ -81,15 +87,10 @@ pub fn session_row(
         .group("session-row")
         .relative()
         .w_full()
-        .h(px(30.))
+        .h(px(ROW_HEIGHT))
         .gap_2()
         .pr_2()
-        .pl(px(base + SIDE_INDENT * depth))
-        .children(side_chat_lines(
-            row,
-            base,
-            cx.theme().muted_foreground.opacity(0.5),
-        ))
+        .pl(px(if row.depth == 0 { base } else { SIDE_PAD }))
         .rounded_md()
         .cursor_pointer()
         .when(active, |this| this.bg(active_bg))
@@ -213,28 +214,46 @@ pub fn session_row(
                             cx.emit(delete.clone());
                         })),
                 ),
-        )
+        );
+    div()
+        .relative()
+        .w_full()
+        .pl(px(row_start(row.depth, base)))
+        .children(lines)
+        .child(shown)
 }
 
-/// The lines of a side chat's row: one from its conversation down into its left side, and
-/// those of side chats further up that go on past it. `base` is the row's left padding at
-/// depth 0.
+/// Where the text of a row at `depth` starts (`base` at depth 0).
+#[allow(clippy::cast_precision_loss)] // a handful of levels
+fn text_start(depth: usize, base: f32) -> f32 {
+    base + SIDE_STEP * depth as f32
+}
+
+/// Where the row (and its highlight) of a side chat at `depth` starts; 0 for a conversation.
+fn row_start(depth: usize, base: f32) -> f32 {
+    if depth == 0 {
+        0.
+    } else {
+        text_start(depth, base) - SIDE_PAD
+    }
+}
+
+/// The lines of a side chat's row: one from its conversation's text down and, with a rounded
+/// corner, into its left side; and those of side chats further up that go on past it (or of
+/// later side chats of the same conversation). `base` is where a conversation's text starts.
 fn side_chat_lines(row: &Nested<'_>, base: f32, color: Hsla) -> Vec<Div> {
     if row.depth == 0 {
         return Vec::new();
     }
     // Rows are 2 px apart: the lines reach across the gaps.
     let gap = px(2.);
-    let x = |level: usize| {
-        #[allow(clippy::cast_precision_loss)]
-        let level = level as f32;
-        px(base + SIDE_INDENT * (level - 1.) + LINE_X)
-    };
-    let vertical = |level: usize| {
+    let x = |level: usize| px(text_start(level - 1, base) + LINE_X);
+    let straight = |level: usize| {
         div()
             .absolute()
             .left(x(level))
             .top(-gap)
+            .bottom(-gap)
             .w(px(1.))
             .bg(color)
     };
@@ -243,22 +262,23 @@ fn side_chat_lines(row: &Nested<'_>, base: f32, color: Hsla) -> Vec<Div> {
         .iter()
         .enumerate()
         .filter(|(_, through)| **through)
-        .map(|(i, _)| vertical(i + 1).bottom(-gap))
+        .map(|(i, _)| straight(i + 1))
         .collect();
-    let own = vertical(row.depth);
-    lines.push(if row.last {
-        own.h(px(15.) + gap)
-    } else {
-        own.bottom(-gap)
-    });
+    if !row.last {
+        lines.push(straight(row.depth));
+    }
+    let corner = px(ROW_X - 2.);
     lines.push(
         div()
             .absolute()
             .left(x(row.depth))
-            .top(px(15.))
-            .w(px(SIDE_INDENT - LINE_X - 2.))
-            .h(px(1.))
-            .bg(color),
+            .top(-gap)
+            .h(px(ROW_HEIGHT / 2.) + gap)
+            .w(corner)
+            .border_l_1()
+            .border_b_1()
+            .border_color(color)
+            .rounded_bl(corner),
     );
     lines
 }

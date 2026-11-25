@@ -21,6 +21,9 @@ use crate::SessionSummary;
 
 /// The header field that marks a side chat.
 pub const MARKER: &str = "pistachioSideChat";
+/// The header field with how many prompts the side chat took over: the app shows them folded,
+/// up to the first prompt of the side chat's own.
+pub const INHERITED_PROMPTS: &str = "pistachioInheritedPrompts";
 
 /// pi's session format version this module writes when it starts a file from messages.
 const VERSION: u64 = 3;
@@ -42,6 +45,8 @@ pub struct SideChatFile {
     /// `<timestamp>_<id>.jsonl`, as pi names its files.
     pub file_name: String,
     pub text: String,
+    /// The prompts it takes over, as pi will show them (after the last compaction).
+    pub prompts: usize,
 }
 
 /// Builds the side chat of the session at `parent` (in `cwd`): its history from `source`,
@@ -61,6 +66,7 @@ pub fn build(
     let mut lines = Vec::new();
     let mut last = None;
     let mut saved = Saved::default();
+    let mut entries: Vec<Value> = Vec::new();
     let (version, cwd) = match source {
         Source::File(text) => {
             let mut header = None;
@@ -82,6 +88,7 @@ pub fn build(
                     saved.add(message);
                 }
                 lines.push(line.to_owned());
+                entries.push(entry);
             }
             let header = header.ok_or("The conversation's file has no session header.")?;
             let version = header.get("version").and_then(Value::as_u64).unwrap_or(1);
@@ -92,6 +99,11 @@ pub fn build(
             (version, cwd)
         }
         Source::Messages(messages) => {
+            entries.extend(
+                messages
+                    .iter()
+                    .map(|message| json!({"type": "message", "message": message})),
+            );
             for message in messages {
                 saved.add(message);
                 lines.push(message_entry(message, &mut ids, &mut last, now));
@@ -115,7 +127,12 @@ pub fn build(
         "parentSession".into(),
         parent.to_string_lossy().into_owned().into(),
     );
+    let prompts = match source {
+        Source::File(_) => prompts_on_branch(&entries),
+        Source::Messages(_) => entries.iter().filter(|entry| is_prompt(entry)).count(),
+    };
     header.insert(MARKER.into(), true.into());
+    header.insert(INHERITED_PROMPTS.into(), prompts.into());
 
     let mut text = Value::Object(header).to_string();
     text.push('\n');
@@ -126,7 +143,54 @@ pub fn build(
     Ok(SideChatFile {
         file_name: format!("{}_{id}.jsonl", timestamp.replace([':', '.'], "-")),
         text,
+        prompts,
     })
+}
+
+/// Whether `entry` is a prompt (a user message).
+fn is_prompt(entry: &Value) -> bool {
+    entry.get("type").and_then(Value::as_str) == Some("message")
+        && entry.pointer("/message/role").and_then(Value::as_str) == Some("user")
+}
+
+/// The prompts pi shows for the active branch (from the last entry to the root along
+/// `parentId`): those kept by the last compaction, or all without one.
+fn prompts_on_branch(entries: &[Value]) -> usize {
+    let id = |entry: &Value| entry.get("id").and_then(Value::as_str).map(str::to_owned);
+    let by_id: HashMap<String, &Value> = entries
+        .iter()
+        .filter_map(|entry| Some((id(entry)?, entry)))
+        .collect();
+    let mut path = Vec::new();
+    let mut next = entries.last().and_then(id);
+    while let Some(at) = next {
+        // A cycle or a missing parent ends the walk.
+        let Some(entry) = by_id.get(&at) else { break };
+        if path.len() > entries.len() {
+            break;
+        }
+        path.push(*entry);
+        next = entry
+            .get("parentId")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+    }
+    path.reverse();
+    let kept_from = path
+        .iter()
+        .rposition(|entry| entry.get("type").and_then(Value::as_str) == Some("compaction"))
+        .map_or(0, |compaction| {
+            let first = path[compaction]
+                .get("firstKeptEntryId")
+                .and_then(Value::as_str);
+            path.iter()
+                .position(|entry| entry.get("id").and_then(Value::as_str) == first)
+                .unwrap_or(compaction)
+        });
+    path[kept_from..]
+        .iter()
+        .filter(|entry| is_prompt(entry))
+        .count()
 }
 
 /// The path of the side chat's file: next to the original's (pi's folder for that working
@@ -397,6 +461,8 @@ mod tests {
         assert_eq!(header["cwd"], "/w");
         assert_eq!(header["parentSession"], "/s/--w--/old.jsonl");
         assert_eq!(header[MARKER], true);
+        assert_eq!(header[INHERITED_PROMPTS], 1);
+        assert_eq!(file.prompts, 1);
         assert_eq!(header["timestamp"], "2025-11-25T10:10:30.123Z");
         let id = header["id"].as_str().unwrap();
         assert_ne!(id, "old");
@@ -411,6 +477,31 @@ mod tests {
         assert_eq!(added["type"], "message");
         assert_eq!(added["parentId"], "a3");
         assert_eq!(added["message"], tail[1]);
+    }
+
+    #[test]
+    fn counts_the_prompts_pi_shows() {
+        let entry = |id: &str, parent: Option<&str>, role: &str| {
+            json!({"type": "message", "id": id, "parentId": parent,
+                   "message": {"role": role, "content": "x"}})
+        };
+        let branched = [
+            entry("a", None, "user"),
+            entry("b", Some("a"), "assistant"),
+            // Another branch, not on the path to the last entry.
+            entry("c", Some("b"), "user"),
+            entry("d", Some("b"), "user"),
+            entry("e", Some("d"), "assistant"),
+        ];
+        assert_eq!(prompts_on_branch(&branched), 2);
+        let compacted = [
+            entry("a", None, "user"),
+            entry("b", Some("a"), "user"),
+            entry("c", Some("b"), "user"),
+            json!({"type": "compaction", "id": "k", "parentId": "c", "firstKeptEntryId": "c"}),
+            entry("d", Some("k"), "user"),
+        ];
+        assert_eq!(prompts_on_branch(&compacted), 2);
     }
 
     #[test]
@@ -464,6 +555,7 @@ mod tests {
             first_prompt: None,
             modified: UNIX_EPOCH,
             side_chat_of: parent.map(PathBuf::from),
+            inherited_prompts: None,
         }
     }
 

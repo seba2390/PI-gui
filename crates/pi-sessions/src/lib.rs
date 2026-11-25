@@ -30,6 +30,8 @@ pub struct SessionSummary {
     pub modified: SystemTime,
     /// The session this one is a side chat of (see [`side_chat`]), by its file.
     pub side_chat_of: Option<PathBuf>,
+    /// For a side chat: how many prompts it took over from that session (shown folded).
+    pub inherited_prompts: Option<usize>,
 }
 
 impl SessionSummary {
@@ -293,6 +295,8 @@ pub fn summary_from_lines(
         parent_session: Option<PathBuf>,
         #[serde(rename = "pistachioSideChat", default)]
         side_chat: bool,
+        #[serde(rename = "pistachioInheritedPrompts")]
+        inherited_prompts: Option<usize>,
     }
     #[derive(Deserialize)]
     struct Info {
@@ -314,6 +318,7 @@ pub fn summary_from_lines(
         first_prompt,
         modified,
         side_chat_of: header.parent_session.filter(|_| header.side_chat),
+        inherited_prompts: header.inherited_prompts.filter(|_| header.side_chat),
     })
 }
 
@@ -507,6 +512,7 @@ mod tests {
             name: None,
             first_prompt: None,
             side_chat_of: None,
+            inherited_prompts: None,
             modified: SystemTime::UNIX_EPOCH,
         };
         let sessions = [
@@ -535,6 +541,7 @@ mod tests {
             name: None,
             first_prompt: None,
             side_chat_of: None,
+            inherited_prompts: None,
             modified: SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000 - age_secs),
         }
     }

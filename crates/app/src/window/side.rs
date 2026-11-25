@@ -83,8 +83,13 @@ impl MainWindow {
             host,
             model,
             thinking_level,
+            inherited_prompts,
         } = start;
-        let chat = cx.new(|cx| ChatView::new(cwd, Some(file), host.clone(), window, cx));
+        let chat = cx.new(|cx| {
+            let mut chat = ChatView::new(cwd, Some(file), host.clone(), window, cx);
+            chat.set_inherited_prompts(inherited_prompts, cx);
+            chat
+        });
         let session = chat.read(cx).session().clone();
         session.update(cx, |session, cx| session.inherit(model, thinking_level, cx));
         self.set_side(Some(chat), window, cx);
@@ -198,7 +203,14 @@ impl MainWindow {
             )
         };
         let draft = take_draft(&old, window, cx);
-        let chat = cx.new(|cx| ChatView::new(cwd, file, host, window, cx));
+        let inherited = old.read(cx).inherited();
+        let chat = cx.new(|cx| {
+            let mut chat = ChatView::new(cwd, file, host, window, cx);
+            if let Some(inherited) = inherited {
+                chat.set_inherited_prompts(inherited.prompts, cx);
+            }
+            chat
+        });
         set_draft(&chat, draft, window, cx);
         // The old one's pi has stopped: nothing to keep running.
         self.side = None;

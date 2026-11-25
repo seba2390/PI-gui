@@ -147,6 +147,11 @@ pub struct ChatView {
     files: file_links::FileIndex,
     /// Answer blocks whose file links are not drawn yet (they still stream, or changed).
     unlinked: HashSet<BlockKey>,
+    /// A side chat's history taken over from its conversation: how many prompts, and whether
+    /// it is shown in full. Folded, it is one card (see [`Self::folded_rows`]).
+    inherited: Option<Inherited>,
+    /// The rows of that history (up to the side chat's own first prompt).
+    inherited_rows: usize,
     /// Parses a long session's answers for file names in the background.
     _parse_files: Task<()>,
     _subscriptions: Vec<Subscription>,
@@ -163,6 +168,13 @@ pub struct OpenFileLink {
 }
 
 impl EventEmitter<ChatEvent> for ChatView {}
+
+/// A side chat's history from its conversation (see [`ChatView::set_inherited_prompts`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Inherited {
+    pub prompts: usize,
+    pub expanded: bool,
+}
 
 impl ChatView {
     pub fn new(
@@ -255,6 +267,8 @@ impl ChatView {
             hovered_turn: None,
             files: file_links::FileIndex::default(),
             unlinked: HashSet::new(),
+            inherited: None,
+            inherited_rows: 0,
             _parse_files: Task::ready(()),
             _subscriptions: subscriptions,
         };
@@ -264,6 +278,49 @@ impl ChatView {
 
     pub fn session(&self) -> &Entity<PiSession> {
         &self.session
+    }
+
+    /// Shows the first `prompts` prompts and everything with them (what a side chat took over)
+    /// folded into one card, until it is opened.
+    pub fn set_inherited_prompts(&mut self, prompts: usize, cx: &mut Context<Self>) {
+        if prompts == 0 {
+            return;
+        }
+        self.inherited = Some(Inherited {
+            prompts,
+            expanded: false,
+        });
+        self.sync(cx);
+        self.scroller
+            .update(cx, |scroller, cx| scroller.remeasure(cx));
+        cx.notify();
+    }
+
+    pub fn inherited(&self) -> Option<Inherited> {
+        self.inherited
+    }
+
+    /// Opens or folds the history a side chat took over.
+    pub(crate) fn toggle_inherited(&mut self, cx: &mut Context<Self>) {
+        if let Some(inherited) = &mut self.inherited {
+            inherited.expanded = !inherited.expanded;
+            self.scroller
+                .update(cx, |scroller, cx| scroller.remeasure(cx));
+            cx.notify();
+        }
+    }
+
+    /// How many rows the taken-over history spans, while it is folded (else 0).
+    pub(crate) fn folded_rows(&self) -> usize {
+        match self.inherited {
+            Some(inherited) if !inherited.expanded => self.inherited_rows,
+            _ => 0,
+        }
+    }
+
+    /// The rows the taken-over history spans, whether folded or not.
+    pub(crate) fn inherited_rows(&self) -> usize {
+        self.inherited.map_or(0, |_| self.inherited_rows)
     }
 
     /// Starts fading the π field as soon as the conversation starts: a message was sent (it
@@ -535,6 +592,24 @@ impl ChatView {
             }
         }
         self.roles = roles;
+
+        // 1c. A side chat's taken-over history ends at its own first prompt.
+        if let Some(inherited) = self.inherited {
+            let end = items
+                .iter()
+                .enumerate()
+                .filter(|(_, item)| matches!(item.kind, ItemKind::User(_)))
+                .nth(inherited.prompts)
+                .map_or(items.len(), |(index, _)| index);
+            if end != self.inherited_rows {
+                for index in 0..end.max(self.inherited_rows).min(items.len()) {
+                    if !changed_rows.contains(&index) {
+                        changed_rows.push(index);
+                    }
+                }
+                self.inherited_rows = end;
+            }
+        }
 
         // 2. Update retained markdown, streaming appends incrementally.
         for (key, appended_at, text) in sources {

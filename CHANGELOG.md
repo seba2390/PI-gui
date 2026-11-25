@@ -17,7 +17,8 @@ All notable changes to PI-gui are listed here. The format follows
   being written comes along up to where it was, marked as cut off, and a tool still running
   comes along with its output so far. The original keeps working undisturbed. The side chat
   keeps the model and thinking level, works in Chat and Code (on the same folder) and over SSH,
-  and is listed in the sidebar under the conversation it came from. (#43)
+  and is listed in the sidebar under the conversation it came from. What it took over is folded
+  into one card (its first prompt), which opens on a click. (#43)
 
 ### Changed
 

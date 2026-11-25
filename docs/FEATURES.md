@@ -122,8 +122,9 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   output so far). The original keeps going undisturbed. The side chat is a session of its own
   (its file is written next to the original's, with pi's `parentSession` pointing at it), with
   the same model, thinking level, folder and machine; in Code mode both agents work on the same
-  folder. In the sidebar it is listed under its conversation, indented, with a line coming down
-  from it. Its top bar moves it to the main column or closes it (it stays in the sidebar, and
+  folder. What it took over is folded into one card showing the first prompt and how many
+  replies there are; a click shows it all (and folds it again). In the sidebar it is listed
+  under its conversation, indented, with a line curving down from it. Its top bar moves it to the main column or closes it (it stays in the sidebar, and
   keeps working in the background if it is busy). `/side` in a side chat opens a side chat of
   that one in its place.
 - **Branches**: hovering a prompt offers Copy and Edit; hovering the end of a turn offers

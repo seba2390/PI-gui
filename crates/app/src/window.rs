@@ -1275,13 +1275,18 @@ impl MainWindow {
             .map(|(chat, _)| chat.clone());
         let chat = existing.unwrap_or_else(|| {
             cx.new(|cx| {
-                ChatView::new(
+                let mut chat = ChatView::new(
                     summary.cwd.clone(),
                     Some(summary.path.clone()),
                     host.clone(),
                     window,
                     cx,
-                )
+                );
+                // A side chat shows what it took over folded.
+                if let Some(prompts) = summary.inherited_prompts {
+                    chat.set_inherited_prompts(prompts, cx);
+                }
+                chat
             })
         });
         self.show_chat(chat.clone(), window, cx);
@@ -1326,6 +1331,7 @@ impl MainWindow {
                         name: None,
                         first_prompt: None,
                         side_chat_of: None,
+                        inherited_prompts: None,
                         modified: std::time::SystemTime::UNIX_EPOCH,
                     });
                 drop(self.open_session(Some(host), &summary, window, cx));
