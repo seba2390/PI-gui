@@ -330,6 +330,24 @@ impl ChatView {
         true
     }
 
+    /// Opens how the last report was checked (`PISTACHIO_OPEN=report-check`, for layout checks).
+    /// Returns whether there was one.
+    pub fn open_report_check(chat: &Entity<Self>, window: &mut Window, cx: &mut App) -> bool {
+        let session = chat.read(cx).session.clone();
+        let items = session.read(cx).transcript().items();
+        let check = items.iter().rev().find_map(|item| match &item.kind {
+            ItemKind::Check(check) => Some(check.clone()),
+            _ => None,
+        });
+        match check {
+            Some(check) => {
+                report::open(check, window, cx);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// The composer, e.g. to insert an `@path` mention from the Files tab.
     pub fn composer(&self) -> &Entity<Composer> {
         &self.composer

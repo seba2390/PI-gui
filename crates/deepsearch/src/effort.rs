@@ -238,6 +238,15 @@ fn merge(whole: &mut Value, edits: Value) {
 }
 
 impl Deep {
+    pub fn budget_mut(&mut self, effort: Effort) -> &mut DeepBudget {
+        match effort {
+            Effort::Light => &mut self.light,
+            Effort::Standard => &mut self.standard,
+            Effort::Thorough => &mut self.thorough,
+            Effort::Max => &mut self.max,
+        }
+    }
+
     pub fn budget(&self, effort: Effort) -> DeepBudget {
         match effort {
             Effort::Light => self.light,

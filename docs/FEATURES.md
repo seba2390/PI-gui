@@ -49,12 +49,15 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
       and for different sites. A model that wants to report before that, or leaves a sub-question
       open, is sent back to its research with what is missing: until it is done, the budget is used
       up, nothing new turns up, or it was sent back a set number of times (once in Light, up to 8
-      times in Max).
+      times in Max). With APIs like OpenAI's it has to call a tool while its research is short, so
+      it writes no reports that would only be sent back. Settings → Web search → Advanced deep
+      search settings has all of these numbers.
 
       Then the report is checked: links are tried, and from Standard on the model judges, from the
       sources' own passages and without the conversation, whether they back its claims (the key
       ones; all of them from Thorough on; one by one in Max). Quotes it gives as proof are looked up
-      on the page. Table rows and bullets are claims too, ones without a source are problems, and a
+      on the page. Table rows and bullets are claims too, whether they cite with links, page names in
+      brackets, numbers or a line of sources below them. Ones without a source are problems, and a
       page that was not read is no source. The report goes back to be corrected with what was found.
       These questions to the model have time and token limits (`check` in `config.json`); a check
       that fails or is stopped ends the run with a note that says so.
@@ -62,7 +65,7 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
       Until the report is final it is not shown as an answer. The chat shows the work instead:
       searches, pages, the plan, the checks, and drafts as rows that open. The “Working…” line says
       what is going on (“Checking the report: 12 of 40 claims”). Then the final report is written
-      into the chat once, with a note about the check below it. If the check fails or you press Esc,
+      into the chat once. A symbol at the end of the turn opens how it was checked. If the check fails or you press Esc,
       the latest complete draft is the answer, marked as not checked. The session keeps every
       draft, so other programs (pi's terminal) may show them.
 

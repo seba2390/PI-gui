@@ -6,6 +6,7 @@
 
 mod local_search;
 pub mod view;
+mod web_advanced;
 
 pub use local_search::{open_setup as open_searxng_setup, use_local as use_local_searxng};
 

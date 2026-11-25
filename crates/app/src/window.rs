@@ -469,6 +469,11 @@ impl MainWindow {
                         settings.update(cx, |settings, _| settings.start_on_web_search());
                     }
                 }
+                "web-advanced" => {
+                    if let Some(settings) = self.settings.as_ref().map(|s| s.0.clone()) {
+                        settings.update(cx, |settings, _| settings.open_advanced());
+                    }
+                }
                 "searxng-setup" => crate::settings::open_searxng_setup(window, cx),
                 "searxng-get" => crate::settings::use_local_searxng(cx),
                 "settings-ssh" => {
@@ -506,15 +511,23 @@ impl MainWindow {
                         self.open_in_files(path, None, window, cx);
                     }
                 }
-                other if other.starts_with("image-viewer:") => {
-                    let start = other["image-viewer:".len()..].parse().unwrap_or(0);
+                other if other == "report-check" || other.starts_with("image-viewer:") => {
+                    let start = other
+                        .strip_prefix("image-viewer:")
+                        .map(|start| start.parse().unwrap_or(0));
                     // The session loads in the background; a scripted check waits (up to a few
-                    // seconds) for its pictures.
+                    // seconds) for its pictures or report.
                     cx.spawn_in(window, async move |this, cx| {
                         for _ in 0..50 {
                             let opened = this
                                 .update_in(cx, |this, window, cx| {
-                                    ChatView::open_images(&this.chat.clone(), start, window, cx)
+                                    let chat = this.chat.clone();
+                                    match start {
+                                        Some(start) => {
+                                            ChatView::open_images(&chat, start, window, cx)
+                                        }
+                                        None => ChatView::open_report_check(&chat, window, cx),
+                                    }
                                 })
                                 .unwrap_or(true);
                             if opened {

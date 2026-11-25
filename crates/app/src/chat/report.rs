@@ -3,6 +3,7 @@
 
 use gpui_kit::component::button::Button;
 use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _, h_flex, v_flex,
 };
@@ -286,5 +287,9 @@ fn page_link(id: usize, url: &str, whole: bool, cx: &App) -> impl IntoElement + 
         .cursor_pointer()
         .hover(|style| style.underline())
         .child(label.to_owned())
+        .tooltip({
+            let url = url.clone();
+            move |window, cx| Tooltip::new(url.clone()).build(window, cx)
+        })
         .on_click(move |_, _, cx| cx.open_url(&url))
 }

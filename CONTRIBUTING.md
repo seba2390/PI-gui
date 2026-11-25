@@ -86,10 +86,11 @@ checks scriptable:
   folder) in the Files tab's viewer.
 - Sessions and popovers: `latest`, `new-chat` (like ⌘N), `attach`, `context`; `find:<text>` opens the find bar
   searching for `<text>`; `send:<text>` sends `<text>` as a message; `image-viewer:<n>` opens the picture viewer on the session's
-  `<n>`th picture.
+  `<n>`th picture; `report-check` opens how the session's last deep search report was checked.
 - Dialogs: `add-host`, `manage-hosts`, `add-model`, `add-provider`, `edit-models`.
 - Skills page: `skills`, `new-skill`, `open-skill:<path>`; the Settings page: `settings`
   (`settings-web`, `settings-speech` and `settings-names` open those pages; after `settings-web`,
+  `web-advanced` opens its advanced sections,
   `searxng-setup` asks whether to download SearXNG and `searxng-get` downloads and runs it); `type-name:<text>` plays the
   sidebar's typing animation for the open session 2.5 s after start (nothing is saved).
 - SSH: `ssh:<alias>`, `remote:<alias>:<folder>` and `remote-latest:<alias>` open a remote
@@ -135,6 +136,10 @@ These tests are all `#[ignore]`d. Run them with `PISTACHIO_SSH_TEST_HOST=<alias>
 `PISTACHIO_PREVIEW_CHECK=<folder of session copies> cargo test -p pistachio preview_matches_pi --
 --ignored` runs real pi on each session file and checks that the history Pistachio previews
 from the file matches pi's (use copies: pi may migrate files it opens).
+
+`script/test-deepsearch.py` runs deep search's extension in real pi, with a scripted model, search
+service and pages on this computer (`cargo build` first). It covers what no unit test can: sending
+the model back, revisions, a model that does not answer, Esc and more.
 
 `TITLES_PI_MODEL=<provider/model> cargo test -p titles real_pi -- --ignored --nocapture` names
 a few sample first messages with real pi and that model (the conversation-model namer).

@@ -16,7 +16,9 @@ All notable changes to PI-gui are listed here. The format follows
 - Deep search checks its reports: whether the links work and were read, what the sources say about
   the claims (the key ones in Standard, all of them from Thorough on), and which claims, also in
   tables and bullets, have no source that was read. What it finds goes back to the model once or
-  more, and a note says how the report did. A check that fails or is stopped says so.
+  more. A symbol below the report opens how it did: what was searched and read, how many claims are
+  backed, and what is still wrong, with the reasons and sources. A check that fails or is stopped
+  says so.
 - Only deep search's final report is written into the chat as the answer. Until then the chat shows
   the work: what was planned, searched, read and checked, and drafts as rows that open. If it is
   stopped, the latest complete draft is the answer, marked as not checked.
@@ -38,8 +40,9 @@ All notable changes to PI-gui are listed here. The format follows
   low and high as xhigh, it has off, low, medium and xhigh. Shift+Tab steps through the same ones.
 - Settings → Web search shows only what the chosen service needs: the SearXNG address, the Brave or
   the Tavily API key. The others keep what was entered. Searching the settings for one finds it.
-- The limits per message in Settings → Web search are behind a row that says what they are. Those
-  of deep search are gone: its effort is chosen in the message box.
+- Settings → Web search has two sections that open with a click on their title: Advanced search
+  options (the limits per message, and the text per page, now with sliders) and Advanced deep search
+  settings (what each effort level may and has to do, and how its report is checked).
 
 ## [0.4.9] - 2026-11-24
 
