@@ -1460,9 +1460,11 @@ mod tests {
     use gpui_kit::{AppContext as _, TestAppContext, VisualTestContext};
 
     use super::{
-        AppConfig, AppSettings, Path, SettingsView, choose_service, download_cancelled,
-        search_server, update_web, web_config,
+        AppConfig, AppSettings, Path, SettingsView, choose_service, update_web, web_config,
     };
+    // Only for the tests of the SearXNG that can be downloaded.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    use super::{download_cancelled, search_server};
     use crate::ui::dialog::testing as dialog;
 
     /// The Web search page, with its settings in `dir`.
