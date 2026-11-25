@@ -6,6 +6,8 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-11-25
+
 ### Added
 
 - SSH sessions can use the models of ChatGPT/Codex and GitHub Copilot logins, Google Vertex and
@@ -555,7 +557,8 @@ chats, skills and model management. Changes since the last private build:
 - A corrupt `hosts.json` is kept as a backup.
 - A remembered terminal height can no longer squeeze out the chat.
 
-[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/seba2390/pistachio/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/seba2390/pistachio/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/seba2390/pistachio/compare/v0.4.9...v0.5.0
 [0.4.9]: https://github.com/seba2390/pistachio/compare/v0.4.8...v0.4.9
