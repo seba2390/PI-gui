@@ -205,20 +205,21 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   through adding a new skill.
 - **Adding models**: "Add or change models…" in the model menu (or Settings → pi & models) starts
   with two choices. **Locally hosted model** asks whether it runs on this device or another one;
-  nothing is assumed to run anywhere. On the chosen device Ollama, LM Studio, llama.cpp and vLLM are
-  looked for on their usual ports (another device by its address, like `192.168.1.89`), and any
-  server is connected by its port or address (`192.168.1.89:8888`): which API it speaks (OpenAI's,
-  Anthropic's or Gemini's) is found out. **API provider model** lists pi's own providers, which
-  need only an API key (checked with the provider first, where it allows that) or a sign-in; then
-  all their models are in the menu. What is connected already is listed below the two choices. It is asked which models it has, and they are ticked in a
-  list; their context, longest answer and whether they think or see pictures are filled in as far
-  as the server says. Models can be tested with a short message before they are added, and added
-  by their ID when a server has no list. The same screens change and remove what is connected;
-  what they do not know of a provider or model in `models.json` stays as it is. The file can also
-  be edited as text, with validation. It is the one the session's pi reads (on the SSH host for
-  remote sessions); the previous version is kept as `models.json.bak-pistachio`. pi reads the file
-  only when it starts, so after saving it restarts on the same session (after the current turn, if
-  one is running) and selects the new model.
+  nothing is assumed to run anywhere. On the chosen device Ollama, LM Studio, llama.cpp and vLLM
+  are looked for on their usual ports (another device by its address, like `192.168.1.89`), and
+  any server is connected by its port or address (`192.168.1.89:8888`): which API it speaks
+  (OpenAI's, Anthropic's or Gemini's) is found out. **API provider model** lists pi's own
+  providers, which need only an API key (checked with the provider first, where it allows that) or
+  a sign-in; then all their models are in the menu. What is connected already is listed below the
+  two choices. A server is asked which models it has, and they are ticked in a list; their
+  context, longest answer and whether they think or see pictures are filled in as far as the
+  server says. Models can be tested with a short message before they are added, and added by their
+  ID when a server has no list. The same screens change and remove what is connected; what they do
+  not know of a provider or model in `models.json` stays as it is. The file can also be edited as
+  text, with validation. It is the one the session's pi reads (on the SSH host for remote
+  sessions); the previous version is kept as `models.json.bak-pistachio`. pi reads the file only
+  when it starts, so after saving it restarts on the same session (after the current turn, if one
+  is running) and selects the new model.
 - **Pictures**: when the agent reads an image, a thumbnail shows next to the call (the first two of
   an "Explored" group, with "+N"); pictures attached to a prompt show above it, with their file
   extension in a corner. Clicking one opens a full-window viewer: ← / → or the arrows browse all of

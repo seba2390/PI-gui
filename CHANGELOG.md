@@ -22,15 +22,13 @@ All notable changes to PI-gui are listed here. The format follows
 
 ### Changed
 
-- Adding models is new. It asks where the models run: Ollama and LM Studio on this computer are found
-  by themselves; Anthropic, OpenAI, Google, OpenRouter and 19 other providers need only an API key,
-  which is checked where the provider allows it; and for any other server the address is enough. Its
-  models are then ticked in a list, several at once, with their context and abilities filled in as
-  far as the server says. Connected servers and models can be changed and removed the same way, and
-  what else is in `models.json` stays.
-- The Models dialog starts with two choices: a locally hosted model, on this device or another one
-  (Ollama, LM Studio and other servers are looked for on the device that is chosen, never assumed
-  to run on this computer), or a model of an API provider. What is connected is listed below them.
+- Adding models is new. It starts with two choices: a locally hosted model, on this device or
+  another one (Ollama, LM Studio and other servers are looked for on the device that is chosen, and
+  for any other server its address is enough), or a model of an API provider (Anthropic, OpenAI,
+  Google, OpenRouter and 19 others need only an API key, which is checked where the provider allows
+  it). A server's models are ticked in a list, several at once, with their context and abilities
+  filled in as far as the server says. What is connected is listed below the two choices and can be
+  changed and removed the same way, and what else is in `models.json` stays.
 - The model menu scrolls when it has many models.
 
 ### Fixed
