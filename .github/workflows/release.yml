@@ -114,23 +114,45 @@ jobs:
           sudo apt-get install -y ./dist/*.deb
           dpkg -L pistachio
           test -x /usr/bin/pistachio
-      - name: Check that it opens on X11 and Wayland
-        run: |
-          sudo apt-get install -y --no-install-recommends \
-            xvfb x11-utils x11-apps imagemagick sway grim mesa-vulkan-drivers dbus
-          dbus-run-session -- script/check-linux-displays.sh /usr/bin/pistachio displays
           sudo apt-get remove -y pistachio
-      - uses: actions/upload-artifact@v7
-        # Not for a tag: every artifact of that run is published.
-        if: always() && !startsWith(github.ref, 'refs/tags/')
-        with:
-          name: check-displays-${{ matrix.arch }}
-          path: displays
-          if-no-files-found: ignore
       - uses: actions/upload-artifact@v7
         with:
           name: linux-${{ matrix.arch }}
           path: dist/*
+
+  # On a newer Ubuntu than the build's: the software renderer of 22.04 (Mesa 23.2) leaves the app's
+  # X11 window black. That of 24.04 does not.
+  linux-displays:
+    name: Linux (${{ matrix.arch }}) opens on X11 and Wayland
+    needs: linux
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: linux-${{ matrix.arch }}
+          path: dist
+      - name: Install
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ./dist/*.deb \
+            xvfb openbox x11-utils x11-apps imagemagick sway grim mesa-vulkan-drivers dbus \
+            fonts-dejavu-core
+      - run: dbus-run-session -- script/check-linux-displays.sh /usr/bin/pistachio displays
+      - uses: actions/upload-artifact@v7
+        # Not for a tag: every artifact of that run is published.
+        if: always() && !startsWith(github.ref, 'refs/tags/')
+        with:
+          name: displays-${{ matrix.arch }}
+          path: displays
+          if-no-files-found: ignore
 
   windows:
     name: Windows (x86_64)
@@ -169,7 +191,7 @@ jobs:
 
   publish:
     name: Publish release
-    needs: [macos, linux, windows]
+    needs: [macos, linux, linux-displays, windows]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     env:

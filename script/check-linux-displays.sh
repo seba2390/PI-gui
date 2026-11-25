@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Checks that the app opens its window on X11 and on Wayland, on virtual displays:
 #   script/check-linux-displays.sh /usr/bin/pistachio <folder for screenshots and logs>
-# Needs (Ubuntu): xvfb x11-utils x11-apps imagemagick sway grim mesa-vulkan-drivers dbus
+# Needs (Ubuntu 24.04 or newer): xvfb openbox x11-utils x11-apps imagemagick sway grim
+# mesa-vulkan-drivers dbus fonts-dejavu-core. Not as root (sway refuses).
 set -euo pipefail
 
 app=$1
@@ -50,8 +51,10 @@ echo "==> X11"
 Xvfb :97 -screen 0 1440x900x24 >"$out/xvfb.log" 2>&1 &
 pids+=($!)
 until_ok xdpyinfo -display :97 || die "Xvfb did not start"
+DISPLAY=:97 openbox >"$out/openbox.log" 2>&1 &
+pids+=($!)
 start_app x11 DISPLAY=:97
-x11_window() { xwininfo -display :97 -root -tree | grep -q '"pistachio" "pistachio"'; }
+x11_window() { xwininfo -display :97 -root -tree | grep -q '"Pistachio": ("pistachio" "pistachio")'; }
 until_ok x11_window || die "no window on X11"
 sleep 5
 kill -0 "$app_pid" 2>/dev/null || die "the app ended on X11"
@@ -63,7 +66,7 @@ echo 'output HEADLESS-1 resolution 1440x900' >"$out/sway.config"
 echo 'xwayland disable' >>"$out/sway.config"
 env -u DISPLAY -u WAYLAND_DISPLAY WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 \
   WLR_RENDERER=pixman SWAYSOCK="$XDG_RUNTIME_DIR/sway.sock" \
-  sway -c "$out/sway.config" >"$out/sway.log" 2>&1 &
+  sway --unsupported-gpu -c "$out/sway.config" >"$out/sway.log" 2>&1 &
 pids+=($!)
 export SWAYSOCK="$XDG_RUNTIME_DIR/sway.sock"
 until_ok swaymsg -t get_version || die "sway did not start"
@@ -76,9 +79,9 @@ kill -0 "$app_pid" 2>/dev/null || die "the app ended on Wayland"
 WAYLAND_DISPLAY="$wayland" grim "$out/wayland.png"
 cleanup
 
-# A window that stays empty is one color.
+# A window that stays empty is one color inside its frame.
 for name in x11 wayland; do
-  colors="$(identify -format '%k' "$out/$name.png")"
+  colors="$(convert "$out/$name.png" -gravity center -crop 1000x700+0+0 +repage -format '%k' info:)"
   echo "$name.png has $colors colors"
   [[ "$colors" -gt 50 ]] || die "nothing is drawn on $name"
 done
