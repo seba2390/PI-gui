@@ -12,7 +12,16 @@ use crate::ConfigError;
 pub struct KnownServer {
     pub label: &'static str,
     pub port: u16,
+    /// Where its API is.
+    path: &'static str,
+    /// The program on that port; `Other` when several listen there by default.
     pub kind: Kind,
+    /// How to get it to answer, for the ones many people use: these are also shown when they don't.
+    pub help: Option<Help>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Help {
     /// How to start it.
     pub start: &'static str,
     /// How to have it answer other devices too: by default some only answer their own.
@@ -23,30 +32,83 @@ pub const KNOWN_SERVERS: &[KnownServer] = &[
     KnownServer {
         label: "Ollama",
         port: 11434,
+        path: "/v1",
         kind: Kind::Ollama,
-        start: "Open Ollama, or run “ollama serve”.",
-        share: "Ollama only answers its own device unless it runs with OLLAMA_HOST=0.0.0.0.",
+        help: Some(Help {
+            start: "Open Ollama, or run “ollama serve”.",
+            share: "Ollama only answers its own device unless it runs with OLLAMA_HOST=0.0.0.0.",
+        }),
     },
     KnownServer {
         label: "LM Studio",
         port: 1234,
+        path: "/v1",
         kind: Kind::LmStudio,
-        start: "In LM Studio, open Developer and turn the server on.",
-        share: "In LM Studio's Developer settings, turn on “Serve on Local Network”.",
+        help: Some(Help {
+            start: "In LM Studio, open Developer and turn the server on.",
+            share: "In LM Studio's Developer settings, turn on “Serve on Local Network”.",
+        }),
     },
     KnownServer {
-        label: "llama.cpp",
+        label: "llama.cpp or MLX",
         port: 8080,
-        kind: Kind::LlamaCpp,
-        start: "Run “llama-server -m <model.gguf>”.",
-        share: "Start llama-server with “--host 0.0.0.0”.",
+        path: "/v1",
+        kind: Kind::Other,
+        help: Some(Help {
+            start: "Run “llama-server -m <model.gguf>” or “mlx_lm.server --model <model>”.",
+            share: "Start it with “--host 0.0.0.0”.",
+        }),
     },
     KnownServer {
         label: "vLLM",
         port: 8000,
-        kind: Kind::Vllm,
-        start: "Run “vllm serve <model>”.",
-        share: "Run “vllm serve <model>”; it answers other devices by default.",
+        path: "/v1",
+        kind: Kind::Other,
+        help: Some(Help {
+            start: "Run “vllm serve <model>”.",
+            share: "It answers other devices by default.",
+        }),
+    },
+    KnownServer {
+        label: "Jan",
+        port: 1337,
+        path: "/v1",
+        kind: Kind::Jan,
+        help: Some(Help {
+            start: "In Jan, open Settings → Local API Server and start the server.",
+            share: "In its Configuration, set “Server Host” to 0.0.0.0.",
+        }),
+    },
+    KnownServer {
+        label: "Docker Model Runner",
+        port: 12434,
+        path: "/engines/v1",
+        kind: Kind::Docker,
+        help: Some(Help {
+            start: "Run “docker desktop enable model-runner --tcp 12434”.",
+            share: "Docker Desktop only answers its own device.",
+        }),
+    },
+    KnownServer {
+        label: "SGLang",
+        port: 30000,
+        path: "/v1",
+        kind: Kind::SgLang,
+        help: None,
+    },
+    KnownServer {
+        label: "Lemonade",
+        port: 13305,
+        path: "/v1",
+        kind: Kind::Lemonade,
+        help: None,
+    },
+    KnownServer {
+        label: "KoboldCpp",
+        port: 5001,
+        path: "/v1",
+        kind: Kind::KoboldCpp,
+        help: None,
     },
 ];
 
@@ -58,8 +120,27 @@ impl KnownServer {
         } else {
             host.to_owned()
         };
-        format!("http://{host}:{}/v1", self.port)
+        format!("http://{host}:{}{}", self.port, self.path)
     }
+}
+
+/// The program that listens on the port of `base_url`, on one's own network: for servers that do
+/// not say what they are. `Other` when that can't be told.
+pub fn kind_on_port(base_url: &str) -> Kind {
+    if !is_private_url(base_url) {
+        return Kind::Other;
+    }
+    let rest = base_url
+        .split_once("://")
+        .map_or(base_url, |(_, rest)| rest);
+    let authority = rest.split('/').next().unwrap_or(rest);
+    let port = authority
+        .rsplit_once(':')
+        .and_then(|(_, port)| port.parse::<u16>().ok());
+    KNOWN_SERVERS
+        .iter()
+        .find(|server| Some(server.port) == port)
+        .map_or(Kind::Other, |server| server.kind)
 }
 
 /// The name of this device in addresses.
@@ -100,6 +181,10 @@ pub enum Kind {
     Vllm,
     SgLang,
     LlamaCpp,
+    Jan,
+    Docker,
+    Lemonade,
+    KoboldCpp,
     OpenRouter,
     Other,
 }
@@ -113,6 +198,10 @@ impl Kind {
             Self::Vllm => Some("vLLM"),
             Self::SgLang => Some("SGLang"),
             Self::LlamaCpp => Some("llama.cpp"),
+            Self::Jan => Some("Jan"),
+            Self::Docker => Some("Docker Model Runner"),
+            Self::Lemonade => Some("Lemonade"),
+            Self::KoboldCpp => Some("KoboldCpp"),
             Self::OpenRouter => Some("OpenRouter"),
             Self::Other => None,
         }
@@ -121,10 +210,7 @@ impl Kind {
     /// Whether it runs on one's own computers, where there often is no key. pi needs one all the
     /// same, so a dummy is written for it.
     pub fn is_local(self) -> bool {
-        matches!(
-            self,
-            Self::Ollama | Self::LmStudio | Self::Vllm | Self::SgLang | Self::LlamaCpp
-        )
+        !matches!(self, Self::OpenRouter | Self::Other)
     }
 }
 
@@ -423,6 +509,9 @@ fn kind_of(model: &Value) -> Kind {
         Some("vllm") => return Kind::Vllm,
         Some("sglang") => return Kind::SgLang,
         Some("llamacpp") => return Kind::LlamaCpp,
+        Some("docker") => return Kind::Docker,
+        Some("lemonade") => return Kind::Lemonade,
+        Some("koboldcpp") => return Kind::KoboldCpp,
         Some("library") => return Kind::Ollama,
         Some("organization_owner") => return Kind::LmStudio,
         _ => {}
@@ -908,7 +997,28 @@ mod tests {
         );
         assert_eq!(ollama.base_url("fd00::1"), "http://[fd00::1]:11434/v1");
         let ports: Vec<u16> = KNOWN_SERVERS.iter().map(|server| server.port).collect();
-        assert_eq!(ports, [11434, 1234, 8080, 8000]);
+        assert_eq!(
+            ports,
+            [11434, 1234, 8080, 8000, 1337, 12434, 30000, 13305, 5001]
+        );
+        assert_eq!(
+            KNOWN_SERVERS[5].base_url(THIS_DEVICE),
+            "http://localhost:12434/engines/v1"
+        );
+    }
+
+    #[test]
+    fn known_servers_by_their_port() {
+        for server in KNOWN_SERVERS {
+            for host in [THIS_DEVICE, "192.168.1.89", "fd00::1"] {
+                assert_eq!(kind_on_port(&server.base_url(host)), server.kind);
+            }
+        }
+        assert_eq!(kind_on_port("http://localhost:1337"), Kind::Jan);
+        // Several programs listen there by default.
+        assert_eq!(kind_on_port("http://localhost:8080/v1"), Kind::Other);
+        assert_eq!(kind_on_port("http://localhost/v1"), Kind::Other);
+        assert_eq!(kind_on_port("https://example.com:1337/v1"), Kind::Other);
     }
 
     #[test]

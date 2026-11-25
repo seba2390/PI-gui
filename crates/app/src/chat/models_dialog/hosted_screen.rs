@@ -1,6 +1,6 @@
 //! Locally hosted models: on this device or on another one. Nothing is assumed to run anywhere:
-//! once a device is chosen, Ollama, LM Studio, llama.cpp and vLLM are looked for on their usual
-//! ports there, and any server can also be connected by its address or port.
+//! once a device is chosen, Ollama, LM Studio and the other known servers are looked for on their
+//! usual ports there, and any server can also be connected by its address or port.
 
 use gpui_kit::component::button::Button;
 use gpui_kit::component::input::Input;
@@ -84,28 +84,40 @@ impl ModelsDialog {
                 .collect(),
             hint,
         });
-        for (ix, server) in KNOWN_SERVERS.iter().enumerate() {
-            let (server, pi, host) = (*server, place.pi.clone(), host.clone());
+        // An SSH server allows only so many commands at once (usually 10).
+        let at_once = match place.pi {
+            PiPlace::Local { .. } => KNOWN_SERVERS.len(),
+            PiPlace::Remote { .. } => 4,
+        };
+        for first in 0..at_once {
+            let (pi, host) = (place.pi.clone(), host.clone());
             let task = cx.spawn(async move |this, cx| {
-                let found = cx
-                    .background_executor()
-                    .spawn({
-                        let host = host.clone();
-                        async move { probe::find(&pi, &server, &host) }
-                    })
-                    .await;
-                let _ = this.update(cx, |this, cx| {
-                    // Another device may have been asked for since.
-                    if let Some(scan) = this.scan_of(device).as_mut()
-                        && scan.host == host
-                    {
-                        scan.servers[ix].1 = match found {
-                            Some((kind, models)) => Found::Running { kind, models },
-                            None => Found::Missing,
-                        };
-                        cx.notify();
-                    }
-                });
+                for (ix, server) in KNOWN_SERVERS
+                    .iter()
+                    .enumerate()
+                    .skip(first)
+                    .step_by(at_once)
+                {
+                    let found = cx
+                        .background_executor()
+                        .spawn({
+                            let (pi, host) = (pi.clone(), host.clone());
+                            async move { probe::find(&pi, server, &host) }
+                        })
+                        .await;
+                    let _ = this.update(cx, |this, cx| {
+                        // Another device may have been asked for since.
+                        if let Some(scan) = this.scan_of(device).as_mut()
+                            && scan.host == host
+                        {
+                            scan.servers[ix].1 = match found {
+                                Some((kind, models)) => Found::Running { kind, models },
+                                None => Found::Missing,
+                            };
+                            cx.notify();
+                        }
+                    });
+                }
             });
             self._tasks.push(task);
         }
@@ -179,9 +191,9 @@ impl ModelsDialog {
             Some(Found::Checking) | None => {}
             Some(Found::Missing) => {
                 // It may run by now.
-                scan.hint = Some(match device {
-                    Device::This => server.start.into(),
-                    Device::Other => format!("{} {}", server.start, server.share).into(),
+                scan.hint = server.help.map(|help| match device {
+                    Device::This => help.start.into(),
+                    Device::Other => format!("{} {}", help.start, help.share).into(),
                 });
                 let host = scan.host.clone();
                 self.scan(device, host, cx);
@@ -232,8 +244,8 @@ impl ModelsDialog {
             ));
         let below = match self.device {
             None => label(
-                "Ollama, LM Studio, llama.cpp, vLLM, or any server that speaks OpenAI's, \
-                 Anthropic's or Gemini's API.",
+                "Ollama, LM Studio, llama.cpp, MLX, vLLM, Jan, Docker Model Runner, or any server \
+                 that speaks OpenAI's, Anthropic's or Gemini's API.",
                 cx,
             )
             .into_any_element(),
@@ -290,9 +302,9 @@ impl ModelsDialog {
                     )),
             )
             .child(self.address_help(
-                "Without a port, Ollama, LM Studio, llama.cpp and vLLM are looked for on their \
-                 usual ports. With one, any server that speaks OpenAI's, Anthropic's or Gemini's \
-                 API.",
+                "Without a port, Ollama, LM Studio, llama.cpp, MLX, vLLM and others are looked for \
+                 on their usual ports. With one, any server that speaks OpenAI's, Anthropic's or \
+                 Gemini's API.",
                 cx,
             ));
         v_flex()
@@ -317,7 +329,7 @@ impl ModelsDialog {
         }
     }
 
-    /// The known servers on a device: Ollama and LM Studio always, the others when they answer.
+    /// The known servers on a device: the common ones always, the others when they answer.
     fn render_scan(&self, device: Device, scan: &Scan, cx: &mut Context<Self>) -> Div {
         let prefix = match device {
             Device::This => "local",
@@ -327,21 +339,24 @@ impl ModelsDialog {
             .servers
             .iter()
             .filter(|(server, found)| {
-                matches!(server.kind, Kind::Ollama | Kind::LmStudio)
-                    || matches!(found, Found::Running { .. })
+                server.help.is_some() || matches!(found, Found::Running { .. })
             })
             .map(|(server, found)| {
                 let server = *server;
-                let (name, end) = match *found {
-                    Found::Running { kind, models } => {
-                        (kind.label().unwrap_or(server.label), available(models, cx))
-                    }
+                let (name, end): (SharedString, _) = match *found {
+                    Found::Running { kind, models } => (
+                        kind.label().map_or_else(
+                            || format!("Server on port {}", server.port).into(),
+                            Into::into,
+                        ),
+                        available(models, cx),
+                    ),
                     Found::Checking => (
-                        server.label,
+                        server.label.into(),
                         label("Looking…", cx).flex_none().into_any_element(),
                     ),
                     Found::Missing => (
-                        server.label,
+                        server.label.into(),
                         label("Not running", cx).flex_none().into_any_element(),
                     ),
                 };

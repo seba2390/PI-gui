@@ -6,6 +6,19 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Adding a locally hosted model also shows llama.cpp, MLX, vLLM, Jan and Docker Model Runner, with how
+  to start them, next to Ollama and LM Studio. SGLang, Lemonade and KoboldCpp are found when they
+  run.
+- Settings → pi & models says "Startup model" instead of "Startup model (this computer)".
+
+### Fixed
+
+- The startup model can be any model pi has on this computer. Without an open session only the
+  current one could be chosen, and with a session on an SSH host that has models of its own, those
+  of the host.
+
 ## [0.5.3] - 2026-11-25
 
 ### Added

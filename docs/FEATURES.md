@@ -205,8 +205,9 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   through adding a new skill.
 - **Adding models**: "Add or change models…" in the model menu (or Settings → pi & models) starts
   with two choices. **Locally hosted model** asks whether it runs on this device or another one;
-  nothing is assumed to run anywhere. On the chosen device Ollama, LM Studio, llama.cpp and vLLM
-  are looked for on their usual ports (another device by its address, like `192.168.1.89`), and
+  nothing is assumed to run anywhere. On the chosen device Ollama, LM Studio, llama.cpp, MLX, vLLM,
+  Jan, Docker Model Runner, SGLang, Lemonade and KoboldCpp are looked for on their usual ports
+  (another device by its address, like `192.168.1.89`), and
   any server is connected by its port or address (`192.168.1.89:8888`): which API it speaks
   (OpenAI's, Anthropic's or Gemini's) is found out. **API provider model** lists pi's own
   providers, which need only an API key (checked with the provider first, where it allows that) or
