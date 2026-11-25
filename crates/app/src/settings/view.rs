@@ -12,26 +12,27 @@ use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::setting::{
     RenderOptions, SelectIndex, SettingField, SettingGroup, SettingItem, SettingPage, Settings,
 };
-use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex};
+use gpui_kit::component::{ActiveTheme as _, IconName, Sizable as _, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use pi_config::settings::{StartupDefaults, THINKING_LEVELS};
 use searxng::{Installed, Probe};
 
 use super::{AppSettings, StartMode, TextSize, ThemeChoice, local_search, web_advanced};
+use crate::chat::models_dialog::Open as ModelsOpen;
 use crate::code_colors::CodeColors;
 use crate::config::AppConfig;
 use crate::document_parsers::{DocumentParsers, document_parsers};
 use crate::remote_ui::SavedHostAction;
 use crate::search_server::{Running, SearchServerEvent, search_server};
 use crate::ui::spinner::IndicatorStyle;
-use crate::ui::{AppIcon, PiField, QuietButton as _, buttons};
+use crate::ui::{AppIcon, PiField};
 
 /// What the window does for the page (dialogs and connections live there).
 #[derive(Debug, Clone)]
 pub enum SettingsEvent {
-    AddModel,
-    EditModels,
+    /// Opens the dialog for this computer's models.
+    Models(ModelsOpen),
     Host(SavedHostAction),
     CheckForUpdates,
 }
@@ -68,6 +69,8 @@ pub struct SettingsView {
     tavily_key: Entity<InputState>,
     /// `(provider/id, label)` of the models the visible session knows, for the startup model.
     models: Vec<(SharedString, SharedString)>,
+    /// The providers in models.json on this computer.
+    pub(super) connected: super::models::Connected,
     /// `pi --version` of the configured `pi`, once known.
     pi_version: Option<String>,
     /// The sections of web search that few people change.
@@ -158,6 +161,7 @@ impl SettingsView {
             }),
         ];
         check_searxng(true, cx);
+        let connected = super::models::Connected::load(models.iter().map(|model| &*model.0), cx);
         let models = models
             .into_iter()
             .map(|(provider, id, name)| {
@@ -174,6 +178,7 @@ impl SettingsView {
             brave_key,
             tavily_key,
             models,
+            connected,
             pi_version: None,
             advanced: web_advanced::Advanced::default(),
             start_page: 0,
@@ -186,6 +191,12 @@ impl SettingsView {
         };
         this.probe_pi_version(cx);
         this
+    }
+
+    /// models.json was saved.
+    pub fn models_changed(&mut self, cx: &mut Context<Self>) {
+        self.connected.reload(cx);
+        cx.notify();
     }
 
     /// Asks the configured `pi` for its version in the background.
@@ -457,7 +468,7 @@ impl SettingsView {
         } else {
             "The model new sessions start with."
         };
-        let (weak_add, weak_edit) = (weak.clone(), weak.clone());
+        let weak_models = weak.clone();
         SettingPage::new("pi & models")
             .icon(AppIcon::PiLogo)
             .group(
@@ -538,33 +549,15 @@ impl SettingsView {
             )
             .group(
                 SettingGroup::new()
-                    .title("Models")
-                    .description("Custom models and providers in pi's models.json.")
-                    .item(SettingItem::render(move |_, _, cx| {
-                        let (weak_add, weak_edit) = (weak_add.clone(), weak_edit.clone());
-                        let accent = crate::theme::palette(cx).accent_icon;
-                        buttons()
-                            .child(
-                                Button::new("settings-add-model")
-                                    .form_other(cx)
-                                    .icon(Icon::from(IconName::Plus).text_color(accent))
-                                    .label("Add model…")
-                                    .on_click(move |_, _, cx| {
-                                        let _ = weak_add
-                                            .update(cx, |_, cx| cx.emit(SettingsEvent::AddModel));
-                                    }),
-                            )
-                            .child(
-                                Button::new("settings-edit-models")
-                                    .form_other(cx)
-                                    .icon(Icon::from(AppIcon::SquarePen).text_color(accent))
-                                    .label("Edit models.json…")
-                                    .on_click(move |_, _, cx| {
-                                        let _ = weak_edit
-                                            .update(cx, |_, cx| cx.emit(SettingsEvent::EditModels));
-                                    }),
-                            )
-                    })),
+                    .title("Connected models")
+                    .description(
+                        "The servers and API keys in models.json on this computer. Sign-ins with \
+                         /login are not listed here.",
+                    )
+                    .item(
+                        SettingItem::render(move |_, _, cx| super::models::rows(&weak_models, cx))
+                            .keywords(["API key", "provider", "server", "Ollama", "models.json"]),
+                    ),
             )
     }
 

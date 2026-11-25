@@ -1,6 +1,6 @@
 [package]
 name = "pi-config"
-description = "UI-agnostic editing of pi's models.json: parse, add providers and models, validate, presets"
+description = "UI-agnostic editing of pi's models.json: parse, add providers and models, validate; what model servers say about themselves"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -1,10 +1,12 @@
 //! Editing pi's configuration files for the GUI: `models.json` (custom providers and models,
-//! for the "Add model" dialog), skills ([`skills`]) and the project trust store ([`trust`]).
+//! for the Models dialog), skills ([`skills`]) and the project trust store ([`trust`]).
 //!
 //! The file is kept as a JSON value with its key order preserved, so adding a model changes
 //! only what was added. See pi's `docs/models.md` and `docs/models-configuration.md` for the
 //! format: `{"providers": {"<id>": {baseUrl, api, apiKey, models: [{id, …}]}}}`.
 
+pub mod providers;
+pub mod server;
 pub mod settings;
 pub mod skills;
 pub mod trust;
@@ -17,71 +19,10 @@ pub const SCHEMA_URL: &str = "https://pi.dev/schemas/models.schema.json";
 
 /// The APIs a custom provider can speak, with a short explanation for the UI.
 pub const APIS: &[(&str, &str)] = &[
-    (
-        "openai-completions",
-        "OpenAI-compatible chat completions (Ollama, LM Studio, vLLM, llama.cpp, OpenRouter, …)",
-    ),
-    ("openai-responses", "OpenAI Responses API"),
-    (
-        "anthropic-messages",
-        "Anthropic Messages API (and compatible proxies)",
-    ),
-    ("google-generative-ai", "Google Gemini API"),
-];
-
-/// A common server, to prefill the form.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Preset {
-    pub label: &'static str,
-    pub provider_id: &'static str,
-    pub provider_name: &'static str,
-    pub base_url: &'static str,
-    pub api: &'static str,
-    /// What to put in `apiKey` (a dummy for local servers, an environment variable otherwise).
-    pub api_key: &'static str,
-}
-
-pub const PRESETS: &[Preset] = &[
-    Preset {
-        label: "Ollama",
-        provider_id: "ollama",
-        provider_name: "Ollama",
-        base_url: "http://localhost:11434/v1",
-        api: "openai-completions",
-        api_key: "ollama",
-    },
-    Preset {
-        label: "LM Studio",
-        provider_id: "lmstudio",
-        provider_name: "LM Studio",
-        base_url: "http://localhost:1234/v1",
-        api: "openai-completions",
-        api_key: "lmstudio",
-    },
-    Preset {
-        label: "vLLM",
-        provider_id: "vllm",
-        provider_name: "vLLM",
-        base_url: "http://localhost:8000/v1",
-        api: "openai-completions",
-        api_key: "vllm",
-    },
-    Preset {
-        label: "llama.cpp server",
-        provider_id: "llamacpp",
-        provider_name: "llama.cpp",
-        base_url: "http://localhost:8080/v1",
-        api: "openai-completions",
-        api_key: "llamacpp",
-    },
-    Preset {
-        label: "OpenRouter",
-        provider_id: "openrouter",
-        provider_name: "OpenRouter",
-        base_url: "https://openrouter.ai/api/v1",
-        api: "openai-completions",
-        api_key: "$OPENROUTER_API_KEY",
-    },
+    ("openai-completions", "OpenAI chat completions"),
+    ("openai-responses", "OpenAI responses"),
+    ("anthropic-messages", "Anthropic messages"),
+    ("google-generative-ai", "Google Gemini"),
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -105,30 +46,45 @@ pub struct ProviderInfo {
     pub name: Option<String>,
     pub base_url: Option<String>,
     pub api: Option<String>,
-    pub has_key: bool,
     /// The `apiKey` value as written (a key, `$ENV` or `!command`).
     pub api_key: Option<String>,
-    pub model_ids: Vec<String>,
+    pub models: Vec<SavedModel>,
 }
 
 impl ProviderInfo {
-    /// The name to show: the display name, else the id.
+    /// The name to show: the display name, else pi's own for a built-in provider, else the id.
     pub fn label(&self) -> &str {
-        self.name.as_deref().unwrap_or(&self.id)
+        self.name
+            .as_deref()
+            .or_else(|| providers::built_in(&self.id).map(|provider| provider.label))
+            .unwrap_or(&self.id)
+    }
+
+    /// pi's own provider of this name, when the file does no more than give it a key.
+    pub fn built_in(&self) -> Option<&'static providers::BuiltIn> {
+        providers::built_in(&self.id)
+            .filter(|_| self.base_url.is_none() && self.api.is_none() && self.models.is_empty())
     }
 }
 
-/// A provider to create along with the model.
+/// A model in the file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavedModel {
+    pub spec: ModelSpec,
+    /// Its own address, when it is not the provider's.
+    pub base_url: Option<String>,
+}
+
+/// What the form sets of a provider. Empty text leaves the field out.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct NewProvider {
-    pub id: String,
+pub struct ProviderSpec {
     pub name: String,
     pub base_url: String,
     pub api: String,
     pub api_key: String,
 }
 
-/// A model to add.
+/// What the form sets of a model.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ModelSpec {
     pub id: String,
@@ -238,110 +194,142 @@ impl ModelsFile {
                     name: text("name"),
                     base_url: text("baseUrl"),
                     api: text("api"),
-                    has_key: text("apiKey").is_some(),
                     api_key: text("apiKey"),
-                    model_ids: provider
+                    models: provider
                         .get("models")
                         .and_then(Value::as_array)
-                        .map(|models| {
-                            models
-                                .iter()
-                                .filter_map(|model| model.get("id")?.as_str().map(str::to_owned))
-                                .collect()
-                        })
+                        .map(|models| models.iter().filter_map(saved_model).collect())
                         .unwrap_or_default(),
                 }
             })
             .collect()
     }
 
-    /// Adds `model` to provider `provider_id` (an entry with the same id is replaced, as pi
-    /// itself would). With `new_provider`, the provider is created first (its id must not be
-    /// in the file yet; it may name a built-in provider, which pi then extends).
-    pub fn add_model(
-        &mut self,
-        provider_id: &str,
-        new_provider: Option<&NewProvider>,
-        model: &ModelSpec,
-    ) -> Result<(), ConfigError> {
-        let provider_id = provider_id.trim();
-        if provider_id.is_empty() || provider_id.chars().any(char::is_whitespace) {
+    /// The `providers` object, made if there is none.
+    fn providers_mut(&mut self) -> Result<&mut Map<String, Value>, ConfigError> {
+        self.doc
+            .entry("providers")
+            .or_insert_with(|| Value::Object(Map::new()))
+            .as_object_mut()
+            .ok_or_else(|| ConfigError::Invalid("\"providers\" must be an object.".into()))
+    }
+
+    fn provider_mut(&mut self, id: &str) -> Result<&mut Map<String, Value>, ConfigError> {
+        self.providers_mut()?
+            .get_mut(id)
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| {
+                ConfigError::Invalid(format!("There is no provider \"{id}\" in models.json."))
+            })
+    }
+
+    /// Adds a provider with a server of its own, which must not be in the file yet.
+    pub fn add_provider(&mut self, id: &str, spec: &ProviderSpec) -> Result<(), ConfigError> {
+        let id = id.trim();
+        if id.is_empty() || id.chars().any(char::is_whitespace) || id.contains('/') {
             return Err(ConfigError::Invalid(
                 "The provider ID must be a single word, like \"ollama\".".into(),
             ));
         }
-        let model_id = model.id.trim();
-        if model_id.is_empty() {
-            return Err(ConfigError::Invalid("Enter the model ID.".into()));
-        }
-        let providers = self
-            .doc
-            .entry("providers")
-            .or_insert_with(|| Value::Object(Map::new()));
-        let Some(providers) = providers.as_object_mut() else {
-            return Err(ConfigError::Invalid(
-                "\"providers\" must be an object.".into(),
-            ));
-        };
-        if let Some(new) = new_provider {
-            if providers.contains_key(provider_id) {
-                return Err(ConfigError::Invalid(format!(
-                    "A provider \"{provider_id}\" already exists; choose it instead."
-                )));
-            }
-            let base_url = new.base_url.trim();
-            if base_url.is_empty() {
-                return Err(ConfigError::Invalid(
-                    "Enter the server's base URL, like http://localhost:11434/v1.".into(),
-                ));
-            }
-            if !(base_url.starts_with("http://") || base_url.starts_with("https://")) {
-                return Err(ConfigError::Invalid(
-                    "The base URL must start with http:// or https://.".into(),
-                ));
-            }
-            let mut provider = Map::new();
-            if !new.name.trim().is_empty() {
-                provider.insert("name".into(), new.name.trim().into());
-            }
-            provider.insert("baseUrl".into(), base_url.trim_end_matches('/').into());
-            let api = if new.api.trim().is_empty() {
-                "openai-completions"
-            } else {
-                new.api.trim()
-            };
-            provider.insert("api".into(), api.into());
-            if !new.api_key.trim().is_empty() {
-                provider.insert("apiKey".into(), new.api_key.trim().into());
-            }
-            provider.insert("models".into(), Value::Array(Vec::new()));
-            providers.insert(provider_id.to_owned(), Value::Object(provider));
-        }
-        let Some(provider) = providers
-            .get_mut(provider_id)
-            .and_then(Value::as_object_mut)
-        else {
+        if self.providers_mut()?.contains_key(id) {
             return Err(ConfigError::Invalid(format!(
-                "There is no provider \"{provider_id}\" in models.json."
+                "There already is a provider \"{id}\". Choose another ID."
             )));
-        };
-        let models = provider
-            .entry("models")
-            .or_insert_with(|| Value::Array(Vec::new()));
-        let Some(models) = models.as_array_mut() else {
-            return Err(ConfigError::Invalid(format!(
-                "\"models\" of provider \"{provider_id}\" must be a list."
-            )));
-        };
-        let entry = model_entry(model_id, model);
-        match models
-            .iter_mut()
-            .find(|existing| existing.get("id").and_then(Value::as_str) == Some(model_id))
+        }
+        if spec.base_url.trim().is_empty() {
+            return Err(ConfigError::Invalid("Enter the server's address.".into()));
+        }
+        self.providers_mut()?
+            .insert(id.to_owned(), Value::Object(Map::new()));
+        let added = self.set_provider(id, spec);
+        if added.is_err() {
+            self.providers_mut()?.shift_remove(id);
+        }
+        added
+    }
+
+    /// Sets the fields of a provider that is in the file, keeping all others.
+    pub fn set_provider(&mut self, id: &str, spec: &ProviderSpec) -> Result<(), ConfigError> {
+        let base_url = spec.base_url.trim().trim_end_matches('/');
+        if !(base_url.is_empty()
+            || base_url.starts_with("http://")
+            || base_url.starts_with("https://"))
         {
-            Some(existing) => *existing = entry,
-            None => models.push(entry),
+            return Err(ConfigError::Invalid(
+                "The address must start with http:// or https://.".into(),
+            ));
+        }
+        let provider = self.provider_mut(id)?;
+        set_text(provider, "name", &spec.name);
+        set_text(provider, "baseUrl", base_url);
+        set_text(provider, "api", &spec.api);
+        set_text(provider, "apiKey", &spec.api_key);
+        Ok(())
+    }
+
+    /// Sets the key of a provider, which is added if it is not in the file: pi's own ones need
+    /// no more than that. Without a key, the provider goes when there is nothing else in it.
+    pub fn set_key(&mut self, id: &str, key: &str) -> Result<(), ConfigError> {
+        let providers = self.providers_mut()?;
+        let provider = providers
+            .entry(id)
+            .or_insert_with(|| Value::Object(Map::new()))
+            .as_object_mut()
+            .ok_or_else(|| ConfigError::Invalid(format!("Provider \"{id}\" must be an object.")))?;
+        set_text(provider, "apiKey", key);
+        if provider.is_empty() {
+            providers.shift_remove(id);
         }
         Ok(())
+    }
+
+    /// Removes a provider and its models.
+    pub fn remove_provider(&mut self, id: &str) {
+        if let Ok(providers) = self.providers_mut() {
+            providers.shift_remove(id);
+        }
+    }
+
+    /// Adds a model to a provider that is in the file, or sets the fields of the one with that
+    /// id, keeping all its others (how it thinks, what it costs, its own address).
+    pub fn set_model(&mut self, provider: &str, model: &ModelSpec) -> Result<(), ConfigError> {
+        let id = model.id.trim();
+        if id.is_empty() {
+            return Err(ConfigError::Invalid("Enter the model ID.".into()));
+        }
+        let models = self
+            .provider_mut(provider)?
+            .entry("models")
+            .or_insert_with(|| Value::Array(Vec::new()))
+            .as_array_mut()
+            .ok_or_else(|| {
+                ConfigError::Invalid(format!(
+                    "\"models\" of provider \"{provider}\" must be a list."
+                ))
+            })?;
+        let existing = models
+            .iter_mut()
+            .find(|existing| existing.get("id").and_then(Value::as_str) == Some(id))
+            .and_then(Value::as_object_mut);
+        match existing {
+            Some(entry) => set_model_fields(entry, model),
+            None => {
+                let mut entry = Map::new();
+                entry.insert("id".into(), id.into());
+                set_model_fields(&mut entry, model);
+                models.push(Value::Object(entry));
+            }
+        }
+        Ok(())
+    }
+
+    /// Removes a model from a provider.
+    pub fn remove_model(&mut self, provider: &str, id: &str) {
+        if let Ok(provider) = self.provider_mut(provider)
+            && let Some(models) = provider.get_mut("models").and_then(Value::as_array_mut)
+        {
+            models.retain(|model| model.get("id").and_then(Value::as_str) != Some(id));
+        }
     }
 
     /// The file's text: pretty-printed, two-space indent, trailing newline.
@@ -353,25 +341,72 @@ impl ModelsFile {
     }
 }
 
-fn model_entry(id: &str, model: &ModelSpec) -> Value {
-    let mut entry = Map::new();
-    entry.insert("id".into(), id.into());
-    if !model.name.trim().is_empty() {
-        entry.insert("name".into(), model.name.trim().into());
+fn set_text(object: &mut Map<String, Value>, key: &str, value: &str) {
+    let value = value.trim();
+    if value.is_empty() {
+        object.shift_remove(key);
+    } else {
+        object.insert(key.to_owned(), value.into());
     }
+}
+
+/// Sets what a [`ModelSpec`] says; what pi assumes anyway is left out.
+fn set_model_fields(entry: &mut Map<String, Value>, model: &ModelSpec) {
+    set_text(entry, "name", &model.name);
     if model.reasoning {
         entry.insert("reasoning".into(), true.into());
+    } else {
+        entry.shift_remove("reasoning");
     }
-    if model.images {
-        entry.insert("input".into(), json!(["text", "image"]));
+    if model.images != reads_images(entry) {
+        if model.images {
+            entry.insert("input".into(), json!(["text", "image"]));
+        } else {
+            entry.shift_remove("input");
+        }
     }
-    if let Some(window) = model.context_window {
-        entry.insert("contextWindow".into(), window.into());
+    for (key, value) in [
+        ("contextWindow", model.context_window),
+        ("maxTokens", model.max_tokens),
+    ] {
+        match value {
+            Some(value) => {
+                entry.insert(key.into(), value.into());
+            }
+            None => {
+                entry.shift_remove(key);
+            }
+        }
     }
-    if let Some(max) = model.max_tokens {
-        entry.insert("maxTokens".into(), max.into());
-    }
-    Value::Object(entry)
+}
+
+fn reads_images(entry: &Map<String, Value>) -> bool {
+    entry
+        .get("input")
+        .and_then(Value::as_array)
+        .is_some_and(|input| input.iter().any(|kind| kind.as_str() == Some("image")))
+}
+
+fn saved_model(value: &Value) -> Option<SavedModel> {
+    let entry = value.as_object()?;
+    let text = |key: &str| {
+        entry
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    };
+    Some(SavedModel {
+        spec: ModelSpec {
+            id: text("id")?,
+            name: text("name").unwrap_or_default(),
+            context_window: entry.get("contextWindow").and_then(Value::as_u64),
+            max_tokens: entry.get("maxTokens").and_then(Value::as_u64),
+            reasoning: entry.get("reasoning").and_then(Value::as_bool) == Some(true),
+            images: reads_images(entry),
+        },
+        base_url: text("baseUrl"),
+    })
 }
 
 /// `serde_json` appends " at line L column C"; the error type reports those separately.
@@ -382,58 +417,11 @@ fn strip_position(message: &str) -> String {
         .to_owned()
 }
 
-/// The URL that lists a server's models (`<base>/models`), for OpenAI-compatible servers.
-pub fn models_url(base_url: &str) -> String {
-    format!("{}/models", base_url.trim().trim_end_matches('/'))
-}
-
 /// An `apiKey` value that can be sent as is: not an environment reference (`$NAME`) or a
 /// command (`!cmd`), which pi resolves itself.
 pub fn literal_key(api_key: &str) -> Option<&str> {
     let key = api_key.trim();
     (!key.is_empty() && !key.starts_with('$') && !key.starts_with('!')).then_some(key)
-}
-
-/// Model IDs from a model-list response: `OpenAI` style (`{"data": [{"id"}]}`) or Ollama style
-/// (`{"models": [{"name"}]}`), sorted and without duplicates.
-pub fn parse_model_list(body: &str) -> Result<Vec<String>, ConfigError> {
-    let value: Value = serde_json::from_str(body).map_err(|_| {
-        let start: String = body.trim().chars().take(160).collect();
-        ConfigError::Invalid(if start.is_empty() {
-            "The server sent an empty reply.".to_owned()
-        } else {
-            format!("The server did not send a model list: {start}")
-        })
-    })?;
-    let list = value
-        .get("data")
-        .or_else(|| value.get("models"))
-        .and_then(Value::as_array)
-        .ok_or_else(|| {
-            let message = value
-                .pointer("/error/message")
-                .or_else(|| value.get("error"))
-                .and_then(Value::as_str)
-                .map_or_else(
-                    || "The reply has no model list.".to_owned(),
-                    |error| format!("The server answered: {error}"),
-                );
-            ConfigError::Invalid(message)
-        })?;
-    let mut ids: Vec<String> = list
-        .iter()
-        .filter_map(|model| {
-            model
-                .get("id")
-                .or_else(|| model.get("name"))
-                .or_else(|| model.get("model"))
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
-        .collect();
-    ids.sort();
-    ids.dedup();
-    Ok(ids)
 }
 
 #[cfg(test)]
@@ -449,7 +437,9 @@ mod tests {
       "apiKey": "secret",
       "compat": { "thinkingFormat": "openai" },
       "models": [
-        { "id": "qwen3.8-27b", "name": "Qwen", "baseUrl": "http://192.168.1.50:8890/v1" }
+        { "id": "qwen3.8-27b", "name": "Qwen", "baseUrl": "http://192.168.1.50:8890/v1",
+          "reasoning": true, "thinkingLevelMap": { "high": "xhigh" },
+          "input": ["text", "image"], "contextWindow": 262144 }
       ]
     }
   }
@@ -462,6 +452,14 @@ mod tests {
         }
     }
 
+    fn ids(file: &ModelsFile, provider: usize) -> Vec<String> {
+        file.providers()[provider]
+            .models
+            .iter()
+            .map(|model| model.spec.id.clone())
+            .collect()
+    }
+
     #[test]
     fn lists_providers() {
         let file = ModelsFile::parse(EXISTING).unwrap();
@@ -472,20 +470,29 @@ mod tests {
                 name: None,
                 base_url: Some("http://192.168.1.50:8888/v1".into()),
                 api: Some("openai-completions".into()),
-                has_key: true,
                 api_key: Some("secret".into()),
-                model_ids: vec!["qwen3.8-27b".into()],
+                models: vec![SavedModel {
+                    spec: ModelSpec {
+                        id: "qwen3.8-27b".into(),
+                        name: "Qwen".into(),
+                        context_window: Some(262_144),
+                        max_tokens: None,
+                        reasoning: true,
+                        images: true,
+                    },
+                    base_url: Some("http://192.168.1.50:8890/v1".into()),
+                }],
             }]
         );
         assert_eq!(file.providers()[0].label(), "spark");
+        assert_eq!(file.providers()[0].built_in(), None);
     }
 
     #[test]
-    fn adds_to_an_existing_provider_keeping_everything_else() {
+    fn adds_models_keeping_everything_else() {
         let mut file = ModelsFile::parse(EXISTING).unwrap();
-        file.add_model(
+        file.set_model(
             "spark",
-            None,
             &ModelSpec {
                 id: "inkling-2-mini".into(),
                 name: "Inkling".into(),
@@ -496,49 +503,58 @@ mod tests {
             },
         )
         .unwrap();
+        assert_eq!(ids(&file, 0), ["qwen3.8-27b", "inkling-2-mini"]);
         let text = file.to_text();
-        let again = ModelsFile::parse(&text).unwrap();
-        assert_eq!(
-            again.providers()[0].model_ids,
-            ["qwen3.8-27b", "inkling-2-mini"]
-        );
         // Untouched keys stay, in their order.
-        let base = text.find("\"baseUrl\"").unwrap();
-        let compat = text.find("\"compat\"").unwrap();
-        assert!(base < compat, "{text}");
+        let places: Vec<_> = ["baseUrl", "compat", "thinkingLevelMap", "inkling"]
+            .iter()
+            .map(|key| text.find(key).unwrap())
+            .collect();
+        assert!(places.is_sorted(), "{text}");
         assert!(text.contains(r#""thinkingFormat": "openai""#));
-        assert!(
-            text.contains(
-                r#""input": [
-            "text",
-            "image"
-          ]"#
-            ),
-            "{text}"
-        );
         assert!(text.contains(r#""contextWindow": 131072"#));
         assert!(!text.contains("maxTokens"));
         assert!(text.ends_with("}\n"));
+        assert!(file.set_model("nope", &model("x")).is_err());
+        assert!(file.set_model("spark", &model(" ")).is_err());
+    }
 
-        // Same id again replaces the entry.
-        file.add_model("spark", None, &model("inkling-2-mini"))
-            .unwrap();
-        let providers = file.providers();
-        assert_eq!(providers[0].model_ids, ["qwen3.8-27b", "inkling-2-mini"]);
-        assert!(!file.to_text().contains("Inkling"));
+    #[test]
+    fn changes_models_keeping_what_the_form_does_not_set() {
+        let mut file = ModelsFile::parse(EXISTING).unwrap();
+        let mut spec = file.providers()[0].models[0].spec.clone();
+        // Nothing changed: nothing changes.
+        file.set_model("spark", &spec).unwrap();
+        assert_eq!(file, ModelsFile::parse(EXISTING).unwrap());
+
+        spec.name = "Qwen 3.8".into();
+        spec.context_window = None;
+        spec.reasoning = false;
+        spec.images = false;
+        file.set_model("spark", &spec).unwrap();
+        let text = file.to_text();
+        assert!(text.contains(r#""high": "xhigh""#), "{text}");
+        assert!(text.contains("8890"), "{text}");
+        assert!(!text.contains("contextWindow") && !text.contains("reasoning"));
+        assert!(!text.contains("\"input\""));
+        assert_eq!(file.providers()[0].models[0].spec, spec);
+        file.remove_model("spark", "qwen3.8-27b");
+        assert_eq!(ids(&file, 0), [""; 0]);
+        file.remove_provider("spark");
+        assert_eq!(file.providers(), Vec::new());
     }
 
     #[test]
     fn creates_providers_and_files() {
         let mut file = ModelsFile::parse("").unwrap();
-        let new = NewProvider {
-            id: "ollama".into(),
+        let spec = ProviderSpec {
             name: "Ollama".into(),
             base_url: "http://localhost:11434/v1/".into(),
-            api: String::new(),
+            api: "openai-completions".into(),
             api_key: "ollama".into(),
         };
-        file.add_model("ollama", Some(&new), &model("qwen2.5-coder:7b"))
+        file.add_provider("ollama", &spec).unwrap();
+        file.set_model("ollama", &model("qwen2.5-coder:7b"))
             .unwrap();
         let text = file.to_text();
         assert!(
@@ -550,30 +566,53 @@ mod tests {
             Some("http://localhost:11434/v1")
         );
         assert_eq!(provider.api.as_deref(), Some("openai-completions"));
-        assert_eq!(provider.model_ids, ["qwen2.5-coder:7b"]);
+        assert_eq!(ids(&file, 0), ["qwen2.5-coder:7b"]);
+        // Creating it again is refused.
+        assert!(file.add_provider("ollama", &spec).is_err());
+        file.set_provider(
+            "ollama",
+            &ProviderSpec {
+                name: String::new(),
+                ..spec
+            },
+        )
+        .unwrap();
+        assert_eq!(file.providers()[0].label(), "ollama");
+        assert_eq!(ids(&file, 0), ["qwen2.5-coder:7b"]);
+    }
 
-        // Creating it again is refused; a missing provider without details too.
-        assert!(file.add_model("ollama", Some(&new), &model("x")).is_err());
-        assert!(file.add_model("nope", None, &model("x")).is_err());
+    #[test]
+    fn built_in_providers_need_only_a_key() {
+        let mut file = ModelsFile::parse(EXISTING).unwrap();
+        file.set_key("openrouter", "sk-1").unwrap();
+        let provider = file.providers().pop().unwrap();
+        assert_eq!(provider.label(), "OpenRouter");
+        assert_eq!(provider.built_in().unwrap().id, "openrouter");
+        assert!(
+            file.to_text()
+                .contains("\"openrouter\": {\n      \"apiKey\": \"sk-1\"\n    }")
+        );
+        file.set_key("openrouter", "").unwrap();
+        assert_eq!(file, ModelsFile::parse(EXISTING).unwrap());
+        // What else is there stays.
+        file.set_key("spark", "").unwrap();
+        assert_eq!(file.providers()[0].api_key, None);
+        assert_eq!(ids(&file, 0), ["qwen3.8-27b"]);
     }
 
     #[test]
     fn rejects_bad_input() {
         let mut file = ModelsFile::default();
-        let new = NewProvider {
-            id: "p".into(),
+        let spec = ProviderSpec {
             base_url: "localhost:1234".into(),
-            ..NewProvider::default()
+            ..ProviderSpec::default()
         };
-        let error = file.add_model("p", Some(&new), &model("m")).unwrap_err();
+        let error = file.add_provider("p", &spec).unwrap_err();
         assert!(error.to_string().contains("http://"), "{error}");
-        assert!(file.add_model("p q", Some(&new), &model("m")).is_err());
-        assert!(file.add_model("p", Some(&new), &model(" ")).is_err());
-        let no_url = NewProvider {
-            id: "p".into(),
-            ..NewProvider::default()
-        };
-        assert!(file.add_model("p", Some(&no_url), &model("m")).is_err());
+        assert_eq!(file.providers(), Vec::new(), "not half added");
+        assert!(file.add_provider("p q", &spec).is_err());
+        assert!(file.add_provider("p/q", &spec).is_err());
+        assert!(file.add_provider("p", &ProviderSpec::default()).is_err());
     }
 
     #[test]
@@ -609,20 +648,7 @@ mod tests {
     }
 
     #[test]
-    fn model_lists_and_keys() {
-        assert_eq!(
-            parse_model_list(r#"{"object":"list","data":[{"id":"b"},{"id":"a"},{"id":"a"}]}"#)
-                .unwrap(),
-            ["a", "b"]
-        );
-        assert_eq!(
-            parse_model_list(r#"{"models":[{"name":"qwen2.5:7b"}]}"#).unwrap(),
-            ["qwen2.5:7b"]
-        );
-        let error = parse_model_list(r#"{"error":{"message":"invalid key"}}"#).unwrap_err();
-        assert!(error.to_string().contains("invalid key"));
-        assert!(parse_model_list("<html>").is_err());
-        assert_eq!(models_url("http://h:1/v1/"), "http://h:1/v1/models");
+    fn keys() {
         assert_eq!(literal_key(" sk-1 "), Some("sk-1"));
         assert_eq!(literal_key("$OPENAI_API_KEY"), None);
         assert_eq!(literal_key("!pass show x"), None);

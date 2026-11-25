@@ -6,10 +6,26 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Settings → pi & models lists the servers and API keys that are connected, and whether the servers
+  answer. Clicking one changes or removes it.
+- Models can be tested with a short message before they are added.
+
+### Changed
+
+- Adding models is new. It asks where the models run: Ollama and LM Studio on this computer are found
+  by themselves; Anthropic, OpenAI, Google, OpenRouter and 19 other providers need only an API key,
+  which is checked where the provider allows it; and for any other server the address is enough. Its
+  models are then ticked in a list, several at once, with their context and abilities filled in as
+  far as the server says. Connected servers and models can be changed and removed the same way, and
+  what else is in `models.json` stays.
+- The model menu scrolls when it has many models.
+
 ### Fixed
 
-- Long names in the model menu, and long texts in the provider and API menus of "Add model", fade
-  out at the menu's edge. Before, they were drawn past it.
+- Long names in the model menu fade out at the menu's edge, also in the menus for adding models.
+  Before, they were drawn past it.
 
 ## [0.5.2] - 2026-11-25
 

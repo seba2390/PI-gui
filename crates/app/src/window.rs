@@ -23,6 +23,7 @@ use crate::actions::{
     ResumeSession, ShowChatMode, ShowCodeMode, ShowDiff, ShowFiles, ToggleRightPanel,
     ToggleSidebar, ToggleTerminal, WINDOW_CONTEXT,
 };
+use crate::chat::models_dialog::Open as ModelsOpen;
 use crate::chat::session::PiSession;
 use crate::chat::{ChatEvent, ChatView, ComposerEvent, Draft};
 use crate::config::AppConfig;
@@ -609,12 +610,16 @@ impl MainWindow {
                         skills.update(cx, |skills, cx| skills.start_new(window, cx));
                     }
                 }
-                "add-model" => drop(self.open_models_dialog(false, window, cx)),
-                "add-provider" => {
-                    let dialog = self.open_models_dialog(false, window, cx);
-                    dialog.update(cx, |dialog, cx| dialog.start_with_new_provider(cx));
+                "models" => self.open_models_dialog(ModelsOpen::Start, None, window, cx),
+                "edit-models" => self.open_models_dialog(ModelsOpen::Json, None, window, cx),
+                other if other.starts_with("models-provider:") => {
+                    let open = ModelsOpen::Provider(other["models-provider:".len()..].to_owned());
+                    self.open_models_dialog(open, None, window, cx);
                 }
-                "edit-models" => drop(self.open_models_dialog(true, window, cx)),
+                other if other.starts_with("models-server:") => {
+                    let open = ModelsOpen::Server(other["models-server:".len()..].to_owned());
+                    self.open_models_dialog(open, None, window, cx);
+                }
                 other if other.starts_with("ssh:") => {
                     let alias = other.trim_start_matches("ssh:").to_owned();
                     let host = add_alias_host(alias, cx);
@@ -1482,8 +1487,9 @@ impl MainWindow {
                     self.moving = Some(self.chat.entity_id());
                 }
                 ComposerEvent::ManageHosts => self.open_manage_hosts(window, cx),
-                ComposerEvent::AddModel { edit_json } => {
-                    drop(self.open_models_dialog(*edit_json, window, cx));
+                ComposerEvent::Models => {
+                    let host = self.models_host(cx);
+                    self.open_models_dialog(ModelsOpen::Start, host, window, cx);
                 }
             },
         }
@@ -1564,47 +1570,71 @@ impl MainWindow {
         });
     }
 
-    /// "Add model" / "Edit models.json" for the pi the visible session runs (here, or on its
-    /// SSH host when pi there uses the host's own models). After saving, pi restarts on the
-    /// same session to load the file.
+    /// The SSH host whose own models the visible session's pi uses; `None` when they are this
+    /// computer's.
+    fn models_host(&self, cx: &App) -> Option<HostId> {
+        self.host(cx)
+            .filter(|host| !crate::hosts::hosts(cx).read(cx).uses_local_models(host))
+    }
+
+    /// The Models dialog, for this computer's models or those of `host`. After saving, pi restarts
+    /// on the same session to load the file.
     fn open_models_dialog(
         &mut self,
-        edit_json: bool,
+        open: ModelsOpen,
+        host: Option<HostId>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Entity<crate::chat::models_dialog::ModelsDialog> {
-        use crate::chat::models_dialog::{ModelsDialog, ModelsDialogEvent, ModelsTab};
-        // pi on a host that uses this computer's models gets them from here: edit these.
-        let host = self
-            .host(cx)
-            .filter(|host| !crate::hosts::hosts(cx).read(cx).uses_local_models(host));
+    ) {
+        use crate::chat::models_dialog::{ModelsDialog, ModelsDialogEvent};
         let title = match &host {
             Some(host) => format!("Models on {}", crate::hosts::hosts(cx).read(cx).label(host)),
             None => "Models".to_owned(),
         };
-        let tab = if edit_json {
-            ModelsTab::Json
-        } else {
-            ModelsTab::Form
-        };
-        let dialog = cx.new(|cx| ModelsDialog::new(host, tab, window, cx));
+        // The visible session's pi reads this file.
+        let visible = !self.welcome && self.models_host(cx) == host;
+        let mut available = HashMap::new();
+        if visible {
+            for model in self.chat.read(cx).session().read(cx).models() {
+                *available.entry(model.provider.clone()).or_insert(0) += 1;
+            }
+        }
+        let can_sign_in = visible && self.folder_tools(cx);
+        let dialog = cx.new(|cx| ModelsDialog::new(host, open, available, can_sign_in, window, cx));
         self.dialog_subscription = Some(cx.subscribe_in(
             &dialog,
             window,
-            |this, _, event: &ModelsDialogEvent, window, cx| {
-                let ModelsDialogEvent::Saved { select } = event;
+            move |this, _, event: &ModelsDialogEvent, window, cx| {
                 window.close_dialog(cx);
-                this.reload_models(select.clone(), ReloadReason::Models, window, cx);
+                match event {
+                    ModelsDialogEvent::Saved { select, note } => {
+                        if let Some(note) = note {
+                            window.push_notification(note.clone(), cx);
+                        }
+                        if let Some((settings, _)) = &this.settings {
+                            settings.update(cx, SettingsView::models_changed);
+                        }
+                        if visible {
+                            this.reload_models(select.clone(), ReloadReason::Models, window, cx);
+                        }
+                    }
+                    ModelsDialogEvent::SignIn(provider) => {
+                        this.close_settings(cx);
+                        let login = OpenLogin {
+                            logout: false,
+                            provider: Some(provider.clone()),
+                        };
+                        this.open_login(&login, window, cx);
+                    }
+                }
             },
         ));
-        let view = dialog.clone();
         open_form_dialog(None, window, cx, move |dialog_view, _, _| {
             dialog_view
                 .title(title.clone())
                 .w(px(600.))
-                .child(view.clone())
+                .child(dialog.clone())
         });
-        dialog
     }
 
     /// pi reads models.json only when it starts: restart the visible session's pi (resuming
@@ -1825,8 +1855,7 @@ impl MainWindow {
         cx: &mut Context<Self>,
     ) {
         match event {
-            SettingsEvent::AddModel => drop(self.open_models_dialog(false, window, cx)),
-            SettingsEvent::EditModels => drop(self.open_models_dialog(true, window, cx)),
+            SettingsEvent::Models(open) => self.open_models_dialog(open.clone(), None, window, cx),
             SettingsEvent::Host(action) => self.on_saved_host_action(action, window, cx),
             SettingsEvent::CheckForUpdates => self.check_for_updates(true, window, cx),
         }

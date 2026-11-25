@@ -151,7 +151,7 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
     `~/.pistachio/agent` (written again when your models, logins or settings here change);
     the host's own `~/.pi` is not changed, and its extensions, skills, prompts and themes are
     linked in. If a host does not allow port forwarding, pi there uses its own models and
-    the model menu says why. "Add model" in a remote session edits this computer's models.
+    the model menu says why. Adding models in a remote session edits this computer's models.
   - Passwords, key passphrases and one-time codes are asked for in the app (ssh's
     `SSH_ASKPASS`); nothing is stored. Unknown host keys are shown for confirmation; a changed
     host key is explained, and you can remove the old key and confirm the new one.
@@ -190,14 +190,20 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   skill folders are not touched). They show read-only on the Skills page under "Comes with
   Pistachio", also before a session is open. So far there is one, `add-skill`, which walks pi
   through adding a new skill.
-- **Add model**: the model picker under the composer ends with "Add model…" and "Edit
-  models.json…". The form adds a custom model to pi's `models.json`, to a provider already in
-  the file or a new one (presets for Ollama, LM Studio, vLLM, llama.cpp and OpenRouter; any
-  OpenAI-, Anthropic- or Gemini-compatible endpoint), and can list the server's models to pick
-  from. The other tab edits the file directly, with validation. It is the file the session's pi
-  reads (on the SSH host for remote sessions); the previous version is kept as
-  `models.json.bak-pistachio`. pi reads the file only when it starts, so after saving it restarts
-  on the same session (after the current turn, if one is running) and selects the new model.
+- **Adding models**: "Add or change models…" in the model menu (or Settings → pi & models) asks
+  where the models run. Model servers on this computer are found by themselves (Ollama and LM
+  Studio; llama.cpp, vLLM and others on their usual ports). pi's own providers need only an API
+  key (checked with the provider first, where it allows that) or a sign-in; then all their models
+  are in the menu. For another server its address is enough: which API it speaks (OpenAI's,
+  Anthropic's or Gemini's) is found out. It is asked which models it has, and they are ticked in a
+  list; their context, longest answer and whether they think or see pictures are filled in as far
+  as the server says. Models can be tested with a short message before they are added, and added
+  by their ID when a server has no list. The same screens change and remove what is connected;
+  what they do not know of a provider or model in `models.json` stays as it is. The file can also
+  be edited as text, with validation. It is the one the session's pi reads (on the SSH host for
+  remote sessions); the previous version is kept as `models.json.bak-pistachio`. pi reads the file
+  only when it starts, so after saving it restarts on the same session (after the current turn, if
+  one is running) and selects the new model.
 - **Pictures**: when the agent reads an image, a thumbnail shows next to the call (the first two of
   an "Explored" group, with "+N"); pictures attached to a prompt show above it, with their file
   extension in a corner. Clicking one opens a full-window viewer: ← / → or the arrows browse all of
@@ -371,7 +377,7 @@ mouse.
   notifications for chats working in the background.
 - **pi & models:** which `pi` to run (`PISTACHIO_PI_BIN` still wins), the model and thinking
   level pi starts with (saved in pi's own `settings.json`, like `/settings` in the terminal),
-  and shortcuts to add models or edit `models.json`.
+  and what is connected (with whether its server answers) to add to, change or remove.
 - **Web search:** the search service (DuckDuckGo, SearXNG, Brave or Tavily) and the address or
   API key the chosen one needs (keys are stored only on this computer) or a SearXNG on this
   computer, whether new chats search and with how much effort, limits

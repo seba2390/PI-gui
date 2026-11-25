@@ -9,6 +9,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
+use std::time::Duration;
 
 use gpui_kit::App;
 use remote::{HostId, Ssh};
@@ -170,18 +171,170 @@ impl PiPlace {
         }
     }
 
-    /// GETs `url` with curl there (so `localhost` is the machine pi uses); the API key goes
-    /// through stdin, never on a command line.
-    pub fn fetch(&self, url: &str, key: Option<&str>) -> Result<String, String> {
-        let header = key
-            .map(|key| format!("Authorization: Bearer {key}\n"))
-            .unwrap_or_default();
-        let script = "command -v curl >/dev/null 2>&1 || { echo 'curl is not installed' >&2; exit 1; }\n\
-                      curl -sS -m 8 -H @- \"$1\"";
-        self.run_script(script, &[url], Some(header.into_bytes()))
-            .map(|stdout| String::from_utf8_lossy(&stdout).into_owned())
-            .map_err(|error| error.trim_start_matches("curl: ").to_owned())
+    /// Sends an HTTP request from there (so `localhost` is the machine pi uses): a GET, or a POST
+    /// of the JSON in `body`. Any status is a reply; what `Err` says is why there was none.
+    /// Redirects are not followed, so a key in `headers` goes nowhere else.
+    pub fn request(
+        &self,
+        url: &str,
+        headers: &[(&str, String)],
+        body: Option<&str>,
+        timeout: Duration,
+    ) -> Result<Reply, NoReply> {
+        match self {
+            Self::Local { .. } => request_here(url, headers, body, timeout),
+            Self::Remote { ssh, .. } => {
+                // Keys go through stdin, never on a command line.
+                let script = "command -v curl >/dev/null 2>&1 || { echo 'curl is not installed' >&2; exit 1; }\n\
+                              curl -sS -K -";
+                let config = curl_config(url, headers, body, timeout);
+                let output = ssh
+                    .exec_with_input(
+                        &workspace::with_args::<&str>(script, &[]),
+                        config.into_bytes(),
+                    )
+                    .map_err(|error| NoReply::of(&error.to_string()))?;
+                parse_curl(&String::from_utf8_lossy(&output))
+            }
+        }
     }
+}
+
+/// An HTTP reply.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reply {
+    pub status: u16,
+    pub body: String,
+}
+
+/// Why a request got no reply.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NoReply {
+    /// Nothing listens there.
+    Refused,
+    /// There is no such host.
+    UnknownHost,
+    Timeout,
+    Other(String),
+}
+
+impl NoReply {
+    fn of(error: &str) -> Self {
+        let lower = error.to_lowercase();
+        let has = |words: &[&str]| words.iter().any(|word| lower.contains(word));
+        if has(&[
+            "refused",
+            "couldn't connect",
+            "failed to connect",
+            "could not connect",
+        ]) {
+            Self::Refused
+        } else if has(&["resolve", "host not found", "lookup address", "nodename"]) {
+            Self::UnknownHost
+        } else if has(&["timeout", "timed out"]) {
+            Self::Timeout
+        } else {
+            Self::Other(error.trim().trim_start_matches("curl: ").to_owned())
+        }
+    }
+}
+
+/// The most that is read of a reply (a list of hundreds of models is 1 MB or so).
+const MAX_REPLY: u64 = 16 * 1024 * 1024;
+
+fn request_here(
+    url: &str,
+    headers: &[(&str, String)],
+    body: Option<&str>,
+    timeout: Duration,
+) -> Result<Reply, NoReply> {
+    let mut config = ureq::Agent::config_builder()
+        .timeout_global(Some(timeout))
+        .user_agent("pistachio")
+        .max_redirects(0)
+        .max_redirects_will_error(false)
+        .http_status_as_error(false);
+    if pi_config::server::is_private_url(url) {
+        config = config.proxy(None);
+    }
+    let agent = config.build().new_agent();
+    let fail = |error: ureq::Error| match error {
+        ureq::Error::ConnectionFailed => NoReply::Refused,
+        ureq::Error::HostNotFound => NoReply::UnknownHost,
+        ureq::Error::Timeout(_) => NoReply::Timeout,
+        error => NoReply::of(&error.to_string()),
+    };
+    let response = match body {
+        None => {
+            let mut request = agent.get(url);
+            for (name, value) in headers {
+                request = request.header(*name, value);
+            }
+            request.call()
+        }
+        Some(body) => {
+            let mut request = agent.post(url).header("Content-Type", "application/json");
+            for (name, value) in headers {
+                request = request.header(*name, value);
+            }
+            request.send(body)
+        }
+    };
+    let mut response = response.map_err(fail)?;
+    Ok(Reply {
+        status: response.status().as_u16(),
+        body: response
+            .body_mut()
+            .with_config()
+            .limit(MAX_REPLY)
+            .lossy_utf8(true)
+            .read_to_string()
+            .map_err(fail)?,
+    })
+}
+
+/// A request as a curl config file. Its output is the body, a line break and the status.
+fn curl_config(
+    url: &str,
+    headers: &[(&str, String)],
+    body: Option<&str>,
+    timeout: Duration,
+) -> String {
+    use std::fmt::Write as _;
+    let quoted = |text: &str| {
+        text.replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+            .replace('\r', "\\r")
+    };
+    let mut config = format!(
+        "url = \"{}\"\nmax-time = {}\nmax-filesize = {MAX_REPLY}\nwrite-out = \"\\n%{{http_code}}\"\n",
+        quoted(url),
+        timeout.as_secs().max(1),
+    );
+    if pi_config::server::is_private_url(url) {
+        config.push_str("noproxy = \"*\"\n");
+    }
+    for (name, value) in headers {
+        let _ = writeln!(config, "header = \"{name}: {}\"", quoted(value));
+    }
+    if let Some(body) = body {
+        let _ = writeln!(config, "header = \"Content-Type: application/json\"");
+        let _ = writeln!(config, "data-raw = \"{}\"", quoted(body));
+    }
+    config
+}
+
+fn parse_curl(output: &str) -> Result<Reply, NoReply> {
+    let (body, status) = output.rsplit_once('\n').unwrap_or(("", output));
+    let status = status
+        .trim()
+        .parse()
+        .map_err(|_| NoReply::Other("curl sent no reply".into()))?;
+    Ok(Reply {
+        status,
+        body: body.to_owned(),
+    })
 }
 
 fn dirs_home() -> Option<PathBuf> {
@@ -211,7 +364,94 @@ fn write_private(tmp: &Path, original: &Path, bytes: &[u8]) -> std::io::Result<(
 
 #[cfg(test)]
 mod tests {
-    use super::PiPlace;
+    use std::time::Duration;
+
+    use super::{NoReply, PiPlace, Reply, curl_config, parse_curl};
+
+    #[test]
+    fn requests_through_curl() {
+        let config = curl_config(
+            "http://10.0.0.1/v1/models",
+            &[("Authorization", "Bearer a\"b\\c".into())],
+            Some("{\"a\": \"x\\n\"}"),
+            Duration::from_secs(8),
+        );
+        assert_eq!(
+            config,
+            "url = \"http://10.0.0.1/v1/models\"\nmax-time = 8\nmax-filesize = 16777216\n\
+             write-out = \"\\n%{http_code}\"\nnoproxy = \"*\"\n\
+             header = \"Authorization: Bearer a\\\"b\\\\c\"\n\
+             header = \"Content-Type: application/json\"\n\
+             data-raw = \"{\\\"a\\\": \\\"x\\\\n\\\"}\"\n"
+        );
+        assert_eq!(
+            parse_curl("{\n}\n200"),
+            Ok(Reply {
+                status: 200,
+                body: "{\n}".into()
+            })
+        );
+        assert!(parse_curl("").is_err());
+        assert_eq!(
+            NoReply::of("curl: (7) Failed to connect to h port 1: Connection refused"),
+            NoReply::Refused
+        );
+        assert_eq!(
+            NoReply::of("curl: (6) Could not resolve host: h"),
+            NoReply::UnknownHost
+        );
+        assert_eq!(
+            NoReply::of("curl: (28) Operation timed out"),
+            NoReply::Timeout
+        );
+        assert_eq!(
+            NoReply::of("curl: (60) SSL certificate problem"),
+            NoReply::Other("(60) SSL certificate problem".into())
+        );
+    }
+
+    /// What curl makes of the config, where there is curl.
+    #[cfg(unix)]
+    #[test]
+    fn curl_reads_the_config() {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/x", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 4096];
+            let mut read = 0;
+            while !String::from_utf8_lossy(&request[..read]).contains("\"hi\\n\"") {
+                read += stream.read(&mut request[read..]).unwrap();
+            }
+            stream
+                .write_all(b"HTTP/1.1 418 X\r\nContent-Length: 2\r\n\r\nok")
+                .unwrap();
+            String::from_utf8_lossy(&request[..read]).into_owned()
+        });
+        let config = curl_config(
+            &url,
+            &[("x-api-key", "a\"b\\c".into())],
+            Some("{\"a\":\"hi\\n\"}"),
+            Duration::from_secs(5),
+        );
+        let place = PiPlace::Local {
+            agent_dir: std::env::temp_dir(),
+        };
+        let output = place
+            .run_script("curl -sS -K -", &[], Some(config.into_bytes()))
+            .unwrap();
+        assert_eq!(
+            parse_curl(&String::from_utf8_lossy(&output)),
+            Ok(Reply {
+                status: 418,
+                body: "ok".into()
+            })
+        );
+        let request = server.join().unwrap();
+        assert!(request.starts_with("POST /x "), "{request}");
+        assert!(request.contains("x-api-key: a\"b\\c\r\n"), "{request}");
+    }
 
     #[test]
     fn local_files_scripts_and_backups() {

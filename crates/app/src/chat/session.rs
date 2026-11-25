@@ -2857,7 +2857,7 @@ mod tests {
         assert_eq!(super::about(&file), "(Attached: paper.pdf)");
     }
 
-    /// The "Add model" flow against real pi (`pi` on PATH): pi starts without the model, the
+    /// Adding a model, against real pi (`pi` on PATH): pi starts without the model, the
     /// model is added to models.json the way the dialog does it, pi is restarted (as the
     /// window does after saving), and the new model gets selected.
     /// `cargo test -p pistachio -- --ignored added_model_is_loaded_and_selected`
@@ -2892,8 +2892,7 @@ mod tests {
         }));
 
         let mut file = pi_config::ModelsFile::parse("").unwrap();
-        let provider = pi_config::NewProvider {
-            id: "pistachio-test".into(),
+        let provider = pi_config::ProviderSpec {
             name: "Pistachio test".into(),
             base_url: "http://127.0.0.1:9/v1".into(),
             api: "openai-completions".into(),
@@ -2905,8 +2904,8 @@ mod tests {
             context_window: Some(32_000),
             ..pi_config::ModelSpec::default()
         };
-        file.add_model("pistachio-test", Some(&provider), &model)
-            .unwrap();
+        file.add_provider("pistachio-test", &provider).unwrap();
+        file.set_model("pistachio-test", &model).unwrap();
         std::fs::write(agent.path().join("models.json"), file.to_text()).unwrap();
         drop(before);
 

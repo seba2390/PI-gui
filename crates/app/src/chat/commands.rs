@@ -502,7 +502,7 @@ fn login(
 
 const CHAT_LOGIN: &str = "Signing in (and out) happens in pi's terminal, which chats don't have. \
     Switch to Code and use /login in a session there, or run `pi` in a terminal and type /login. \
-    For an API key or a model server of your own, choose “Add model…” in the model menu. \
+    For an API key or a model server of your own, choose “Add or change models…” in the model menu. \
     Afterwards, /reload makes this chat use it.";
 
 /// `/thinking <level>`: one of the levels pi accepts for the model (any of pi's while those are
