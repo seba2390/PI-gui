@@ -19,6 +19,7 @@ deepsearch = { path = "crates/deepsearch" }
 pi-config = { path = "crates/pi-config" }
 pi-rpc = { path = "crates/pi-rpc" }
 pi-sessions = { path = "crates/pi-sessions" }
+python-env = { path = "crates/python-env" }
 remote = { path = "crates/remote" }
 searxng = { path = "crates/searxng" }
 transcript = { path = "crates/transcript" }

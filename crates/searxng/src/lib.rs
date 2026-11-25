@@ -13,7 +13,6 @@
 //! - `port`: the port of the running server, for the processes that search.
 
 pub mod catalog;
-mod fetch;
 mod install;
 mod probe;
 mod server;
@@ -27,22 +26,4 @@ use std::path::{Path, PathBuf};
 /// The folder of SearXNG in web search's settings folder.
 pub fn root_in(deepsearch_dir: &Path) -> PathBuf {
     deepsearch_dir.join("searxng")
-}
-
-/// Network settings the programs started here keep from the app's environment.
-fn network_env() -> impl Iterator<Item = (&'static str, std::ffi::OsString)> {
-    [
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "ALL_PROXY",
-        "NO_PROXY",
-        "http_proxy",
-        "https_proxy",
-        "all_proxy",
-        "no_proxy",
-        "SSL_CERT_FILE",
-        "SSL_CERT_DIR",
-    ]
-    .into_iter()
-    .filter_map(|name| Some((name, std::env::var_os(name)?)))
 }

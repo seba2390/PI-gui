@@ -1,6 +1,6 @@
-//! Downloading and unpacking a pinned archive.
+//! Downloading pinned files, and unpacking archives.
 
-use std::io::Read as _;
+use std::io::{Read as _, Write as _};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -22,6 +22,87 @@ pub enum ChecksumOf {
     Tar,
 }
 
+fn agent() -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_connect(Some(Duration::from_secs(20)))
+        .timeout_recv_response(Some(Duration::from_secs(30)))
+        .user_agent("pistachio")
+        .build()
+        .new_agent()
+}
+
+/// A file to download, and what it must be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Pinned<'a> {
+    pub url: &'a str,
+    pub size: u64,
+    pub sha256: &'a str,
+}
+
+/// Downloads `file` to `path` if it has the size and checksum. Reports the bytes received so far.
+pub fn download_file(
+    file: Pinned<'_>,
+    path: &Path,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(u64),
+) -> Result<(), InstallError> {
+    let url = file.url;
+    let failed = |error: &dyn std::fmt::Display| {
+        InstallError::Failed(format!("Downloading {url} failed: {error}"))
+    };
+    if cancel.load(Ordering::Relaxed) {
+        return Err(InstallError::Cancelled);
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| failed(&error))?;
+    }
+    let mut response = agent().get(url).call().map_err(|error| failed(&error))?;
+    let mut reader = response
+        .body_mut()
+        .with_config()
+        .limit(file.size + 1)
+        .reader();
+    let mut out = std::fs::File::create(path).map_err(|error| failed(&error))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; 256 * 1024];
+    let mut received = 0u64;
+    let mut reported = Instant::now();
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(InstallError::Cancelled);
+        }
+        let n = match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(n) => n,
+            // Larger than it should be: the limit was reached.
+            Err(_) if received >= file.size => {
+                received += 1;
+                break;
+            }
+            Err(error) => return Err(failed(&error)),
+        };
+        out.write_all(&buffer[..n])
+            .map_err(|error| failed(&error))?;
+        hasher.update(&buffer[..n]);
+        received += n as u64;
+        if reported.elapsed() >= Duration::from_millis(100) {
+            progress(received);
+            reported = Instant::now();
+        }
+    }
+    if received != file.size || hex(&hasher.finalize()) != file.sha256 {
+        return Err(mismatch(url));
+    }
+    progress(received);
+    Ok(())
+}
+
+fn mismatch(url: &str) -> InstallError {
+    InstallError::Failed(format!(
+        "{url} did not match its checksum, so it was not used; try again"
+    ))
+}
+
 /// Downloads `url` (a `.tar.gz`) and returns the tar it holds, if it has the checksum. Reports
 /// the bytes received so far.
 pub fn download_tar(
@@ -37,13 +118,7 @@ pub fn download_tar(
     if cancel.load(Ordering::Relaxed) {
         return Err(InstallError::Cancelled);
     }
-    let agent = ureq::Agent::config_builder()
-        .timeout_connect(Some(Duration::from_secs(20)))
-        .timeout_recv_response(Some(Duration::from_secs(30)))
-        .user_agent("pistachio")
-        .build()
-        .new_agent();
-    let mut response = agent.get(url).call().map_err(|error| failed(&error))?;
+    let mut response = agent().get(url).call().map_err(|error| failed(&error))?;
     let mut reader = response
         .body_mut()
         .with_config()
@@ -68,22 +143,17 @@ pub fn download_tar(
     }
     progress(archive.len() as u64);
 
-    let mismatch = || {
-        InstallError::Failed(format!(
-            "{url} did not match its checksum, so it was not used; try again"
-        ))
-    };
     let matches = |bytes: &[u8]| hex(&Sha256::digest(bytes)) == sha256;
     if of == ChecksumOf::Compressed && !matches(&archive) {
-        return Err(mismatch());
+        return Err(mismatch(url));
     }
     let mut tar = Vec::new();
     GzDecoder::new(archive.as_slice())
         .take(MAX_UNPACKED)
         .read_to_end(&mut tar)
-        .map_err(|_| mismatch())?;
+        .map_err(|_| mismatch(url))?;
     if of == ChecksumOf::Tar && !matches(&tar) {
-        return Err(mismatch());
+        return Err(mismatch(url));
     }
     Ok(tar)
 }
@@ -117,9 +187,14 @@ pub fn unpack(tar: &[u8], into: &Path, wanted: impl Fn(&Path) -> bool) -> std::i
             }
             entry.unpack(&target)?;
         }
-        // No links: neither archive needs one, and they could lead out of `into`.
+        // No links: no archive needs one, and they could lead out of `into`.
     }
     Ok(())
+}
+
+/// The SHA-256 of `bytes`, as text.
+pub fn sha256(bytes: &[u8]) -> String {
+    hex(&Sha256::digest(bytes))
 }
 
 pub fn hex(bytes: &[u8]) -> String {
@@ -132,7 +207,6 @@ pub fn hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write as _;
     use std::net::TcpListener;
 
     use flate2::Compression;
@@ -209,6 +283,33 @@ mod tests {
         let cancel = AtomicBool::new(true);
         let result = download_tar(&url, "", ChecksumOf::Tar, &cancel, &mut |_| {});
         assert!(matches!(result, Err(InstallError::Cancelled)));
+    }
+
+    #[test]
+    fn files_are_checked() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("models/a.bin");
+        let get = |size, sha256: &str, cancel| {
+            let url = serve(b"weights".to_vec());
+            let file = Pinned {
+                url: &url,
+                size,
+                sha256,
+            };
+            download_file(file, &path, &AtomicBool::new(cancel), &mut |_| {})
+        };
+        let sha256 = hex(&Sha256::digest(b"weights"));
+        get(7, &sha256, false).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"weights");
+        for (size, sha256) in [
+            (7, hex(&Sha256::digest(b"other"))),
+            (8, sha256.clone()),
+            (3, sha256.clone()),
+        ] {
+            let error = get(size, &sha256, false).unwrap_err();
+            assert!(error.to_string().contains("checksum"), "{error}");
+        }
+        assert_eq!(get(7, &sha256, true), Err(InstallError::Cancelled));
     }
 
     #[test]

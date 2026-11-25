@@ -1,16 +1,14 @@
 //! Downloading SearXNG and what it needs.
 
-use std::ffi::OsStr;
-use std::fmt;
 use std::fs;
-use std::io::Read as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::sync::atomic::AtomicBool;
+
+pub use python_env::InstallError;
+use python_env::fetch::{ChecksumOf, download_tar, unpack};
+use python_env::{Tools, io};
 
 use crate::catalog::{self, Platform};
-use crate::fetch::{ChecksumOf, download_tar, unpack};
 
 /// Written last into an installation: the [`catalog::revision`] it was made of.
 const MARKER: &str = ".installed";
@@ -58,23 +56,6 @@ impl Progress {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum InstallError {
-    Cancelled,
-    Failed(String),
-}
-
-impl fmt::Display for InstallError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Cancelled => f.write_str("cancelled"),
-            Self::Failed(error) => f.write_str(error),
-        }
-    }
-}
-
-impl std::error::Error for InstallError {}
-
 /// The parts of an installation.
 pub(crate) struct Layout {
     pub dir: PathBuf,
@@ -95,7 +76,7 @@ impl Layout {
     }
 
     pub fn python(&self) -> PathBuf {
-        self.python_dir().join("bin").join("python3")
+        python_env::python_in(&self.python_dir())
     }
 
     pub fn packages(&self) -> PathBuf {
@@ -124,10 +105,7 @@ pub fn installed(root: &Path) -> Installed {
 
 /// Deletes SearXNG and everything it kept. Stop it first.
 pub fn remove(root: &Path) -> std::io::Result<()> {
-    match fs::remove_dir_all(root) {
-        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
-        _ => Ok(()),
-    }
+    python_env::remove(root)
 }
 
 /// Downloads SearXNG into `root`, replacing one that is there (stop it first). Blocks.
@@ -144,7 +122,7 @@ pub fn install(
     let partial = root.join("partial");
     // What an interrupted download left.
     remove(&partial).map_err(io("Clearing", &partial))?;
-    let result = install_into(&partial, platform, cancel, progress).and_then(|()| {
+    let result = install_into(&partial, &platform, cancel, progress).and_then(|()| {
         let target = Layout::installed(root).dir;
         remove(&target).map_err(io("Replacing", &target))?;
         fs::rename(&partial, &target).map_err(io("Installing", &target))
@@ -167,18 +145,10 @@ fn install_into(
     let layout = Layout::new(dir.to_path_buf());
     // Not part of the installation: removed when it is complete.
     let tools = dir.join("tools");
-    fs::create_dir_all(&tools).map_err(io("Creating", &tools))?;
-
-    let tar = download_tar(
-        &platform.uv_url(),
-        platform.uv_sha256,
-        ChecksumOf::Compressed,
-        cancel,
-        &mut |bytes| report(Stage::Installer, bytes),
-    )?;
-    unpack(&tar, &tools, |path| path == Path::new("uv")).map_err(io("Unpacking", &tools))?;
-    drop(tar);
-    before += platform.uv_size;
+    let installer = Tools::download(&tools, platform.python, cancel, &mut |bytes| {
+        report(Stage::Installer, bytes);
+    })?;
+    before += platform.python.uv_size;
 
     let tar = download_tar(
         &catalog::searxng_url(),
@@ -200,34 +170,15 @@ fn install_into(
     before += catalog::SEARXNG_SIZE;
 
     report(Stage::Python, before);
-    let pythons = tools.join("pythons");
-    run(
-        uv(&tools)
-            .args(["python", "install", "--no-bin", "--install-dir"])
-            .arg(&pythons)
-            .arg(catalog::PYTHON_VERSION),
-        "Downloading Python",
-        cancel,
-    )?;
-    let python = only_python(&pythons).ok_or_else(|| {
-        InstallError::Failed("Downloading Python failed: it is not where it should be".into())
-    })?;
-    fs::rename(&python, layout.python_dir()).map_err(io("Installing", &python))?;
-    before += platform.python_size;
+    installer.python(&layout.python_dir())?;
+    before += platform.python.python_size;
 
     report(Stage::Packages, before);
-    let requirements = tools.join("requirements.txt");
-    fs::write(&requirements, catalog::REQUIREMENTS).map_err(io("Writing", &requirements))?;
-    run(
-        uv(&tools)
-            .args(["pip", "sync", "--require-hashes", "--only-binary", ":all:"])
-            .arg("--python")
-            .arg(layout.python())
-            .arg("--target")
-            .arg(layout.packages())
-            .arg(&requirements),
-        "Downloading the Python packages",
-        cancel,
+    installer.packages(
+        &layout.python_dir(),
+        catalog::REQUIREMENTS,
+        &layout.packages(),
+        &mut |_| {},
     )?;
     report(Stage::Packages, total);
 
@@ -242,91 +193,6 @@ fn frozen_version() -> String {
         "VERSION_STRING = \"{version}\"\nVERSION_TAG = \"{version}\"\nDOCKER_TAG = \"{version}\"\n\
          GIT_URL = \"https://github.com/searxng/searxng\"\nGIT_BRANCH = \"master\"\n"
     )
-}
-
-/// The Python folder in `dir` (beside it is a link with a shorter name).
-fn only_python(dir: &Path) -> Option<PathBuf> {
-    fs::read_dir(dir)
-        .ok()?
-        .flatten()
-        .find(|entry| {
-            entry.file_type().is_ok_and(|kind| kind.is_dir())
-                && entry.file_name().to_string_lossy().starts_with("cpython-")
-        })
-        .map(|entry| entry.path())
-}
-
-/// uv, kept away from the user's own uv, Pythons and settings.
-fn uv(tools: &Path) -> Command {
-    let mut command = Command::new(tools.join("uv"));
-    command
-        .env_clear()
-        .envs(crate::network_env())
-        .env("HOME", tools)
-        // On a Mac uv looks for a developer tool it can do without, and finding Apple's
-        // placeholder for it would open a window offering to install them.
-        .env(
-            "PATH",
-            if cfg!(target_os = "macos") {
-                tools.join("none").into_os_string()
-            } else {
-                OsStr::new("/usr/bin:/bin").to_owned()
-            },
-        )
-        .env("UV_NO_CONFIG", "1")
-        .env("UV_CACHE_DIR", tools.join("cache"))
-        .env("UV_PYTHON_INSTALL_DIR", tools.join("pythons"))
-        .env("UV_PYTHON_PREFERENCE", "only-managed")
-        .env("UV_NO_PROGRESS", "1")
-        .current_dir(tools)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped());
-    command
-}
-
-/// Runs `command` to its end, or kills it when cancelled.
-fn run(command: &mut Command, what: &str, cancel: &AtomicBool) -> Result<(), InstallError> {
-    let failed = |error: &str| InstallError::Failed(format!("{what} failed: {error}"));
-    let mut child = command
-        .spawn()
-        .map_err(|error| failed(&error.to_string()))?;
-    let mut stderr = child.stderr.take().expect("stderr is piped");
-    let reader = std::thread::spawn(move || {
-        let mut text = Vec::new();
-        let _ = stderr.read_to_end(&mut text);
-        String::from_utf8_lossy(&text).into_owned()
-    });
-    let status = loop {
-        if cancel.load(Ordering::Relaxed) {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(InstallError::Cancelled);
-        }
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
-            Err(error) => return Err(failed(&error.to_string())),
-        }
-    };
-    let text = reader.join().unwrap_or_default();
-    if status.success() {
-        return Ok(());
-    }
-    let error: Vec<_> = text
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with("warning:"))
-        .collect();
-    let last = &error[error.len().saturating_sub(4)..];
-    Err(failed(&match last {
-        [] => status.to_string(),
-        lines => lines.join(" "),
-    }))
-}
-
-fn io<'a>(what: &'a str, path: &'a Path) -> impl FnOnce(std::io::Error) -> InstallError + 'a {
-    move |error| InstallError::Failed(format!("{what} {} failed: {error}", path.display()))
 }
 
 #[cfg(test)]
@@ -367,29 +233,5 @@ mod tests {
         assert_eq!(result, Err(InstallError::Cancelled));
         assert_eq!(installed(dir.path()), Installed::Outdated);
         assert!(!dir.path().join("partial").exists());
-    }
-
-    #[test]
-    fn programs_are_stopped_or_say_why_they_failed() {
-        let sh = |script: &str| {
-            let mut command = Command::new("/bin/sh");
-            command
-                .args(["-c", script])
-                .stdout(Stdio::null())
-                .stderr(Stdio::piped());
-            command
-        };
-        let go = AtomicBool::new(false);
-        assert_eq!(run(&mut sh("exit 0"), "Trying", &go), Ok(()));
-        let script = "echo 'warning: minor' >&2; echo 'error: no network' >&2; exit 2";
-        let error = run(&mut sh(script), "Trying", &go).unwrap_err();
-        assert_eq!(error.to_string(), "Trying failed: error: no network");
-        let error = run(&mut sh("exit 3"), "Trying", &go).unwrap_err();
-        assert!(error.to_string().contains('3'), "{error}");
-        let stop = AtomicBool::new(true);
-        assert_eq!(
-            run(&mut sh("exec sleep 60"), "Trying", &stop),
-            Err(InstallError::Cancelled)
-        );
     }
 }

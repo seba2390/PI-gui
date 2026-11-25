@@ -7011,6 +7011,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 
 [[package]]
+name = "python-env"
+version = "0.4.9"
+dependencies = [
+ "flate2",
+ "pretty_assertions",
+ "sha2 0.10.9",
+ "tar",
+ "tempfile",
+ "ureq 3.5.2",
+]
+
+[[package]]
 name = "qoi"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7897,11 +7909,9 @@ checksum = "1c107b6f4780854c8b126e228ea8869f4d7b71260f962fefb57b996b8959ba6b"
 name = "searxng"
 version = "0.4.9"
 dependencies = [
- "flate2",
  "pretty_assertions",
+ "python-env",
  "serde_json",
- "sha2 0.10.9",
- "tar",
  "tempfile",
  "ureq 3.5.2",
 ]
