@@ -40,6 +40,7 @@ use super::document::{AttachedDocument, Reading};
 use super::file_picker::{self, FilePicker, Pick};
 use super::images;
 use super::mention::{self, History};
+use super::pdf_viewer;
 use super::session::{Lifecycle, PiSession, WebMode};
 use crate::config::{AppConfig, RecentFolders};
 use crate::theme::palette;
@@ -1685,7 +1686,10 @@ impl Composer {
                 this.attachments.retain(|a| a.order != order);
                 cx.notify();
             });
-            let card = attachment.card().render(remove, cx);
+            let show = cx.listener(move |this, _: &ClickEvent, window, cx| {
+                this.show_attachment(order, window, cx);
+            });
+            let card = attachment.card().render(remove, show, cx);
             cards.push((order, card.into_any_element()));
         }
         for loading in &self.loading {
@@ -1694,7 +1698,10 @@ impl Composer {
                 this.loading.retain(|loading| loading.order != order);
                 cx.notify();
             });
-            let card = loading.card().render(remove, cx);
+            let show = cx.listener(move |this, _: &ClickEvent, window, cx| {
+                this.show_attachment(order, window, cx);
+            });
+            let card = loading.card().render(remove, show, cx);
             cards.push((order, card.into_any_element()));
         }
         cards.sort_by_key(|(order, _)| *order);
@@ -1707,6 +1714,35 @@ impl Composer {
             .max_h(px(attachment_card::MAX_HEIGHT))
             .overflow_y_scroll()
             .children(cards.into_iter().map(|(_, card)| card))
+    }
+
+    /// Shows an attached picture or PDF file in its viewer.
+    fn show_attachment(&self, order: u64, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(loading) = self.loading.iter().find(|l| l.order == order) {
+            pdf_viewer::open(loading.path.clone(), window, cx);
+            return;
+        }
+        let Some(attachment) = self.attachments.iter().find(|a| a.order == order) else {
+            return;
+        };
+        if let Some(image) = &attachment.image {
+            let image = transcript::Image::new(&image.data, &image.mime_type);
+            images::open_viewer(Arc::new([image]), 0, window, cx);
+            return;
+        }
+        // Of a message that came back, only what is remembered is known.
+        let dir = &cx.global::<AppConfig>().documents_dir;
+        let remembered = || attached::original(dir, attachment.id.as_deref()?);
+        let path = Some(attachment.path.clone())
+            .filter(|path| path.is_file())
+            .or_else(remembered);
+        match path {
+            Some(path) => pdf_viewer::open(path, window, cx),
+            None => {
+                let name = &attachment.name;
+                window.push_notification(format!("{name} is not on this computer."), cx);
+            }
+        }
     }
 
     /// Attachments are still being read.
@@ -2363,6 +2399,7 @@ impl Loading {
             why: None,
             left_out: false,
             reading: true,
+            can_show: is_pdf(&self.path),
         }
     }
 }
@@ -2379,6 +2416,7 @@ impl Attachment {
             why,
             left_out: matches!(self.inline, Some(InlineText::Skipped(_))),
             reading: false,
+            can_show: self.image.is_some() || is_pdf(Path::new(self.name.as_ref())),
         }
     }
 
@@ -2426,6 +2464,10 @@ fn remembered_preview(dir: &Path, id: &str) -> Preview {
             .as_deref()
             .map_or(Preview::None, text_preview),
     }
+}
+
+fn is_pdf(path: &Path) -> bool {
+    documents::Kind::of(path) == Some(documents::Kind::Pdf)
 }
 
 fn text_preview(path: &Path) -> Preview {
@@ -3468,6 +3510,8 @@ mod draft_tests {
                 cards,
                 [(".pdf", "PDF"), (".txt", "Text"), (".jpg", "Image")]
             );
+            let shown: Vec<_> = attachments.iter().map(|a| a.card().can_show).collect();
+            assert_eq!(shown, [true, false, true]);
             assert!(matches!(&attachments[1].preview, Preview::Text(text) if text == "two\nlines"));
         });
     }

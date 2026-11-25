@@ -2,7 +2,8 @@
 //! reply on stdout ([`Reply`]).
 //!
 //! Commands: `parse` reads its input to the end; `watched` reads one line, and ends when its input
-//! does, which is how the app stops it ([`crate::client`]).
+//! does, which is how the app stops it ([`crate::client`]). `pages` draws the pages of a PDF file
+//! ([`crate::viewer`]).
 //!
 //! To try settings by hand, a path after the command prints the Markdown:
 //! `pistachio --documents-tool parse paper.pdf`.
@@ -13,7 +14,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::{Parser, config, read};
+use crate::{Parser, config, read, viewer};
 
 pub const FLAG: &str = "--documents-tool";
 pub(crate) const WATCHED: &str = "watched";
@@ -47,6 +48,10 @@ pub fn run_if_requested() -> Option<i32> {
         println!("\n{}", failure("the built-in reader cannot read it"));
         std::process::exit(1);
     }));
+    if command == viewer::serve::COMMAND {
+        viewer::serve::run();
+        return Some(0);
+    }
     let request = match &by_hand {
         Some(path) => Ok(Request { path: path.clone() }),
         None => request(&command),

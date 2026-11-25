@@ -19,7 +19,7 @@ const LOG_LINES: usize = 20;
 /// Why a parser with models did not get its turn ([`turn`]).
 pub(crate) const BUSY: &str = "it is busy with other documents";
 /// What a run leaves behind when it is killed is deleted after this long at the latest.
-const LEFT_OVER: Duration = Duration::from_secs(24 * 60 * 60);
+const LEFT_OVER: Duration = Duration::from_hours(24);
 
 /// Ends the parser and what it started when its standard input ends, which is when the app's
 /// helper does, however it ends.

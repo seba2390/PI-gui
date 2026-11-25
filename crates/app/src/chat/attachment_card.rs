@@ -44,12 +44,15 @@ pub struct Card {
     /// It does not go along with the prompt.
     pub left_out: bool,
     pub reading: bool,
+    /// Clicking its picture shows it.
+    pub can_show: bool,
 }
 
 impl Card {
     pub fn render(
         self,
         remove: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+        show: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
         cx: &App,
     ) -> Stateful<Div> {
         let theme = cx.theme();
@@ -76,7 +79,12 @@ impl Card {
             .border_1()
             .border_color(theme.border)
             .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
-            .child(self.picture(cx))
+            .child(self.picture(cx).id("picture").when(self.can_show, |this| {
+                this.debug_selector(|| "attachment-picture".into())
+                    .cursor_pointer()
+                    .hover(|style| style.border_color(theme.muted_foreground))
+                    .on_click(show)
+            }))
             .child(
                 v_flex()
                     .flex_1()

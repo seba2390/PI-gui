@@ -261,11 +261,20 @@ or takes too long, the built-in reader is used and the result says so.
 - **Chats:** the card of an attached PDF shows its first page with a spinner and “Reading…” until it
   is done; it can be removed meanwhile, and the message is not sent before. Once sent, its first
   page shows above the message, with “.pdf” on it (macOS, and Linux with poppler's `pdftoppm`;
-  otherwise a page with its name); clicking it opens the file. The text goes to the model with the
-  message but is not shown, and Edit and Retry keep it. A document of more than 256 KB of text is
-  shortened to its outline, its start and the parts that match your message, and the model is told.
-  With Docling, Word, PowerPoint and Excel files (`.docx`, `.pptx`, `.xlsx`) can be attached the
-  same way. Files on this computer attached to a session on an SSH host are read too.
+  otherwise a page with its name); clicking either shows the file in the viewer (below). The text
+  goes to the model with the message but is not shown, and Edit and Retry keep it. A document of
+  more than 256 KB of text is shortened to its outline, its start and the parts that match your
+  message, and the model is told. With Docling, Word, PowerPoint and Excel files (`.docx`, `.pptx`,
+  `.xlsx`) can be attached the same way. Files on this computer attached to a session on an SSH host
+  are read too.
+- **Viewer:** PDF files are shown in the app, drawn by [hayro](https://github.com/LaurenzV/hayro) in
+  a helper process that ends with the viewer. Only the pages you look at and their neighbors are
+  drawn. The sun or moon chooses light or dark pages (like the app until you choose; remembered):
+  dark ones keep the hue of colors, and leave photos and pages that are dark anyway as they are.
+  Links open web pages and mail, or lead to a place in the file; ← at the top, or ⌘[ , goes back.
+  Zoom with the buttons, ⌘+ / ⌘- / ⌘0 (fill the width) or a pinch; scroll with ↑ / ↓, Space, Page Up
+  / Down, Home / End, and ← / → for pages. Another button opens the file in your usual app, to
+  print, search or copy from it. Files protected with a password are not shown.
 - **Web search:** PDFs found on the web are read with the same parser; the model gets the passages
   that match, with tables kept whole.
 - **Code:** an attached PDF stays an `@path`. When pi reads a PDF, a small embedded extension returns

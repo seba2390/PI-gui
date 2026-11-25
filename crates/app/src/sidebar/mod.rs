@@ -1062,7 +1062,7 @@ mod tests {
 
     #[test]
     fn buckets_by_age() {
-        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(100 * 86_400);
+        let now = SystemTime::UNIX_EPOCH + Duration::from_hours(2400);
         let ago = |days: u64| now - Duration::from_secs(days * 86_400 + 60);
         assert_eq!(bucket(now, now), "Today");
         assert_eq!(bucket(ago(1), now), "Yesterday");

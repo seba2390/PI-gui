@@ -6,11 +6,18 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- PDF files open in a viewer in the app, as pictures do: click the page above a message or the
+  picture of what you attach. It opens at once and draws only the pages you look at. Links work, on
+  the web and within the file (with a way back). Pages are light or dark, with photos left as they
+  are. The keys scroll and zoom, and so do the trackpad and the buttons.
+
 ### Changed
 
 - The buttons that download models and document parsers have the download symbol.
 - PDF and other files attached to a chat show as small pages above the message, like pictures,
-  instead of their text in the message. Clicking a document opens it. Conversations are named after
+  instead of their text in the message. Clicking one shows or opens it. Conversations are named after
   the message, not the text of the file.
 - Pictures attached to a message say what kind of file they are in a corner, like the pages of files.
 - What you attach shows in the message box as cards before it is sent: a small picture of the file

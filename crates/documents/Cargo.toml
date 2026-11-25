@@ -14,6 +14,8 @@ serde.workspace = true
 serde_json.workspace = true
 # PDF text; small, and only used by the helper process.
 pdf-extract = "0.12.1"
+# Draws the pages of PDF files, in a helper process; pure Rust, on the CPU.
+hayro = "0.9.0"
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", default-features = false, features = ["process"] }

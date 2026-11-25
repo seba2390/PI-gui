@@ -11,7 +11,7 @@ use crate::process;
 use crate::ssh::{LOGIN_PATH, Ssh, script_result};
 
 /// Downloads can be slow; give up after this long.
-const INSTALL_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+const INSTALL_TIMEOUT: Duration = Duration::from_mins(15);
 
 const INSTALL_SCRIPT: &str = include_str!("scripts/install-pi.sh");
 

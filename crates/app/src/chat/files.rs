@@ -1,5 +1,5 @@
 //! Files attached to a prompt, whose text went along with it: small pages above the prompt, like
-//! its pictures. Clicking a document opens it.
+//! its pictures. Clicking a PDF shows it here, and another document opens it.
 
 use documents::{Kind, attached};
 use gpui_kit::component::tooltip::Tooltip;
@@ -8,6 +8,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use pi_sessions::prompt::AttachedFile;
 
+use super::pdf_viewer;
 use crate::config::AppConfig;
 use crate::theme::palette;
 
@@ -58,6 +59,9 @@ fn page(id: SharedString, file: &AttachedFile, dir: &std::path::Path, cx: &App) 
                 .as_deref()
                 .and_then(|id| attached::original(&dir, id));
             match path {
+                Some(path) if Kind::of(&path) == Some(Kind::Pdf) => {
+                    pdf_viewer::open(path, window, cx);
+                }
                 Some(path) if Kind::of(&path).is_some() => cx.open_with_system(&path),
                 // Opening another kind of file could run it.
                 Some(path) => cx.reveal_path(&path),

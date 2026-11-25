@@ -8,7 +8,7 @@
 //!
 //! The app and its pi extension ([`EXTENSION_SOURCE`], for Code sessions) read documents through
 //! [`cli`]: the app's own executable started with [`cli::FLAG`], so that a file that breaks its
-//! reader never takes the app down.
+//! reader never takes the app down. [`viewer`] shows PDF files the same way.
 //!
 //! Everything is below one folder ([`config::default_dir`]):
 //! - `config.json`: the settings;
@@ -29,6 +29,7 @@ pub mod helper;
 mod install;
 mod read;
 mod text;
+pub mod viewer;
 
 pub use catalog::Parser;
 pub use install::{Installed, Progress, Stage, install, installed, remove};

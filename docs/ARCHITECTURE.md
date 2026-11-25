@@ -34,6 +34,10 @@ document, with its own Python, packages and models, no network, a time limit, an
 group. It watches its standard input, so it also ends when the helper is killed. Parsers that load
 models take turns, across processes, because several would fill the memory.
 
+- The PDF viewer (`documents::viewer`) keeps one helper for as long as it shows a file: it asks for
+  one page at a time and gets its pixels and links. A page that breaks the helper, or takes too
+  long, is marked, and another helper draws the next one. Pages are laid out without drawing them
+  (`viewer::layout`), so only what is looked at is drawn and kept.
 - `web_fetch` turns the Markdown into blocks (`deepsearch::markdown`) and ranks passages as for any
   page.
 - Attachments in chats keep the Markdown until the message is sent; one that is too long is cut to

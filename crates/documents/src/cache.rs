@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 const MAX_FILES: usize = 24;
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
 /// A parser that failed gets another chance after this long.
-const RETRY: Duration = Duration::from_secs(10 * 60);
+const RETRY: Duration = Duration::from_mins(10);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

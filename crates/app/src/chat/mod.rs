@@ -14,6 +14,7 @@ mod images;
 mod math;
 pub(crate) mod mention;
 pub mod models_dialog;
+pub mod pdf_viewer;
 mod queued;
 mod report;
 mod rows;

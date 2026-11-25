@@ -542,7 +542,7 @@ fn root(argv: &[&str]) -> Result<String, String> {
     }
     let mut command = Command::new("pkexec");
     command.args(argv);
-    run(command, Duration::from_secs(15 * 60)).map_err(|error| {
+    run(command, Duration::from_mins(15)).map_err(|error| {
         if error.contains("exit status: 126") || error.contains("exit status: 127") {
             "The password prompt was dismissed.".to_owned()
         } else {
