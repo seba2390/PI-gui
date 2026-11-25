@@ -27,6 +27,10 @@ All notable changes to PI-gui are listed here. The format follows
 - The model menu of an SSH session leaves out models that only pi on the host knows about, and that
   this computer could not provide.
 
+### Fixed
+
+- Linux: the window is called Pistachio in title bars and task lists, no longer "Unnamed Window".
+
 ## [0.5.1] - 2026-11-25
 
 ### Added
