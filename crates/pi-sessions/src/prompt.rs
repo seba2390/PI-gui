@@ -24,10 +24,15 @@ pub struct AttachedFile {
 impl AttachedFile {
     /// The end of its name, in lower case and with the dot.
     pub fn extension(&self) -> Option<String> {
-        let (stem, extension) = self.name.rsplit_once('.')?;
-        let known = !stem.is_empty() && (1..=5).contains(&extension.chars().count());
-        known.then(|| format!(".{}", extension.to_lowercase()))
+        extension(&self.name)
     }
+}
+
+/// The end of the file name `name`, in lower case and with the dot.
+pub fn extension(name: &str) -> Option<String> {
+    let (stem, extension) = name.rsplit_once('.')?;
+    let known = !stem.is_empty() && (1..=5).contains(&extension.chars().count());
+    known.then(|| format!(".{}", extension.to_lowercase()))
 }
 
 /// A prompt as it was sent, taken apart.

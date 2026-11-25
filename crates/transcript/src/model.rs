@@ -99,6 +99,25 @@ impl Image {
             mime_type: mime_type.to_owned(),
         }
     }
+
+    /// The usual file extension of its format, with the dot.
+    pub fn extension(&self) -> Option<&'static str> {
+        image_extension(&self.mime_type)
+    }
+}
+
+/// The usual file extension of pictures of a MIME type, with the dot.
+pub fn image_extension(mime_type: &str) -> Option<&'static str> {
+    Some(match mime_type.to_ascii_lowercase().as_str() {
+        "image/png" => ".png",
+        "image/jpeg" | "image/jpg" => ".jpg",
+        "image/webp" => ".webp",
+        "image/gif" => ".gif",
+        "image/svg+xml" => ".svg",
+        "image/bmp" => ".bmp",
+        "image/tiff" => ".tiff",
+        _ => return None,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

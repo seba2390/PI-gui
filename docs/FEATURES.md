@@ -15,13 +15,14 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   transcripts: `cargo run --release -p transcript --example label_corpus -- <session.jsonl…>`.
 - Tools that run other tools (subagents, code mode) show that work inside their own row: a
   live step count while running, and every nested call and reply when expanded.
-- Composer: attachments, working-folder picker (a long name fades out), model and thinking
-  pickers (only the thinking levels that differ on the model), context-window wheel,
-  `/` command completion, inline `@file` completion (paths with spaces are quoted like pi does),
-  ↑ / ↓ through earlier prompts, and `!cmd` shell commands (with live output; Esc stops them).
-  Messages typed while pi starts, compacts or is busy sending are listed above the input as
-  “Waiting to send”, each with a cancel button. A message you have not sent stays with its
-  session while the app runs, also when you open another one.
+- Composer: attachments (cards with a small picture of the file, its extension and its name; a
+  spinner turns on those still being read), working-folder picker (a long name fades out), model and
+  thinking pickers (only the thinking levels that differ on the model), context-window wheel, `/`
+  command completion, inline `@file` completion (paths with spaces are quoted like pi does), ↑ / ↓
+  through earlier prompts, and `!cmd` shell commands (with live output; Esc stops them). Messages
+  typed while pi starts, compacts or is busy sending are listed above the input as “Waiting to
+  send”, each with a cancel button. A message you have not sent stays with its session while the app
+  runs, also when you open another one.
 - If pi stops (a crash or a failed start), the chat offers **Restart pi** on the same session;
   anything not yet sent, or refused by pi, goes back into the message box.
 - pi gets your login shell's environment (API keys, proxies, cloud settings), also when the app is
@@ -192,11 +193,11 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   reads (on the SSH host for remote sessions); the previous version is kept as
   `models.json.bak-pistachio`. pi reads the file only when it starts, so after saving it restarts
   on the same session (after the current turn, if one is running) and selects the new model.
-- **Pictures**: when the agent reads an image, a thumbnail shows next to the call (the first two
-  of an "Explored" group, with "+N"); pictures attached to a prompt show above it. Clicking one
-  opens a full-window viewer: ← / → or the arrows browse all of that call's, group's or
-  prompt's pictures, Esc closes it. pi's notes to the model about pictures it made smaller are not
-  shown.
+- **Pictures**: when the agent reads an image, a thumbnail shows next to the call (the first two of
+  an "Explored" group, with "+N"); pictures attached to a prompt show above it, with their file
+  extension in a corner. Clicking one opens a full-window viewer: ← / → or the arrows browse all of
+  that call's, group's or prompt's pictures, Esc closes it. pi's notes to the model about pictures
+  it made smaller are not shown.
 - **Working indicator**: a little green π with orbiting dots shows a working agent in the
   chat ("Working… 12s · esc to interrupt", centred) and before its name in the sidebar. Settings
   → Appearance → Working indicator picks the style, with a live preview.
@@ -257,14 +258,14 @@ small test document before it replaces an old one. Parsers run one process per d
 network, and for at most 10 minutes (2 for a PDF from the web). If the chosen one is missing, fails
 or takes too long, the built-in reader is used and the result says so.
 
-- **Chats:** an attached PDF shows “Reading…” until it is done; it can be removed meanwhile, and the
-  message is not sent before. Its first page shows above the message, with “.pdf” on it (macOS, and
-  Linux with poppler's `pdftoppm`; otherwise a page with its name); clicking it opens the file. The
-  text goes to the model with the message but is not shown, and Edit and Retry keep it. A document
-  of more than 256 KB of text is shortened to its outline, its start and the parts that match your
-  message, and the model is told. With Docling, Word, PowerPoint and Excel files (`.docx`, `.pptx`,
-  `.xlsx`) can be attached the same way. Files on this computer attached to a session on an SSH host
-  are read too.
+- **Chats:** the card of an attached PDF shows its first page with a spinner and “Reading…” until it
+  is done; it can be removed meanwhile, and the message is not sent before. Once sent, its first
+  page shows above the message, with “.pdf” on it (macOS, and Linux with poppler's `pdftoppm`;
+  otherwise a page with its name); clicking it opens the file. The text goes to the model with the
+  message but is not shown, and Edit and Retry keep it. A document of more than 256 KB of text is
+  shortened to its outline, its start and the parts that match your message, and the model is told.
+  With Docling, Word, PowerPoint and Excel files (`.docx`, `.pptx`, `.xlsx`) can be attached the
+  same way. Files on this computer attached to a session on an SSH host are read too.
 - **Web search:** PDFs found on the web are read with the same parser; the model gets the passages
   that match, with tables kept whole.
 - **Code:** an attached PDF stays an `@path`. When pi reads a PDF, a small embedded extension returns

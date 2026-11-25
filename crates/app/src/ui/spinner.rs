@@ -291,6 +291,50 @@ fn indicator_at(style: IndicatorStyle, seconds: f32, size: Pixels, color: Hsla) 
         .children(frame.dots.iter().filter(|d| !d.behind).map(dot))
 }
 
+/// A ring with an arc going round it, as it is now: something is being read. Views showing it
+/// repaint every [`FRAME`], except with reduced motion, where it stands still.
+pub fn ring(size: Pixels, color: Hsla, track: Hsla, cx: &App) -> Div {
+    const STROKE: Pixels = px(2.);
+    const LAP: f32 = 0.9;
+    let start = if cx.reduce_motion() {
+        -TAU / 4.
+    } else {
+        (clock() / LAP).fract() * TAU
+    };
+    div()
+        .relative()
+        .flex_none()
+        .size(size)
+        .rounded_full()
+        .border(STROKE)
+        .border_color(track)
+        .child(
+            canvas(
+                |_, _, _| {},
+                move |bounds, (), window, _| {
+                    // The canvas is inside the border, which the arc covers.
+                    let radius = bounds.size.width / 2. + STROKE / 2.;
+                    let at = |angle: f32| {
+                        bounds.center() + point(radius * angle.cos(), radius * angle.sin())
+                    };
+                    let mut arc = PathBuilder::stroke(STROKE);
+                    arc.move_to(at(start));
+                    arc.arc_to(
+                        point(radius, radius),
+                        px(0.),
+                        false,
+                        true,
+                        at(start + TAU * 0.3),
+                    );
+                    if let Ok(arc) = arc.build() {
+                        window.paint_path(arc, color);
+                    }
+                },
+            )
+            .size_full(),
+        )
+}
+
 /// The "Working…" label: plain `color`, or with the style's shimmer passing over it.
 pub fn working_label(style: IndicatorStyle, text: SharedString, color: Hsla) -> ShimmerLabel {
     label_at(style, clock(), text, color)

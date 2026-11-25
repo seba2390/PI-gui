@@ -4,7 +4,7 @@
 use std::time::Instant;
 
 use pi_rpc::protocol::{AgentMessage, Event, Incoming};
-use transcript::{BlockKind, ItemKind, Transcript};
+use transcript::{BlockKind, Image, ItemKind, Transcript};
 
 fn event(json: &str) -> Event {
     match Incoming::from_slice(json.as_bytes()).unwrap() {
@@ -105,4 +105,16 @@ fn history_keeps_tool_and_prompt_images() {
         tool_images(&history),
         [("/9j/4AAQ".to_owned(), "image/jpeg".to_owned())]
     );
+}
+
+#[test]
+fn pictures_know_their_extension() {
+    for (mime_type, extension) in [
+        ("image/png", Some(".png")),
+        ("image/JPEG", Some(".jpg")),
+        ("image/svg+xml", Some(".svg")),
+        ("application/pdf", None),
+    ] {
+        assert_eq!(Image::new("", mime_type).extension(), extension);
+    }
 }

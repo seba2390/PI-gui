@@ -1,5 +1,6 @@
 //! The chat column: transcript above, composer below.
 
+mod attachment_card;
 mod commands;
 pub mod composer;
 mod context_panel;

@@ -8,7 +8,8 @@
 use pi_sessions::Mode;
 use remote::HostId;
 use std::fmt::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
@@ -33,14 +34,16 @@ use gpui_kit::*;
 use pi_rpc::protocol::ImageContent;
 use pi_sessions::prompt;
 
+use super::attachment_card::{self, Card, Preview};
 use super::commands::{self, CommandOutcome, Suggestion, SuggestionList};
 use super::document::{AttachedDocument, Reading};
 use super::file_picker::{self, FilePicker, Pick};
+use super::images;
 use super::mention::{self, History};
 use super::session::{Lifecycle, PiSession, WebMode};
 use crate::config::{AppConfig, RecentFolders};
 use crate::theme::palette;
-use crate::ui::{AppIcon, FadingText, QuietButton as _};
+use crate::ui::{AppIcon, FadingText, QuietButton as _, spinner};
 use gpui_kit::component::WindowExt as _;
 
 actions!(
@@ -79,8 +82,11 @@ pub enum ComposerEvent {
 
 /// A file attached to the next prompt.
 struct Attachment {
+    /// Its place among the attachments and those still being read.
+    order: u64,
     path: PathBuf,
     name: SharedString,
+    preview: Preview,
     /// Images are sent as image content; other files as `@path` references,
     /// which is how pi's terminal refers to files.
     image: Option<ImageContent>,
@@ -106,12 +112,13 @@ impl InlineText {
     }
 }
 
-/// Local files being read to attach, which the composer may be emptied before.
+/// A local file being read to attach, which the composer may be emptied before.
 struct Loading {
-    id: u64,
-    paths: Vec<PathBuf>,
-    /// A document, which can take a while: it has a chip of its own.
-    document: Option<Reading>,
+    order: u64,
+    path: PathBuf,
+    preview: Preview,
+    /// Dropping it stops the reading of a document, which can take a while.
+    _document: Option<Reading>,
 }
 
 /// What is typed and attached in a composer but not sent.
@@ -162,7 +169,9 @@ pub struct Composer {
     attachments: Vec<Attachment>,
     /// Attachments still being read.
     loading: Vec<Loading>,
-    next_loading: u64,
+    next_attachment: u64,
+    /// Repaints the spinners while something is being read.
+    spinning: Option<Task<()>>,
     /// The attach popover's file list (searchable, indexed in the background).
     picker: Entity<ListState<FilePicker>>,
     picker_open: bool,
@@ -304,7 +313,8 @@ impl Composer {
             input,
             attachments: Vec::new(),
             loading: Vec::new(),
-            next_loading: 0,
+            next_attachment: 0,
+            spinning: None,
             picker,
             picker_open: false,
             context_open: false,
@@ -583,19 +593,29 @@ impl Composer {
         if replace {
             self.attachments.clear();
         }
+        let dir = cx.global::<AppConfig>().documents_dir.clone();
         for (file, block) in prompt.files {
-            self.attachments.push(Attachment {
+            let preview = match &file.id {
+                Some(id) => remembered_preview(&dir, id),
+                None => Preview::None,
+            };
+            self.attach(Attachment {
+                order: 0,
                 path: PathBuf::new(),
                 name: file.name.into(),
+                preview,
                 image: None,
                 inline: Some(InlineText::Sent(block.to_owned())),
                 id: file.id,
             });
         }
         for (index, image) in images.into_iter().enumerate() {
-            self.attachments.push(Attachment {
+            self.attach(Attachment {
+                order: 0,
                 path: PathBuf::new(),
                 name: format!("Image {}", index + 1).into(),
+                preview: images::from_base64(&image.data, &image.mime_type)
+                    .map_or(Preview::None, Preview::Image),
                 image: Some(image),
                 inline: None,
                 id: None,
@@ -636,7 +656,7 @@ impl Composer {
             attachments: std::mem::take(&mut self.attachments),
             unread: std::mem::take(&mut self.loading)
                 .into_iter()
-                .flat_map(|loading| loading.paths)
+                .map(|loading| loading.path)
                 .collect(),
             host: self.session.read(cx).host().cloned(),
         };
@@ -675,11 +695,11 @@ impl Composer {
             let on_host = draft.host.is_some() && attachment.inline.is_none();
             let sent = matches!(attachment.inline, Some(InlineText::Sent(_)));
             if attachment.image.is_some() || sent {
-                self.attachments.push(attachment);
+                self.attach(attachment);
             } else if on_host && moved {
                 left_behind.push(attachment.name);
             } else if on_host || attachment.inline.is_some() == inline {
-                self.attachments.push(attachment);
+                self.attach(attachment);
             } else {
                 local.push(attachment.path);
             }
@@ -727,10 +747,7 @@ impl Composer {
 
         // Still being read: the message waits here for it.
         if let Some(loading) = self.loading.first() {
-            let name = loading
-                .document
-                .as_ref()
-                .map_or("a file".into(), |document| document.name.clone());
+            let name = attachment_name(&loading.path);
             window.push_notification(
                 format!("Not sent yet: {name} is still being read. Wait for it, or remove it."),
                 cx,
@@ -894,9 +911,11 @@ impl Composer {
                     || path.display().to_string(),
                     |name| name.to_string_lossy().into_owned(),
                 );
-                self.attachments.push(Attachment {
+                self.attach(Attachment {
+                    order: 0,
                     path,
                     name: name.into(),
+                    preview: Preview::None,
                     image: None,
                     inline: None,
                     id: None,
@@ -945,9 +964,11 @@ impl Composer {
                         self.attachments.len() + 1,
                         mime.trim_start_matches("image/")
                     );
-                    self.attachments.push(Attachment {
+                    self.attach(Attachment {
+                        order: 0,
                         path: PathBuf::from(&name),
                         name: name.into(),
+                        preview: Preview::Image(Arc::new(image.clone())),
                         image: Some(ImageContent::new(
                             base64::engine::general_purpose::STANDARD.encode(&image.bytes),
                             mime,
@@ -974,63 +995,119 @@ impl Composer {
     pub fn attach_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
         // Without local file access (chat, or pi on another machine) the text of files goes along.
         let inline = !self.session.read(cx).is_local_code();
-        let (documents, paths): (Vec<_>, Vec<_>) = paths
-            .into_iter()
-            .partition(|path| inline && AttachedDocument::is_one(path));
-        for path in documents {
-            self.read_document(path, cx);
+        let dir = cx.global::<AppConfig>().documents_dir.clone();
+        for path in paths {
+            if inline && AttachedDocument::is_one(&path) {
+                self.read_document(path, cx);
+                continue;
+            }
+            let order = self.start_loading(path.clone(), None, cx);
+            let dir = dir.clone();
+            cx.spawn(async move |this, cx| {
+                let attachment = cx
+                    .background_executor()
+                    .spawn(async move { load_attachment(path, inline, &dir) })
+                    .await;
+                let _ = this.update(cx, |this, cx| this.loaded(order, attachment, cx));
+            })
+            .detach();
         }
-        if paths.is_empty() {
+    }
+
+    /// Adds `attachment` after the others.
+    fn attach(&mut self, attachment: Attachment) {
+        let order = self.next_order();
+        self.attachments.push(Attachment {
+            order,
+            ..attachment
+        });
+    }
+
+    fn next_order(&mut self) -> u64 {
+        self.next_attachment += 1;
+        self.next_attachment
+    }
+
+    fn start_loading(
+        &mut self,
+        path: PathBuf,
+        document: Option<Reading>,
+        cx: &mut Context<Self>,
+    ) -> u64 {
+        let order = self.next_order();
+        self.loading.push(Loading {
+            order,
+            path,
+            preview: Preview::None,
+            _document: document,
+        });
+        self.spin(cx);
+        cx.notify();
+        order
+    }
+
+    /// Repaints while something is being read.
+    fn spin(&mut self, cx: &mut Context<Self>) {
+        if self.spinning.is_some() || cx.reduce_motion() {
             return;
         }
-        let id = self.start_loading(paths.clone(), None);
-        let dir = cx.global::<AppConfig>().documents_dir.clone();
-        cx.spawn(async move |this, cx| {
-            let attachments = cx
-                .background_executor()
-                .spawn(async move {
-                    paths
-                        .into_iter()
-                        .map(|path| load_attachment(path, inline, &dir))
-                        .collect::<Vec<_>>()
-                })
-                .await;
-            let _ = this.update(cx, |this, cx| this.loaded(id, attachments, cx));
-        })
-        .detach();
+        self.spinning = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(spinner::FRAME).await;
+                let spinning = this.update(cx, |this, cx| {
+                    let reading = this.is_reading();
+                    if reading {
+                        cx.notify();
+                    } else {
+                        this.spinning = None;
+                    }
+                    reading
+                });
+                if !spinning.unwrap_or(false) {
+                    break;
+                }
+            }
+        }));
     }
 
-    fn start_loading(&mut self, paths: Vec<PathBuf>, document: Option<Reading>) -> u64 {
-        let id = self.next_loading;
-        self.next_loading += 1;
-        self.loading.push(Loading {
-            id,
-            paths,
-            document,
-        });
-        id
-    }
-
-    fn loaded(&mut self, id: u64, attachments: Vec<Attachment>, cx: &mut Context<Self>) {
-        // Removed, or taken with the draft meanwhile: they are read again where it went.
-        let Some(index) = self.loading.iter().position(|loading| loading.id == id) else {
+    /// What is loading as `order` was read; it keeps its place.
+    fn loaded(&mut self, order: u64, attachment: Attachment, cx: &mut Context<Self>) {
+        // Removed, or taken with the draft meanwhile: it is read again where it went.
+        let Some(index) = self.loading.iter().position(|l| l.order == order) else {
             return;
         };
         self.loading.remove(index);
-        self.attachments.extend(attachments);
+        let index = self.attachments.partition_point(|a| a.order < order);
+        self.attachments.insert(
+            index,
+            Attachment {
+                order,
+                ..attachment
+            },
+        );
         cx.notify();
     }
 
     /// Reads a document for a chat with the parser in the settings.
     fn read_document(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        let name = attachment_name(&path);
-        let (reading, stopped) = Reading::new(name.clone());
-        let id = self.start_loading(vec![path.clone()], Some(reading));
-        cx.notify();
+        let (reading, stopped) = Reading::new();
+        let order = self.start_loading(path.clone(), Some(reading), cx);
         let (exe, dir) = {
             let config = cx.global::<AppConfig>();
             (config.exe.clone(), config.documents_dir.clone())
         };
+        // Its first page shows while it is read.
+        let remembered = cx.background_executor().spawn({
+            let (dir, path) = (dir.clone(), path.clone());
+            async move {
+                let id = attached::remember(&dir, &path);
+                let preview = match &id {
+                    Some(id) => remembered_preview(&dir, id),
+                    None => Preview::None,
+                };
+                (id, preview)
+            }
+        });
         let (tx, rx) = async_channel::bounded(1);
         // A thread of its own: it can take minutes.
         let spawned = std::thread::Builder::new()
@@ -1039,32 +1116,34 @@ impl Composer {
                 let path = path.clone();
                 move || {
                     let read = AttachedDocument::read(exe.as_ref(), &dir, &path, &stopped);
-                    let id = read
-                        .is_ok()
-                        .then(|| attached::remember(&dir, &path))
-                        .flatten();
-                    let _ = tx.send_blocking((read, id));
+                    let _ = tx.send_blocking(read);
                 }
             });
         cx.spawn(async move |this, cx| {
-            let (read, file_id) = match spawned {
-                Ok(_) => rx
-                    .recv()
-                    .await
-                    .unwrap_or_else(|e| (Err(e.to_string()), None)),
-                Err(error) => (Err(error.to_string()), None),
+            let (id, preview) = remembered.await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(loading) = this.loading.iter_mut().find(|l| l.order == order) {
+                    loading.preview = preview.clone();
+                    cx.notify();
+                }
+            });
+            let read = match spawned {
+                Ok(_) => rx.recv().await.unwrap_or_else(|e| Err(e.to_string())),
+                Err(error) => Err(error.to_string()),
             };
             let attachment = Attachment {
+                order,
+                name: attachment_name(&path),
                 path,
-                name,
+                preview,
                 image: None,
                 inline: Some(match read {
                     Ok(document) => InlineText::Document(document),
                     Err(reason) => InlineText::Skipped(reason),
                 }),
-                id: file_id,
+                id,
             };
-            let _ = this.update(cx, |this, cx| this.loaded(id, vec![attachment], cx));
+            let _ = this.update(cx, |this, cx| this.loaded(order, attachment, cx));
         })
         .detach();
     }
@@ -1599,84 +1678,40 @@ impl Composer {
     }
 
     fn render_attachments(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let chips = self
-            .attachments
-            .iter()
-            .enumerate()
-            .map(|(index, attachment)| {
-                let (remark, why) = attachment.remark();
-                chip(cx)
-                    .id(("attachment", index))
-                    .when_some(why, |this, why| {
-                        this.tooltip(move |window, cx| Tooltip::new(why.clone()).build(window, cx))
-                    })
-                    .child(if attachment.image.is_some() {
-                        Icon::from(AppIcon::Image).xsmall()
-                    } else {
-                        Icon::new(IconName::File).xsmall()
-                    })
-                    .child(attachment.name.clone())
-                    .children(
-                        remark.map(|remark| {
-                            div().text_color(cx.theme().muted_foreground).child(remark)
-                        }),
-                    )
-                    .child(
-                        Button::new(("remove-attachment", index))
-                            .accessibility_label(format!("Remove {}", attachment.name))
-                            .quiet(cx)
-                            .xsmall()
-                            .icon(IconName::Close)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if index < this.attachments.len() {
-                                    this.attachments.remove(index);
-                                    cx.notify();
-                                }
-                            })),
-                    )
-            })
-            .collect::<Vec<_>>();
-        let reading = self.loading.iter().filter_map(|loading| {
-            let name = loading.document.as_ref()?.name.clone();
-            let id = loading.id;
-            Some(
-                chip(cx)
-                    .debug_selector(|| "reading-document".into())
-                    .child(Icon::new(IconName::File).xsmall())
-                    .child(name.clone())
-                    .child(
-                        div()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("Reading…"),
-                    )
-                    .child(
-                        Button::new(("stop-reading", usize::try_from(id).unwrap_or_default()))
-                            .accessibility_label(format!("Remove {name}"))
-                            .quiet(cx)
-                            .xsmall()
-                            .icon(IconName::Close)
-                            // Dropping it stops the reading.
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.loading.retain(|loading| loading.id != id);
-                                cx.notify();
-                            })),
-                    ),
-            )
-        });
+        let mut cards: Vec<(u64, AnyElement)> = Vec::new();
+        for attachment in &self.attachments {
+            let order = attachment.order;
+            let remove = cx.listener(move |this, _: &ClickEvent, _, cx| {
+                this.attachments.retain(|a| a.order != order);
+                cx.notify();
+            });
+            let card = attachment.card().render(remove, cx);
+            cards.push((order, card.into_any_element()));
+        }
+        for loading in &self.loading {
+            let order = loading.order;
+            let remove = cx.listener(move |this, _: &ClickEvent, _, cx| {
+                this.loading.retain(|loading| loading.order != order);
+                cx.notify();
+            });
+            let card = loading.card().render(remove, cx);
+            cards.push((order, card.into_any_element()));
+        }
+        cards.sort_by_key(|(order, _)| *order);
         h_flex()
+            .id("attachments")
             .flex_wrap()
-            .gap_1()
+            .gap_2()
             .px_3()
-            .pt_2()
-            .children(chips)
-            .children(reading)
+            .pt_3()
+            .max_h(px(attachment_card::MAX_HEIGHT))
+            .overflow_y_scroll()
+            .children(cards.into_iter().map(|(_, card)| card))
     }
 
-    /// Documents are still being read.
+    /// Attachments are still being read.
     fn is_reading(&self) -> bool {
-        self.loading
-            .iter()
-            .any(|loading| loading.document.is_some())
+        !self.loading.is_empty()
     }
 
     /// The commands that complete what is typed, best first; none after Esc, or while the
@@ -2316,27 +2351,58 @@ fn merge_restored(restored: &str, draft: &str, replace: bool) -> String {
     }
 }
 
-fn chip(cx: &App) -> Div {
-    h_flex()
-        .gap_1()
-        .pl_2()
-        .pr_1()
-        .py_0p5()
-        .rounded_md()
-        .bg(cx.theme().secondary)
-        .text_xs()
+impl Loading {
+    fn card(&self) -> Card {
+        let name = attachment_name(&self.path);
+        Card {
+            id: ElementId::NamedInteger("attachment".into(), self.order),
+            extension: marker(&name, None),
+            name,
+            preview: self.preview.clone(),
+            status: "Reading…".into(),
+            why: None,
+            left_out: false,
+            reading: true,
+        }
+    }
 }
 
 impl Attachment {
-    /// What its chip says besides the name, and why.
+    fn card(&self) -> Card {
+        let (remark, why) = self.remark();
+        Card {
+            id: ElementId::NamedInteger("attachment".into(), self.order),
+            name: self.name.clone(),
+            extension: marker(&self.name, self.image.as_ref()),
+            preview: self.preview.clone(),
+            status: remark.unwrap_or_else(|| self.kind()).into(),
+            why,
+            left_out: matches!(self.inline, Some(InlineText::Skipped(_))),
+            reading: false,
+        }
+    }
+
+    fn kind(&self) -> &'static str {
+        if self.image.is_some() {
+            "Image"
+        } else if let Some(kind) = documents::Kind::of(Path::new(self.name.as_ref())) {
+            kind.label()
+        } else if matches!(self.preview, Preview::Text(_)) {
+            "Text"
+        } else {
+            "File"
+        }
+    }
+
+    /// What its card says besides the name and the kind of file, and why.
     fn remark(&self) -> (Option<&'static str>, Option<SharedString>) {
         match &self.inline {
             Some(InlineText::Skipped(reason)) => (
-                Some("not included"),
+                Some("Not included"),
                 Some(format!("It is not included: {reason}.").into()),
             ),
             Some(InlineText::Document(document)) => match document.note() {
-                Some(note) => (Some("built-in reader"), Some(note.to_owned().into())),
+                Some(note) => (Some("Built-in reader"), Some(note.to_owned().into())),
                 None => (None, None),
             },
             _ => (None, None),
@@ -2344,7 +2410,33 @@ impl Attachment {
     }
 }
 
-fn attachment_name(path: &std::path::Path) -> SharedString {
+/// The extension a card shows: pictures have that of their format, as once they are sent.
+fn marker(name: &str, image: Option<&ImageContent>) -> Option<SharedString> {
+    image
+        .and_then(|image| transcript::image_extension(&image.mime_type))
+        .map(SharedString::from)
+        .or_else(|| prompt::extension(name).map(Into::into))
+}
+
+/// The small picture of the file that is remembered as `id`.
+fn remembered_preview(dir: &Path, id: &str) -> Preview {
+    match attached::picture(dir, id) {
+        Some(page) => Preview::Page(page),
+        None => attached::original(dir, id)
+            .as_deref()
+            .map_or(Preview::None, text_preview),
+    }
+}
+
+fn text_preview(path: &Path) -> Preview {
+    // Some PDFs start like a text.
+    if documents::Kind::of(path).is_some() {
+        return Preview::None;
+    }
+    attached::first_lines(path).map_or(Preview::None, |lines| Preview::Text(lines.into()))
+}
+
+fn attachment_name(path: &Path) -> SharedString {
     path.file_name()
         .map_or_else(
             || path.display().to_string(),
@@ -2353,7 +2445,7 @@ fn attachment_name(path: &std::path::Path) -> SharedString {
         .into()
 }
 
-fn load_attachment(path: PathBuf, inline: bool, dir: &std::path::Path) -> Attachment {
+fn load_attachment(path: PathBuf, inline: bool, dir: &Path) -> Attachment {
     let name = attachment_name(&path);
     let mime = match path
         .extension()
@@ -2374,21 +2466,29 @@ fn load_attachment(path: PathBuf, inline: bool, dir: &std::path::Path) -> Attach
             mime,
         ))
     });
+    let preview = match &image {
+        Some(image) => {
+            images::from_base64(&image.data, &image.mime_type).map_or(Preview::None, Preview::Image)
+        }
+        None => text_preview(&path),
+    };
     let inline = (inline && image.is_none()).then(|| read_inline_text(&path));
     let id = match &inline {
         Some(InlineText::Text(_)) => attached::remember(dir, &path),
         _ => None,
     };
     Attachment {
+        order: 0,
         path,
         name,
+        preview,
         image,
         inline,
         id,
     }
 }
 
-fn read_inline_text(path: &std::path::Path) -> InlineText {
+fn read_inline_text(path: &Path) -> InlineText {
     match std::fs::metadata(path) {
         Ok(meta) if meta.len() > MAX_INLINE_BYTES as u64 => {
             InlineText::skipped("larger than 256 KB")
@@ -2487,10 +2587,7 @@ fn device_menu(
 }
 
 /// `(folder name, shortened parent)` for a menu row; the home folder is just `~`.
-pub(crate) fn folder_label(
-    folder: &std::path::Path,
-    home: Option<&std::path::Path>,
-) -> (SharedString, SharedString) {
+pub(crate) fn folder_label(folder: &Path, home: Option<&Path>) -> (SharedString, SharedString) {
     let short = crate::ui::short_path(folder, home);
     match (folder.file_name(), folder.parent()) {
         _ if short == "~" => ("~".into(), SharedString::default()),
@@ -3043,7 +3140,8 @@ mod draft_tests {
     use pi_sessions::Mode;
 
     use super::{
-        Attachment, Composer, Dictation, Draft, InlineText, PiSession, prompt, waiting_line,
+        Attachment, Composer, Dictation, Draft, InlineText, PiSession, Preview, prompt,
+        waiting_line,
     };
     use crate::config::AppConfig;
     use crate::hosts::{Hosts, HostsHandle};
@@ -3085,8 +3183,10 @@ mod draft_tests {
 
     fn file(path: &Path, inline: Option<&str>) -> Attachment {
         Attachment {
+            order: 0,
             path: path.to_path_buf(),
             name: path.to_string_lossy().into_owned().into(),
+            preview: Preview::None,
             image: None,
             inline: inline.map(|text| InlineText::Text(text.to_owned())),
             id: None,
@@ -3133,9 +3233,11 @@ mod draft_tests {
 
         let draft = act(&from, cx, |from, window, cx| {
             from.set_text("fix this ", window, cx);
-            from.attachments.push(Attachment {
+            from.attach(Attachment {
+                order: 0,
                 path: "pasted.png".into(),
                 name: "pasted.png".into(),
+                preview: Preview::None,
                 image: Some(ImageContent::new("AAAA", "image/png")),
                 inline: None,
                 id: None,
@@ -3195,7 +3297,7 @@ mod draft_tests {
         std::fs::write(&path, "text").unwrap();
         let ([local, host], cx) = composers([code(), on_host()], cx);
         let draft = act(&local, cx, |local, window, cx| {
-            local.attachments.push(file(&path, None));
+            local.attach(file(&path, None));
             local.take_draft(window, cx)
         });
         act(&host, cx, |host, window, cx| {
@@ -3209,8 +3311,7 @@ mod draft_tests {
 
         // Back, with a file picked on the host, which stays behind.
         let draft = act(&host, cx, |host, window, cx| {
-            host.attachments
-                .push(file(&PathBuf::from("/srv/remote.txt"), None));
+            host.attach(file(&PathBuf::from("/srv/remote.txt"), None));
             host.take_draft(window, cx)
         });
         act(&local, cx, |local, window, cx| {
@@ -3245,7 +3346,7 @@ mod draft_tests {
         cx.read(|cx| composer.read(cx).attachments[0].remark().0)
     }
 
-    /// A chip says that a document is read, and Enter waits for it.
+    /// A card says that a document is read, and Enter waits for it.
     #[cfg(unix)]
     #[gpui_kit::test]
     fn a_document_is_read_before_it_is_sent(cx: &mut TestAppContext) {
@@ -3265,7 +3366,7 @@ mod draft_tests {
             composer.attach_paths(vec![pdf], cx);
             assert!(composer.is_reading() && composer.has_draft(cx));
         });
-        assert!(cx.debug_bounds("reading-document").is_some());
+        assert!(cx.debug_bounds("reading-attachment").is_some());
         act(&composer, cx, |composer, window, cx| {
             composer.submit(false, window, cx);
         });
@@ -3275,9 +3376,9 @@ mod draft_tests {
         std::fs::write(go, "").unwrap();
         settle(&composer, cx);
         cx.run_until_parked();
-        assert!(cx.debug_bounds("reading-document").is_none());
+        assert!(cx.debug_bounds("reading-attachment").is_none());
         assert_eq!(names(&composer, cx), ["report.pdf"]);
-        assert_eq!(remark(&composer, cx), Some("built-in reader"));
+        assert_eq!(remark(&composer, cx), Some("Built-in reader"));
         cx.read(|cx| {
             let inline = &composer.read(cx).attachments[0].inline;
             let Some(InlineText::Document(document)) = inline else {
@@ -3285,6 +3386,89 @@ mod draft_tests {
             };
             assert_eq!(document.note(), Some("Docling failed."));
             assert_eq!(document.contents("What is this?"), "# Hi");
+        });
+    }
+
+    /// Cards stay in the order they were attached in, whatever is read first, and show what is in
+    /// a file while it is read.
+    #[cfg(unix)]
+    #[gpui_kit::test]
+    fn cards_keep_their_places(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let pdf = dir.path().join("report.PDF");
+        std::fs::write(
+            &pdf,
+            include_bytes!("../../../documents/src/check.pdf").as_slice(),
+        )
+        .unwrap();
+        let text = dir.path().join("notes.txt");
+        std::fs::write(&text, "two\nlines").unwrap();
+        let image = dir.path().join("photo.jpeg");
+        std::fs::write(&image, "not really").unwrap();
+        let go = dir.path().join("go");
+        let reply = r##"{"ok":true,"markdown":"# Hi","parser":"builtin"}"##;
+        let script = format!(
+            "read line; while ! test -e '{}'; do sleep 0.05; done; echo '{reply}'",
+            go.display()
+        );
+        let (composer, cx) = chat(dir.path(), &script, cx);
+        cx.update(|_, cx| {
+            cx.global_mut::<AppConfig>().documents_dir = dir.path().join("documents");
+        });
+        act(&composer, cx, |composer, _, cx| {
+            composer.attach_paths(vec![pdf, text, image], cx);
+            let reading: Vec<_> = composer.loading.iter().map(|l| l.card().status).collect();
+            assert_eq!(reading, ["Reading…"; 3]);
+        });
+        for _ in 0..500 {
+            cx.run_until_parked();
+            let shown = cx.read(|cx| {
+                let composer = composer.read(cx);
+                let page = matches!(
+                    composer.loading.first().map(|l| &l.preview),
+                    Some(Preview::Page(_))
+                );
+                composer.attachments.len() == 2 && (page || !cfg!(target_os = "macos"))
+            });
+            if shown {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(names(&composer, cx), ["notes.txt", "photo.jpeg"]);
+        cx.read(|cx| {
+            let reading = &composer.read(cx).loading[0];
+            assert_eq!(reading.card().extension.as_deref(), Some(".pdf"));
+            assert_eq!(
+                matches!(reading.preview, Preview::Page(_)),
+                cfg!(target_os = "macos")
+            );
+        });
+
+        std::fs::write(go, "").unwrap();
+        settle(&composer, cx);
+        assert_eq!(
+            names(&composer, cx),
+            ["report.PDF", "notes.txt", "photo.jpeg"]
+        );
+        cx.read(|cx| {
+            let attachments = &composer.read(cx).attachments;
+            let cards: Vec<_> = attachments
+                .iter()
+                .map(|attachment| {
+                    let card = attachment.card();
+                    (card.extension.unwrap().to_string(), card.status.to_string())
+                })
+                .collect();
+            let cards: Vec<_> = cards
+                .iter()
+                .map(|(extension, status)| (extension.as_str(), status.as_str()))
+                .collect();
+            assert_eq!(
+                cards,
+                [(".pdf", "PDF"), (".txt", "Text"), (".jpg", "Image")]
+            );
+            assert!(matches!(&attachments[1].preview, Preview::Text(text) if text == "two\nlines"));
         });
     }
 
@@ -3336,6 +3520,10 @@ mod draft_tests {
         });
         assert_eq!(cx.read(|cx| composer.read(cx).text(cx)), "What is this?");
         assert_eq!(names(&composer, cx), ["notes.txt"]);
+        cx.read(|cx| {
+            let preview = &composer.read(cx).attachments[0].preview;
+            assert!(matches!(preview, Preview::Text(text) if text == "two\nlines"));
+        });
         let draft = act(&composer, cx, |composer, window, cx| {
             composer.take_draft(window, cx)
         });
@@ -3348,7 +3536,7 @@ mod draft_tests {
     /// Removing a document, or leaving the chat, stops reading it.
     #[cfg(unix)]
     #[gpui_kit::test]
-    fn reading_a_document_stops_with_its_chip(cx: &mut TestAppContext) {
+    fn reading_a_document_stops_with_its_card(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         let pdf = dir.path().join("report.pdf");
         std::fs::write(&pdf, "%PDF-1.4").unwrap();
@@ -3400,7 +3588,7 @@ mod draft_tests {
             composer.attach_paths(vec![docx], cx);
         });
         settle(&composer, cx);
-        assert_eq!(remark(&composer, cx), Some("not included"));
+        assert_eq!(remark(&composer, cx), Some("Not included"));
         cx.read(|cx| {
             let (_, why) = composer.read(cx).attachments[0].remark();
             assert_eq!(
@@ -3418,7 +3606,7 @@ mod draft_tests {
         let ([composer], cx) = composers([code()], cx);
         act(&composer, cx, |composer, _, cx| {
             composer.attach_paths(vec![pdf], cx);
-            assert!(!composer.is_reading());
+            assert!(composer.loading[0]._document.is_none());
         });
         settle(&composer, cx);
         assert!(cx.read(|cx| composer.read(cx).attachments[0].inline.is_none()));

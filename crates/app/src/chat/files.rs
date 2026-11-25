@@ -83,22 +83,25 @@ fn page(id: SharedString, file: &AttachedFile, dir: &std::path::Path, cx: &App) 
                     .child(div().w_full().line_clamp(4).child(file.name.clone())),
             )
         })
-        .when_some(file.extension(), |this, extension| {
-            this.child(
-                div()
-                    .absolute()
-                    .left(px(3.))
-                    .bottom(px(3.))
-                    .px_1()
-                    .rounded_sm()
-                    .bg(theme.background)
-                    .border_1()
-                    .border_color(border)
-                    .text_size(px(10.))
-                    .line_height(px(13.))
-                    .text_color(theme.foreground)
-                    .child(extension),
-            )
-        })
+        .children(file.extension().map(|extension| marker(extension, cx)))
         .into_any_element()
+}
+
+/// What kind of file a page or picture is (".pdf"), in its corner.
+pub fn marker(extension: impl Into<SharedString>, cx: &App) -> Div {
+    let theme = cx.theme();
+    div()
+        .debug_selector(|| "file-marker".into())
+        .absolute()
+        .left(px(3.))
+        .bottom(px(3.))
+        .px_1()
+        .rounded_sm()
+        .bg(theme.background)
+        .border_1()
+        .border_color(theme.border)
+        .text_size(px(10.))
+        .line_height(px(13.))
+        .text_color(theme.foreground)
+        .child(extension.into())
 }

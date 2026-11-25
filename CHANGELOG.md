@@ -12,6 +12,10 @@ All notable changes to PI-gui are listed here. The format follows
 - PDF and other files attached to a chat show as small pages above the message, like pictures,
   instead of their text in the message. Clicking a document opens it. Conversations are named after
   the message, not the text of the file.
+- Pictures attached to a message say what kind of file they are in a corner, like the pages of files.
+- What you attach shows in the message box as cards before it is sent: a small picture of the file
+  with its extension on it, and its name. While a file is read, a spinner turns on its picture. They
+  stay in the order they were attached in.
 
 ### Fixed
 

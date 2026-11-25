@@ -200,6 +200,7 @@ fn render_item(item: &TranscriptItem, cx: &RowContext<'_>, bubble: Hsla, app: &A
                             &user.images,
                             images::PROMPT_THUMBNAILS,
                             size(px(72.), px(54.)),
+                            true,
                             app,
                         )),
                 )
@@ -972,6 +973,7 @@ fn render_group(group: &Group, cx: &RowContext<'_>) -> AnyElement {
         &pictures,
         images::TOOL_THUMBNAILS,
         size(px(48.), px(34.)),
+        false,
         cx.app,
     );
     h_flex()
@@ -1054,6 +1056,7 @@ fn render_tool(key: BlockKey, tool: &ToolBlock, cx: &RowContext<'_>) -> AnyEleme
         &tool.images,
         images::TOOL_THUMBNAILS,
         size(px(48.), px(34.)),
+        false,
         cx.app,
     );
     let top = v_flex()

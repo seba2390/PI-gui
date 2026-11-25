@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 
 use deepsearch::excerpt::{self, Fitted};
 use documents::client::{self, Stop, Stopped};
-use gpui_kit::SharedString;
 
 use super::composer::MAX_INLINE_BYTES;
 
@@ -15,14 +14,13 @@ const EXCERPT_BYTES: usize = 64 * 1024;
 
 /// A document that is being read; dropping it stops that.
 pub struct Reading {
-    pub name: SharedString,
     _stop: Stop,
 }
 
 impl Reading {
-    pub fn new(name: SharedString) -> (Self, Stopped) {
+    pub fn new() -> (Self, Stopped) {
         let (stop, stopped) = Stop::new();
-        (Self { name, _stop: stop }, stopped)
+        (Self { _stop: stop }, stopped)
     }
 }
 

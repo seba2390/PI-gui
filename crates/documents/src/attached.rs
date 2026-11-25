@@ -2,6 +2,7 @@
 //! page. Messages refer to them by an id made from their contents.
 
 use std::fs;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -12,6 +13,10 @@ const MAX_FILES: usize = 1000;
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
 /// The longest side of a picture, in pixels.
 const SIZE: &str = "320";
+/// How much of a text its small picture shows.
+const START_BYTES: u64 = 1024;
+const START_LINES: usize = 8;
+const START_CHARS: usize = 24;
 const TIMEOUT: Duration = Duration::from_secs(20);
 
 fn folder(dir: &Path) -> PathBuf {
@@ -52,6 +57,34 @@ pub fn picture(dir: &Path, id: &str) -> Option<PathBuf> {
 pub fn original(dir: &Path, id: &str) -> Option<PathBuf> {
     let path = fs::read_to_string(file(dir, id, "path")?).ok()?;
     Some(PathBuf::from(path)).filter(|path| path.is_file())
+}
+
+/// The start of the lines that the text file at `path` starts with, for a small picture of it;
+/// `None` if it is something else. Blocks.
+pub fn first_lines(path: &Path) -> Option<String> {
+    // Not a folder, or a pipe that would never end.
+    if !fs::metadata(path).ok()?.is_file() {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    let file = fs::File::open(path).ok()?;
+    file.take(START_BYTES).read_to_end(&mut bytes).ok()?;
+    let text = match std::str::from_utf8(&bytes) {
+        Ok(text) => text,
+        // Cut within a character.
+        Err(error) if error.error_len().is_none() => {
+            std::str::from_utf8(&bytes[..error.valid_up_to()]).ok()?
+        }
+        Err(_) => return None,
+    };
+    let lines: Vec<String> = text
+        .trim_start_matches('\u{feff}')
+        .lines()
+        .take(START_LINES)
+        .map(|line| line.chars().take(START_CHARS).collect())
+        .collect();
+    let is_text = !text.contains('\0') && lines.iter().any(|line| !line.trim().is_empty());
+    is_text.then(|| lines.join("\n"))
 }
 
 /// Draws the first page of the PDF at `path` with what the system has: macOS's `sips`, or
@@ -147,6 +180,30 @@ mod tests {
             assert_eq!(original(dir, &id), Some(path));
         }
         assert_eq!(remember(dir, &dir.join("missing.pdf")), None);
+    }
+
+    #[test]
+    fn the_first_lines_of_texts() {
+        let dir = tempfile::tempdir().unwrap();
+        let lines = |contents: &[u8]| {
+            let path = dir.path().join("file");
+            fs::write(&path, contents).unwrap();
+            first_lines(&path)
+        };
+        assert_eq!(lines(b"one\r\n\ntwo\n").as_deref(), Some("one\n\ntwo"));
+        let long = lines("æ".repeat(2000).as_bytes()).unwrap();
+        assert_eq!(long, "æ".repeat(START_CHARS));
+        // Cut within the second byte of a character.
+        assert!(lines(format!("a{}", "æ".repeat(2000)).as_bytes()).is_some());
+        assert_eq!(
+            lines(b"1\n".repeat(99).as_slice()).unwrap().lines().count(),
+            8
+        );
+        for other in [b"\x89PNG\xff\xfe".as_slice(), b"a\0b", b" \n\n", b""] {
+            assert_eq!(lines(other), None);
+        }
+        assert_eq!(first_lines(dir.path()), None);
+        assert_eq!(first_lines(&dir.path().join("missing")), None);
     }
 
     /// A message can say any id.

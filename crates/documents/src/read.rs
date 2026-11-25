@@ -31,6 +31,15 @@ impl Kind {
         }
     }
 
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Pdf => "PDF",
+            Self::Docx => "Word document",
+            Self::Pptx => "Presentation",
+            Self::Xlsx => "Spreadsheet",
+        }
+    }
+
     fn extension(self) -> &'static str {
         match self {
             Self::Pdf => "pdf",

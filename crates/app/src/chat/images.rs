@@ -63,6 +63,15 @@ thread_local! {
     static DECODED: RefCell<DecodedCache> = RefCell::new(HashMap::new());
 }
 
+/// The picture in base64 `data`.
+pub fn from_base64(data: &str, mime_type: &str) -> Option<Arc<gpui_kit::Image>> {
+    let format = format(mime_type)?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .ok()?;
+    Some(Arc::new(gpui_kit::Image::from_bytes(format, bytes)))
+}
+
 /// The picture ready to draw, or `None` if it is not one GPUI can show (or not valid base64).
 pub fn decoded(image: &Image) -> Option<Arc<gpui_kit::Image>> {
     let key = cache_key(image);
@@ -74,24 +83,21 @@ pub fn decoded(image: &Image) -> Option<Arc<gpui_kit::Image>> {
         if cache.len() >= MAX_DECODED {
             cache.clear();
         }
-        let picture = format(&image.mime_type).and_then(|format| {
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(image.data.as_bytes())
-                .ok()?;
-            Some(Arc::new(gpui_kit::Image::from_bytes(format, bytes)))
-        });
+        let picture = from_base64(&image.data, &image.mime_type);
         cache.insert(key, picture.clone());
         picture
     })
 }
 
 /// Up to `max` thumbnails of `images` in a row, then "+N" for the others. Clicking one opens
-/// the viewer on it, with all of `images` to browse.
+/// the viewer on it, with all of `images` to browse. With `marked` each says what kind of file
+/// it is.
 pub fn thumbnails(
     id: impl Into<ElementId>,
     images: &[Image],
     max: usize,
     size: Size<Pixels>,
+    marked: bool,
     cx: &App,
 ) -> Option<AnyElement> {
     if images.is_empty() {
@@ -109,6 +115,7 @@ pub fn thumbnails(
                 SharedString::from(format!("{id:?}-thumb")),
                 index as u64,
             ))
+            .relative()
             .flex_none()
             .w(size.width)
             .h(size.height)
@@ -123,7 +130,11 @@ pub fn thumbnails(
                 component::tooltip::Tooltip::new("View full size").build(window, cx)
             })
             .on_click(move |_, window, cx| open_viewer(all.clone(), index, window, cx));
-        match decoded(&images[index]) {
+        let marker = images[index]
+            .extension()
+            .filter(|_| marked)
+            .map(|extension| super::files::marker(extension, cx));
+        let tile = match decoded(&images[index]) {
             Some(picture) => tile.child(img(picture).size_full().object_fit(ObjectFit::Cover)),
             // Not a format we can draw: a placeholder that still opens the viewer.
             None => tile
@@ -131,7 +142,8 @@ pub fn thumbnails(
                 .items_center()
                 .justify_center()
                 .child(Icon::new(IconName::File).small().text_color(muted)),
-        }
+        };
+        tile.children(marker)
     });
     let more = images.len() - shown;
     Some(
