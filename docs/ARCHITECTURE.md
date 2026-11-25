@@ -34,10 +34,17 @@ document, with its own Python, packages and models, no network, a time limit, an
 group. It watches its standard input, so it also ends when the helper is killed. Parsers that load
 models take turns, across processes, because several would fill the memory.
 
+- The PDF viewer (`documents::viewer`) keeps one helper for as long as it shows a file: it asks for
+  one page at a time and gets its pixels and links. A page that breaks the helper, or takes too
+  long, is marked, and another helper draws the next one. Pages are laid out without drawing them
+  (`viewer::layout`), so only what is looked at is drawn and kept.
 - `web_fetch` turns the Markdown into blocks (`deepsearch::markdown`) and ranks passages as for any
   page.
-- Attachments in chats keep the Markdown until the message is sent; one that is too long is cut to
-  its outline and what matches the message (`deepsearch::excerpt`).
+- Office, OpenDocument and EPUB files are read by `documents::office` in the same helper: XML in zip
+  archives, with limits on what is unpacked and no entities, and spreadsheets by calamine.
+- Attachments in chats keep the text until the message is sent; one that is too long is cut to its
+  outline and what matches the message (`deepsearch::excerpt`). How long is decided then, from the
+  settings and what is left of the model's context (`Room` in `chat/document.rs`).
 - In local Code sessions an extension handles pi's `tool_result` event for `read` of a PDF: pi has
   decided about and done the read by then, and the result is replaced by the same read (pi's own
   `createReadTool`) of the Markdown. Nothing runs for other files. pi on an SSH host has no parser

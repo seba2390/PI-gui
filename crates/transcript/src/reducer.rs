@@ -472,10 +472,10 @@ impl Transcript {
     pub(crate) fn push_message(&mut self, message: &AgentMessage, now: Instant) {
         match message {
             AgentMessage::User(user) => {
-                self.push(ItemKind::User(UserItem {
-                    text: user.content.text(),
-                    images: content_images(&user.content),
-                }));
+                self.push(ItemKind::User(UserItem::new(
+                    user.content.text(),
+                    content_images(&user.content),
+                )));
             }
             AgentMessage::Assistant(assistant) => {
                 let index = self.push(ItemKind::Assistant(AssistantItem {

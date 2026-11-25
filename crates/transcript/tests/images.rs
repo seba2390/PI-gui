@@ -4,7 +4,7 @@
 use std::time::Instant;
 
 use pi_rpc::protocol::{AgentMessage, Event, Incoming};
-use transcript::{BlockKind, ItemKind, Transcript};
+use transcript::{BlockKind, Image, ItemKind, Transcript};
 
 fn event(json: &str) -> Event {
     match Incoming::from_slice(json.as_bytes()).unwrap() {
@@ -55,6 +55,34 @@ fn live_tool_results_keep_their_images() {
     );
 }
 
+/// What pi and the app add to a prompt is not shown as typed.
+#[test]
+fn prompts_show_what_was_typed() {
+    let messages: Vec<AgentMessage> = serde_json::from_str(
+        r#"[
+            {"role":"user","content":[{"type":"text","text":"<attachment name=\"a.pdf\" id=\"0f\">\nlong\n</attachment>\n\nwhat is this?\n\n[Image: original 9x9, displayed at 3x3. Multiply coordinates by 3.00 to map to original image.]"},{"type":"image","data":"R0lGOD","mimeType":"image/gif"}]},
+            {"role":"user","content":"<attachment name=\"b.txt\">\nx\n</attachment>"}
+        ]"#,
+    )
+    .unwrap();
+    let history = Transcript::from_messages(&messages);
+    let users: Vec<_> = history
+        .items()
+        .iter()
+        .filter_map(|item| match &item.kind {
+            ItemKind::User(user) => Some(user),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(users[0].typed(), "what is this?");
+    assert_eq!(users[0].title(), Some("what is this?"));
+    assert!(users[0].text.contains("long") && users[0].text.contains("Multiply"));
+    assert_eq!(users[0].files[0].id.as_deref(), Some("0f"));
+    assert_eq!(users[0].images.len(), 1);
+    assert_eq!(users[1].typed(), "");
+    assert_eq!(users[1].title(), Some("b.txt"));
+}
+
 #[test]
 fn history_keeps_tool_and_prompt_images() {
     let messages: Vec<AgentMessage> = serde_json::from_str(&format!(
@@ -77,4 +105,16 @@ fn history_keeps_tool_and_prompt_images() {
         tool_images(&history),
         [("/9j/4AAQ".to_owned(), "image/jpeg".to_owned())]
     );
+}
+
+#[test]
+fn pictures_know_their_extension() {
+    for (mime_type, extension) in [
+        ("image/png", Some(".png")),
+        ("image/JPEG", Some(".jpg")),
+        ("image/svg+xml", Some(".svg")),
+        ("application/pdf", None),
+    ] {
+        assert_eq!(Image::new("", mime_type).extension(), extension);
+    }
 }

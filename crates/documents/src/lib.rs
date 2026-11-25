@@ -1,4 +1,5 @@
-//! Reading documents (PDF files, and Office files with Docling) as Markdown.
+//! Reading documents (PDF, Office, OpenDocument and EPUB files) as Markdown, and plain text in any
+//! encoding ([`plain`]).
 //!
 //! The built-in reader ([`builtin`]) comes with the app. The others ([`Parser`]) are downloaded on
 //! request ([`install`]): nothing of them ships with the app, each has a private Python, packages
@@ -8,15 +9,17 @@
 //!
 //! The app and its pi extension ([`EXTENSION_SOURCE`], for Code sessions) read documents through
 //! [`cli`]: the app's own executable started with [`cli::FLAG`], so that a file that breaks its
-//! reader never takes the app down.
+//! reader never takes the app down. [`viewer`] shows PDF files the same way.
 //!
 //! Everything is below one folder ([`config::default_dir`]):
 //! - `config.json`: the settings;
 //! - `parsers/<parser>/app/`: an installation, moved into place when it is complete;
 //! - `cache/`: what was read lately, so that a file read in parts is parsed once;
+//! - `attached/`: where files attached to chats are, with a small picture of PDFs;
 //! - `tmp/`: what parsers write while they run;
 //! - `extension.ts`: the pi extension.
 
+pub mod attached;
 pub mod builtin;
 mod cache;
 pub mod catalog;
@@ -25,13 +28,16 @@ pub mod client;
 pub mod config;
 pub mod helper;
 mod install;
+mod office;
+pub mod plain;
 mod read;
 mod text;
+pub mod viewer;
 
 pub use catalog::Parser;
 pub use install::{Installed, Progress, Stage, install, installed, remove};
 pub use python_env::InstallError;
-pub use read::{Content, Document, Kind, can_read, read, read_bytes};
+pub use read::{Content, Document, Kind, read, read_bytes};
 
 use std::fs;
 use std::io;

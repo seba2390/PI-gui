@@ -6,6 +6,43 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-25
+
+### Added
+
+- PDF files open in a viewer in the app, as pictures do: click the page above a message or the
+  picture of what you attach. It opens at once and draws only the pages you look at. Links work, on
+  the web and within the file (with a way back). Pages are light or dark, with photos left as they
+  are. The keys scroll and zoom, and so do the trackpad and the buttons.
+- Text files that are attached open in a viewer in the app as well, from the page above a message or
+  the picture on a card: with line numbers and syntax colors, to select, copy and search (⌘F).
+- Chats read many more files, without a download: Word, PowerPoint and Excel (also `.xls` and
+  `.xlsb`), OpenDocument (`.odt`, `.odp`, `.ods`) and EPUB, with headings, lists and tables; plain
+  text that is not UTF-8 (UTF-16, Windows-1252, Shift JIS and others); and BMP, TIFF and SVG
+  pictures. Docling is still used for the Office files it reads, if it is chosen.
+- Text files of more than 256 KB are no longer left out of chats: they are shortened, like long
+  documents, to their start and the parts that match your message. Their card says so. Settings →
+  Document parsing has a slider for how much text goes whole, from 32 KB to all that fits. What the
+  model has no room left for is always shortened.
+
+### Changed
+
+- The buttons that download models and document parsers have the download symbol.
+- PDF and other files attached to a chat show as small pages above the message, like pictures,
+  instead of their text in the message. Clicking one shows or opens it. Conversations are named after
+  the message, not the text of the file.
+- Pictures attached to a message say what kind of file they are in a corner, like the pages of files.
+- What you attach shows in the message box as cards before it is sent: a small picture of the file
+  with its extension on it, and its name. While a file is read, a spinner turns on its picture. They
+  stay in the order they were attached in.
+
+### Fixed
+
+- The model is no longer told how an attached file was read, which it could take for a tool it does
+  not have. pi's notes about pictures it made smaller no longer show in messages.
+- The update prompt's progress bar fills as the new version downloads, also when Homebrew downloads
+  it. Before, a Homebrew update showed a full, pulsing bar the whole time.
+
 ## [0.5.0] - 2026-11-25
 
 ### Added
@@ -499,7 +536,8 @@ chats, skills and model management. Changes since the last private build:
 - A corrupt `hosts.json` is kept as a backup.
 - A remembered terminal height can no longer squeeze out the chat.
 
-[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/seba2390/pistachio/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/seba2390/pistachio/compare/v0.4.9...v0.5.0
 [0.4.9]: https://github.com/seba2390/pistachio/compare/v0.4.8...v0.4.9
 [0.4.8]: https://github.com/seba2390/pistachio/compare/v0.4.7...v0.4.8

@@ -22,6 +22,6 @@ pub use model::{
     AboutReport, AssistantItem, BashItem, BashStatus, Block, BlockKind, CheckItem, ClaimCounts,
     Image, ItemId, ItemKind, LinkCounts, NestedEntry, Notice, NoticeKind, Problem, ProblemKind,
     Queue, RunStatus, Standing, StepItem, TextBlock, ThinkingBlock, ToolBlock, ToolStatus,
-    TranscriptItem, TurnSummary, UserItem,
+    TranscriptItem, TurnSummary, UserItem, image_extension,
 };
 pub use reducer::Transcript;

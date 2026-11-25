@@ -128,6 +128,23 @@ impl DocumentParsers {
             return;
         }
         self.config.parser = parser;
+        self.save(cx);
+    }
+
+    /// Longer texts are shortened for a chat's model; without a limit, only those it has no room
+    /// for.
+    pub fn whole_text(&self) -> Option<usize> {
+        self.config
+            .whole_text_bytes
+            .map(|bytes| usize::try_from(bytes).unwrap_or(usize::MAX))
+    }
+
+    pub fn set_whole_text(&mut self, bytes: Option<usize>, cx: &mut Context<Self>) {
+        self.config.whole_text_bytes = bytes.map(|bytes| bytes as u64);
+        self.save(cx);
+    }
+
+    fn save(&self, cx: &mut Context<Self>) {
         let (dir, config) = (self.dir.clone(), self.config.clone());
         let path = dir.join(config::CONFIG_FILE);
         crate::persist::save_in_background(cx, path, move |_| config::save(&dir, &config));

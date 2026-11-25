@@ -21,6 +21,8 @@ pub struct UiState {
     pub last_sessions: HashMap<Mode, LastSession>,
     /// The terminal panel's height in pixels, as last dragged.
     pub terminal_height: Option<u16>,
+    /// Whether PDF files are shown with dark pages, as last chosen; like the app before that.
+    pub pdf_dark: Option<bool>,
     /// State this version doesn't know (a newer one wrote it), kept for the next save.
     #[serde(flatten)]
     pub unknown: serde_json::Map<String, serde_json::Value>,

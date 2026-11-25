@@ -6,6 +6,7 @@
 //! session is always done by pi itself (`switch_session` / `--session`).
 
 pub mod branch;
+pub mod prompt;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -22,7 +23,7 @@ pub struct SessionSummary {
     pub cwd: PathBuf,
     /// The latest `session_info` name (pi auto-titles sessions), if any.
     pub name: Option<String>,
-    /// First line of the first user prompt, a fallback title.
+    /// First line of the first user prompt (or a file attached to it), a fallback title.
     pub first_prompt: Option<String>,
     pub modified: SystemTime,
 }
@@ -342,8 +343,23 @@ fn truncated_prompt(line: &str) -> Option<String> {
         raw.pop();
     }
     let text: String = serde_json::from_str(&format!("\"{raw}\"")).ok()?;
-    let first_line = text.lines().map(str::trim).find(|line| !line.is_empty())?;
-    Some(first_line.chars().take(120).collect())
+    prompt_title(&text)
+}
+
+fn prompt_title(text: &str) -> Option<String> {
+    // A long file that the text was cut off in.
+    let cut = text
+        .split_once('\n')
+        .filter(|(_, rest)| !rest.contains("\n</attachment>"));
+    let whole;
+    let text = match cut {
+        Some((first, _)) if first.starts_with("<attachment name=\"") => {
+            whole = format!("{first}\n\n</attachment>");
+            &whole
+        }
+        _ => text,
+    };
+    Some(prompt::split(text).title()?.chars().take(120).collect())
 }
 
 fn user_prompt(line: &str) -> Option<String> {
@@ -369,8 +385,7 @@ fn user_prompt(line: &str) -> Option<String> {
             .to_owned(),
         _ => String::new(),
     };
-    let first_line = text.lines().map(str::trim).find(|line| !line.is_empty())?;
-    Some(first_line.chars().take(120).collect())
+    prompt_title(&text)
 }
 
 #[cfg(test)]
@@ -388,6 +403,27 @@ mod tests {
             writeln!(out, "{line}").unwrap();
         }
         path
+    }
+
+    #[test]
+    fn attached_files_are_not_the_title() {
+        let header = r#"{"type":"session","version":3,"id":"a","timestamp":"t","cwd":"/w"}"#;
+        let title = |text: &str, cut: Option<usize>| {
+            let text = serde_json::to_string(text).unwrap();
+            let line = format!(
+                r#"{{"type":"message","message":{{"role":"user","content":[{{"type":"text","text":{text}}}]}}}}"#
+            );
+            let line = &line[..cut.unwrap_or(line.len())];
+            let now = SystemTime::now();
+            let summary = summary_from_lines(Path::new("/a"), now, header, None, Some(line));
+            summary.unwrap().first_prompt
+        };
+        let file = prompt::block("paper.pdf", Some("0f"), "## Page 1\n\ntext");
+        let sent = format!("{file}\n\nExplain this\nplease");
+        assert_eq!(title(&sent, None).as_deref(), Some("Explain this"));
+        assert_eq!(title(&file, None).as_deref(), Some("paper.pdf"));
+        // Cut off in the file, as remote listings do.
+        assert_eq!(title(&sent, Some(150)).as_deref(), Some("paper.pdf"));
     }
 
     #[test]

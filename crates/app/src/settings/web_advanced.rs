@@ -366,41 +366,57 @@ fn levels(level: Effort, weak: WeakEntity<SettingsView>) -> SettingItem {
     })
 }
 
-type Set = dyn Fn(&mut WebConfig, u32);
+type Set = dyn Fn(u32, &mut App);
 
 /// A whole number of the settings, chosen with a slider.
 #[derive(Clone)]
-struct Number {
+pub(super) struct Number {
     id: SharedString,
     range: RangeInclusive<u32>,
-    get: Rc<dyn Fn(&WebConfig) -> u32>,
+    get: Rc<dyn Fn(&App) -> u32>,
     set: Rc<Set>,
     shown: fn(u32) -> String,
 }
 
 impl Number {
-    fn new(
+    /// One that is not a setting of web search.
+    pub(super) fn of(
         id: &'static str,
         range: RangeInclusive<u32>,
-        get: impl Fn(&WebConfig) -> u32 + 'static,
+        get: impl Fn(&App) -> u32 + 'static,
+        set: impl Fn(u32, &mut App) + 'static,
     ) -> Self {
         Self {
             id: id.into(),
             range,
             get: Rc::new(get),
-            set: Rc::new(|_, _| {}),
+            set: Rc::new(set),
             shown: |value| value.to_string(),
         }
     }
 
+    fn new(
+        id: &'static str,
+        range: RangeInclusive<u32>,
+        get: impl Fn(&WebConfig) -> u32 + 'static,
+    ) -> Self {
+        Self::of(id, range, move |cx| get(web_config(cx)), |_, _| {})
+    }
+
     fn set(mut self, set: impl Fn(&mut WebConfig, u32) + 'static) -> Self {
-        self.set = Rc::new(set);
+        self.set = Rc::new(move |value, cx| update_web(cx, |config| set(config, value)));
         self
     }
 
-    fn shown(mut self, shown: fn(u32) -> String) -> Self {
+    pub(super) fn shown(mut self, shown: fn(u32) -> String) -> Self {
         self.shown = shown;
         self
+    }
+
+    /// Only the tests of the documents settings use it, and those need macOS or Linux.
+    #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
+    pub(super) fn choose(&self, value: u32, cx: &mut App) {
+        (self.set)(value, cx);
     }
 
     /// Different for each `key`.
@@ -410,7 +426,7 @@ impl Number {
     }
 }
 
-fn number(title: &'static str, about: &'static str, number: Number) -> SettingItem {
+pub(super) fn number(title: &'static str, about: &'static str, number: Number) -> SettingItem {
     SettingItem::new(
         title,
         SettingField::render(move |_, window, cx| slider(title, &number, window, cx)),
@@ -441,7 +457,7 @@ fn slider(
     window: &mut Window,
     cx: &mut App,
 ) -> impl IntoElement + use<> {
-    let value = (number.get)(web_config(cx));
+    let value = (number.get)(cx);
     let (min, max) = (*number.range.start(), *number.range.end());
     let field = window.use_keyed_state(number.id.clone(), cx, |_, cx| {
         let slider = cx.new(|_| {
@@ -460,8 +476,7 @@ fn slider(
                 SliderEvent::Release(value) => {
                     let value = to_number(value.end());
                     this.saved = value;
-                    let set = set.clone();
-                    update_web(cx, |config| set(config, value));
+                    set(value, cx);
                 }
             },
         );

@@ -17,6 +17,12 @@ pub enum Kind {
     Docx,
     Pptx,
     Xlsx,
+    Xlsb,
+    Xls,
+    Odt,
+    Odp,
+    Ods,
+    Epub,
 }
 
 impl Kind {
@@ -24,10 +30,28 @@ impl Kind {
         let extension = path.extension()?.to_str()?.to_ascii_lowercase();
         match extension.as_str() {
             "pdf" => Some(Self::Pdf),
-            "docx" => Some(Self::Docx),
-            "pptx" => Some(Self::Pptx),
-            "xlsx" => Some(Self::Xlsx),
+            // With macros or as a template, the text is the same.
+            "docx" | "docm" | "dotx" => Some(Self::Docx),
+            "pptx" | "pptm" | "ppsx" | "potx" => Some(Self::Pptx),
+            "xlsx" | "xlsm" | "xltx" => Some(Self::Xlsx),
+            "xlsb" => Some(Self::Xlsb),
+            "xls" => Some(Self::Xls),
+            "odt" | "ott" => Some(Self::Odt),
+            "odp" | "otp" => Some(Self::Odp),
+            "ods" | "ots" => Some(Self::Ods),
+            "epub" => Some(Self::Epub),
             _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Pdf => "PDF",
+            Self::Docx => "Word document",
+            Self::Odt => "Text document",
+            Self::Pptx | Self::Odp => "Presentation",
+            Self::Xlsx | Self::Xlsb | Self::Xls | Self::Ods => "Spreadsheet",
+            Self::Epub => "Book",
         }
     }
 
@@ -37,24 +61,24 @@ impl Kind {
             Self::Docx => "docx",
             Self::Pptx => "pptx",
             Self::Xlsx => "xlsx",
+            Self::Xlsb => "xlsb",
+            Self::Xls => "xls",
+            Self::Odt => "odt",
+            Self::Odp => "odp",
+            Self::Ods => "ods",
+            Self::Epub => "epub",
         }
     }
 }
 
 impl Parser {
     pub fn reads(self, kind: Kind) -> bool {
-        kind == Kind::Pdf || self == Self::Docling
+        match self {
+            Self::Builtin => true,
+            Self::Docling => matches!(kind, Kind::Pdf | Kind::Docx | Kind::Pptx | Kind::Xlsx),
+            Self::Pymupdf4llm | Self::Mineru => kind == Kind::Pdf,
+        }
     }
-}
-
-/// Whether documents of `kind` can be read with the settings in `dir`: PDF files always, Office
-/// files with Docling.
-pub fn can_read(dir: &Path, kind: Kind) -> bool {
-    if kind == Kind::Pdf {
-        return true;
-    }
-    let parser = crate::config::load(dir).parser;
-    parser.reads(kind) && installed(dir, parser) != Installed::No
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,13 +136,11 @@ pub fn read_bytes(
     timeout: Duration,
 ) -> Result<Document, String> {
     let parser = config.parser;
-    if !parser.reads(kind) {
-        return Err("only Docling reads Office files (Settings → Document parsing)".into());
-    }
     if kind == Kind::Pdf && !is_pdf(&bytes) {
         return Err("it is not a PDF file".into());
     }
-    let problem = if parser == Parser::Builtin {
+    // Those that read only some kinds leave the others to the built-in reader.
+    let problem = if parser == Parser::Builtin || !parser.reads(kind) {
         None
     } else {
         match parse(dir, parser, kind, &bytes, timeout) {
@@ -132,9 +154,6 @@ pub fn read_bytes(
             Err(error) => Some(error),
         }
     };
-    if kind != Kind::Pdf {
-        return Err(problem.unwrap_or_default());
-    }
     let note = problem.map(|problem| {
         format!(
             "{} could not be used ({problem}), so the built-in reader was.",
@@ -145,6 +164,14 @@ pub fn read_bytes(
         Some(note) => format!("{error}. {}", note.trim_end_matches('.')),
         None => error.to_owned(),
     };
+    if kind != Kind::Pdf {
+        let markdown = builtin::read_other(kind, bytes).map_err(|error| failed(&error))?;
+        return Ok(Document {
+            content: Content::Markdown(markdown),
+            parser: Parser::Builtin,
+            note,
+        });
+    }
     let pages = builtin::read(bytes).map_err(|error| failed(&error))?;
     if pages.iter().all(Vec::is_empty) {
         return Err(failed(if parser.reads_scans() {
@@ -311,11 +338,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let dir = dir.path();
         let error = |parser, kind, bytes| try_it(dir, parser, kind, bytes).unwrap_err();
-        assert!(error(Parser::Builtin, Kind::Docx, vec![1]).contains("only Docling"));
-        assert_eq!(
-            error(Parser::Docling, Kind::Docx, vec![1]),
-            "it is not downloaded"
+        assert!(error(Parser::Builtin, Kind::Docx, vec![1]).contains("damaged"));
+        let text = error(Parser::Docling, Kind::Docx, vec![1]);
+        assert!(
+            text.contains("damaged") && text.contains("not downloaded"),
+            "{text}"
         );
+        let protected = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1".to_vec();
+        assert!(error(Parser::Builtin, Kind::Docx, protected).contains("password"));
         assert_eq!(
             error(Parser::Builtin, Kind::Pdf, b"<html>".to_vec()),
             "it is not a PDF file"
@@ -341,19 +371,39 @@ mod tests {
         assert!(read(dir, &small, &dir.join("none.pdf"), LONG).is_err());
     }
 
+    /// The ones Docling does not read are read by the built-in reader, as are all with the others.
     #[test]
-    fn office_files_need_docling() {
+    fn each_kind_has_a_reader() {
         let dir = tempfile::tempdir().unwrap();
         let dir = dir.path();
-        assert!(can_read(dir, Kind::Pdf));
-        assert!(!can_read(dir, Kind::Docx));
-        crate::config::save(dir, &config(Parser::Docling)).unwrap();
-        assert!(!can_read(dir, Kind::Docx));
-        fake(dir, Parser::Docling, "exit 0");
-        assert!(can_read(dir, Kind::Docx));
-        crate::config::save(dir, &config(Parser::Mineru)).unwrap();
-        assert!(!can_read(dir, Kind::Docx));
+        fake(dir, Parser::Docling, "printf 'by Docling' > \"$4\"");
+        fake(dir, Parser::Mineru, "printf 'by MinerU' > \"$4\"");
+        let word = crate::office::testing::zip(&[(
+            "word/document.xml",
+            "<w:document xmlns:w=\"w\"><w:body><w:p><w:r><w:t>Hi</w:t></w:r></w:p></w:body></w:document>",
+        )]);
+        let odt = crate::office::testing::zip(&[(
+            "content.xml",
+            "<o:d xmlns:o=\"o\" xmlns:t=\"t\"><o:body><o:text><t:p>Hi</t:p></o:text></o:body></o:d>",
+        )]);
+        for (parser, kind, text) in [
+            (Parser::Builtin, Kind::Docx, "Hi\n"),
+            (Parser::Mineru, Kind::Docx, "Hi\n"),
+            (Parser::Docling, Kind::Docx, "by Docling\n"),
+            (Parser::Docling, Kind::Odt, "Hi\n"),
+        ] {
+            let bytes = if kind == Kind::Odt { &odt } else { &word };
+            let document = try_it(dir, parser, kind, bytes.clone()).unwrap();
+            assert_eq!(document.note, None);
+            assert_eq!(document.markdown(), text, "{parser:?}");
+        }
+        // One that fails.
+        fake(dir, Parser::Docling, "echo 'MemoryError' >&2; exit 1");
+        let other = [word.as_slice(), b"\n"].concat();
+        let document = try_it(dir, Parser::Docling, Kind::Docx, other).unwrap();
+        assert!(document.note.unwrap().contains("MemoryError"));
         assert_eq!(Kind::of(Path::new("/a/b.Pptx")), Some(Kind::Pptx));
+        assert_eq!(Kind::of(Path::new("/a/b.xlsm")), Some(Kind::Xlsx));
         assert_eq!(Kind::of(Path::new("/a/b.doc")), None);
     }
 }

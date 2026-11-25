@@ -50,7 +50,7 @@ const LEAD_IN: usize = SAMPLE_RATE / 2;
 /// With nothing said at all, give up after this long.
 const NOTHING_SAID_STOP: usize = SAMPLE_RATE * 10;
 /// A loaded model is freed after this long without a session.
-const UNLOAD_AFTER: Duration = Duration::from_secs(10 * 60);
+const UNLOAD_AFTER: Duration = Duration::from_mins(10);
 /// Silero VAD v5 (MIT, see `assets/silero-vad`), from the pinned
 /// `csukuangfj/vad@fba88cd2e921609e7675c3aaf51e0b9b295da4bc`. Built in, unlike the
 /// recognizers, so dictation never runs without it.

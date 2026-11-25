@@ -11,6 +11,7 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use super::web_advanced::{Number, number};
 use crate::document_parsers::{DocumentParsers, document_parsers, existing};
 use crate::model_store::size_label;
 use crate::theme::palette;
@@ -21,8 +22,8 @@ pub(super) fn page() -> SettingPage {
     SettingPage::new("Document parsing")
         .icon(AppIcon::Files)
         .description(
-            "How PDF files are read: the ones you attach to a chat, the ones chats find on the \
-             web, and the ones pi reads in Code sessions on this computer.",
+            "How documents are read: the ones you attach to a chat, PDF files that chats find on \
+             the web, and those that pi reads in Code sessions on this computer.",
         )
         .group(SettingGroup::new().title("Parser").item(
             SettingItem::render(|_, _, cx| rows(cx)).keywords([
@@ -36,6 +37,54 @@ pub(super) fn page() -> SettingPage {
                 "PyMuPDF",
             ]),
         ))
+        .group(
+            SettingGroup::new().title("Long files in chats").item(
+                number(
+                    "Send whole up to",
+                    "Longer text goes to the model shortened: its start, its outline and the parts \
+                     that match your message. Text that does not fit in what is left of the model's \
+                     context is always shortened. Everything that is sent counts again with each \
+                     later message: 256 KB are about 65,000 tokens.",
+                    whole_text(),
+                )
+                .keywords(["limit", "size", "length", "tokens", "shorten", "context"]),
+            ),
+        )
+}
+
+/// The stops of the slider, in KB; the last one is no limit.
+const WHOLE_TEXT: [usize; 8] = [32, 64, 128, 256, 512, 1024, 2048, 4096];
+
+/// How much text goes whole: the number of a stop.
+fn whole_text() -> Number {
+    #[allow(clippy::cast_possible_truncation)] // a few stops
+    const LAST: u32 = WHOLE_TEXT.len() as u32;
+    Number::of(
+        "whole-text",
+        0..=LAST,
+        |cx| existing(cx).map_or(LAST, |parsers| stop(parsers.whole_text())),
+        |stop, cx| {
+            let bytes = WHOLE_TEXT.get(stop as usize).map(|kb| kb * 1024);
+            document_parsers(cx).update(cx, |parsers, cx| parsers.set_whole_text(bytes, cx));
+        },
+    )
+    .shown(|stop| match WHOLE_TEXT.get(stop as usize) {
+        Some(kb) if *kb < 1024 => format!("{kb} KB"),
+        Some(kb) => format!("{} MB", kb / 1024),
+        None => "All that fits".into(),
+    })
+}
+
+/// The stop nearest to `bytes`, which the file may say otherwise.
+fn stop(bytes: Option<usize>) -> u32 {
+    let stop = bytes.map_or(WHOLE_TEXT.len(), |bytes| {
+        WHOLE_TEXT
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, kb)| (*kb * 1024).abs_diff(bytes))
+            .map_or(0, |(stop, _)| stop)
+    });
+    u32::try_from(stop).unwrap_or_default()
 }
 
 /// What a row shows below the name, and what can be done with it.
@@ -184,7 +233,8 @@ fn row(parser: Parser, state: State, busy: bool, cx: &App) -> Div {
         .disabled(busy && matches!(action, Action::Download | Action::Update))
         .on_click(move |_, window, cx| action.run(parser, window, cx));
         match action {
-            Action::Use | Action::Download | Action::Update => button.outline(),
+            Action::Download => button.icon(AppIcon::Download).outline(),
+            Action::Use | Action::Update => button.outline(),
             Action::Cancel | Action::Remove => button.ghost(),
         }
     });
@@ -565,6 +615,32 @@ mod tests {
             dialog::click("parser-download-cancel", cx);
             assert!(!dialog::is_open(cx));
             cx.read(|cx| assert_eq!(existing(cx).unwrap().downloading(), None));
+        }
+    }
+
+    #[test]
+    fn stops_of_the_slider() {
+        assert_eq!(super::stop(Some(256 * 1024)), 3);
+        assert_eq!(super::stop(Some(1)), 0);
+        assert_eq!(super::stop(Some(300 * 1024)), 3);
+        assert_eq!(super::stop(Some(usize::MAX)), 7);
+        assert_eq!(super::stop(None), 8);
+    }
+
+    #[gpui_kit::test]
+    fn how_much_text_goes_whole_is_saved(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let cx = open(dir.path(), cx);
+        assert!(cx.debug_bounds("whole-text").is_some());
+        let whole = |cx: &VisualTestContext| cx.read(|cx| existing(cx).unwrap().whole_text());
+        assert_eq!(whole(cx), Some(256 * 1024));
+        let number = super::whole_text();
+        for (stop, bytes) in [(5, Some(1024 * 1024)), (8, None)] {
+            cx.update(|_, cx| number.choose(stop, cx));
+            saved(dir.path(), cx);
+            assert_eq!(whole(cx), bytes);
+            let config = config::load(&dir.path().join("documents"));
+            assert_eq!(config.whole_text_bytes, bytes.map(|bytes| bytes as u64));
         }
     }
 

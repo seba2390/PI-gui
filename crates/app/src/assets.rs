@@ -31,6 +31,7 @@ static EMBEDDED: &[(&str, &[u8])] = embedded![
     "icons/play.svg",
     "icons/rotate-ccw.svg",
     "icons/square-pen.svg",
+    "icons/text-wrap.svg",
     "icons/wrench.svg",
     "icons/book-open.svg",
     "icons/bug.svg",

@@ -141,6 +141,32 @@ impl Fake {
     }
 }
 
+/// A file stays with its prompt, whose title and name are about what the user typed.
+#[gpui_kit::test]
+async fn a_file_is_part_of_its_prompt(cx: &mut TestAppContext) {
+    let fake = Fake::ready(cx).await;
+    let block = pi_sessions::prompt::block("paper.pdf", None, "## Page 1\n\ntext");
+    let text = format!("{block}\n\nExplain this");
+    fake.submit(&text, &[], cx);
+    fake.until(cx, |session| {
+        let mut items = session.transcript().items().iter();
+        items.any(|item| matches!(item.kind, ItemKind::User(_)))
+    })
+    .await;
+    let (typed, files, title) = fake.read(cx, |session| {
+        let items = session.transcript().items();
+        let ItemKind::User(user) = &items[0].kind else {
+            panic!("not a prompt");
+        };
+        let names: Vec<_> = user.files.iter().map(|file| file.name.clone()).collect();
+        (user.typed().to_owned(), names, session.display_title())
+    });
+    assert_eq!(fake.prompts(cx), [text]);
+    assert_eq!(typed, "Explain this");
+    assert_eq!(files, ["paper.pdf"]);
+    assert_eq!(title.as_deref(), Some("Explain this"));
+}
+
 fn image(data: &str) -> ImageContent {
     ImageContent::new(data, "image/png")
 }

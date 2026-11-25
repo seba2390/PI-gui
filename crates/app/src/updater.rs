@@ -44,10 +44,12 @@ pub enum Install {
 /// A step of [`install`], for the prompt.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Step {
+    /// Before the download, for as long as that takes (Homebrew looking for updates).
+    Preparing(&'static str),
     /// Downloading: bytes so far and in all.
     Downloading { received: u64, total: u64 },
-    /// Something without a measure of progress (unpacking, Homebrew, the password prompt).
-    Working(&'static str),
+    /// After the download, without a measure of progress (unpacking, the password prompt).
+    Installing(&'static str),
 }
 
 /// What [`relaunch`] opens once the app has quit.
@@ -168,7 +170,7 @@ pub fn install(
             let arch = output("dpkg", &["--print-architecture"])?;
             let name = format!("pistachio_{version}-1_{arch}.deb");
             let package = download_to_temp(release, &name, progress)?;
-            progress(Step::Working("Waiting for your password…"));
+            progress(Step::Installing("Waiting for your password…"));
             let path = package.to_string_lossy();
             root(&["apt-get", "install", "-y", "--allow-downgrades", &path]).map_err(|error| {
                 with_command(
@@ -185,7 +187,7 @@ pub fn install(
             let arch = output("uname", &["-m"])?;
             let name = format!("pistachio-{version}-1.{arch}.rpm");
             let package = download_to_temp(release, &name, progress)?;
-            progress(Step::Working("Waiting for your password…"));
+            progress(Step::Installing("Waiting for your password…"));
             let path = package.to_string_lossy();
             let installed = if on_path("dnf") {
                 root(&["dnf", "install", "-y", &path])
@@ -322,7 +324,7 @@ fn install_mac(
 ) -> Result<Relaunch, String> {
     let version = release.version.as_str();
     if let Some(brew) = brew {
-        progress(Step::Working("Updating with Homebrew…"));
+        progress(Step::Preparing("Updating with Homebrew…"));
         let mut command = Command::new(brew);
         command
             .args(["upgrade", "--cask", "pistachio"])
@@ -334,7 +336,17 @@ fn install_mac(
                     brew.parent().unwrap_or(Path::new("/")).display()
                 ),
             );
-        match run(command, Duration::from_secs(600)) {
+        // Homebrew prints no progress to a pipe, so its download is measured in its cache.
+        let name = mac_asset_name(version);
+        let total = release.asset(&name).map_or(0, |asset| asset.size);
+        let mut watch =
+            brew_downloads(brew).map(|downloads| BrewDownload::new(downloads, &name, total));
+        let poll = || {
+            if let Some(step) = watch.as_mut().and_then(BrewDownload::poll) {
+                progress(step);
+            }
+        };
+        match run_polling(command, Duration::from_secs(600), poll) {
             Ok(_) if bundle_version(app).as_deref() == Some(version) => {
                 return Ok(Relaunch {
                     program: app.to_owned(),
@@ -347,8 +359,7 @@ fn install_mac(
             Err(error) => log::warn!("brew upgrade failed ({error}); installing the download"),
         }
     }
-    // Apple Silicon only since 0.4.7 (0.4.6 was the last universal build).
-    let name = format!("Pistachio-v{version}-macos-arm64.zip");
+    let name = mac_asset_name(version);
     let parent = app.parent().ok_or("The app's folder is unknown.")?;
     // Next to the app, so the swap is a rename on the same disk.
     let stage = parent.join(format!(".Pistachio-{version}.update"));
@@ -362,7 +373,7 @@ fn install_mac(
     let result = (|| {
         let zip = stage.join(&name);
         download(release, &name, &zip, progress)?;
-        progress(Step::Working("Installing…"));
+        progress(Step::Installing("Installing…"));
         let mut unzip = Command::new("/usr/bin/ditto");
         unzip.args(["-x", "-k"]).arg(&zip).arg(&stage);
         run(unzip, Duration::from_secs(300)).map_err(|error| format!("Unpacking: {error}"))?;
@@ -394,6 +405,79 @@ fn install_mac(
     result
 }
 
+/// The release's file for macOS: Apple Silicon only since 0.4.7 (0.4.6 was the last universal
+/// build).
+fn mac_asset_name(version: &str) -> String {
+    format!("Pistachio-v{version}-macos-arm64.zip")
+}
+
+/// The folder Homebrew downloads to.
+fn brew_downloads(brew: &Path) -> Option<PathBuf> {
+    let mut command = Command::new(brew);
+    command.arg("--cache");
+    let cache = run(command, Duration::from_secs(10)).ok()?;
+    let cache = cache.trim();
+    (!cache.is_empty()).then(|| Path::new(cache).join("downloads"))
+}
+
+/// Homebrew's download of the file `name`: it grows in `downloads` as
+/// `<hash of the URL>--<name>.incomplete`, and loses the `.incomplete` when it is done.
+struct BrewDownload {
+    downloads: PathBuf,
+    suffix: String,
+    total: u64,
+    /// What an interrupted download left; Homebrew continues it, or starts over.
+    left_over: Option<u64>,
+    /// The size last reported.
+    reported: Option<u64>,
+}
+
+impl BrewDownload {
+    fn new(downloads: PathBuf, name: &str, total: u64) -> Self {
+        let mut watch = Self {
+            downloads,
+            suffix: format!("--{name}.incomplete"),
+            total,
+            left_over: None,
+            reported: None,
+        };
+        watch.left_over = watch.size();
+        watch
+    }
+
+    /// The size of the unfinished file, while there is one.
+    fn size(&self) -> Option<u64> {
+        std::fs::read_dir(&self.downloads)
+            .ok()?
+            .flatten()
+            .find(|entry| entry.file_name().to_string_lossy().ends_with(&self.suffix))
+            .and_then(|entry| entry.metadata().ok())
+            .map(|metadata| metadata.len())
+    }
+
+    /// The step to show, if there is a new one.
+    fn poll(&mut self) -> Option<Step> {
+        let Some(received) = self.size() else {
+            self.left_over = None;
+            // It was being downloaded and is there now: Homebrew installs it.
+            return self
+                .reported
+                .take()
+                .map(|_| Step::Installing("Installing…"));
+        };
+        // Not touched yet: Homebrew is still looking for updates.
+        if self.left_over == Some(received) || self.reported == Some(received) {
+            return None;
+        }
+        self.left_over = None;
+        self.reported = Some(received);
+        Some(Step::Downloading {
+            received,
+            total: self.total,
+        })
+    }
+}
+
 /// `CFBundleShortVersionString` of an app bundle.
 fn bundle_version(app: &Path) -> Option<String> {
     let plist = app.join("Contents/Info.plist");
@@ -423,7 +507,7 @@ fn install_linux_binary(
     let folder = format!("pistachio-v{version}-linux-{arch}");
     let name = format!("{folder}.tar.gz");
     let archive = download_to_temp(release, &name, progress)?;
-    progress(Step::Working("Installing…"));
+    progress(Step::Installing("Installing…"));
     let dir = archive.parent().ok_or("no download folder")?;
     let mut untar = Command::new("tar");
     untar.arg("-xzf").arg(&archive).arg("-C").arg(dir);
@@ -458,7 +542,7 @@ fn root(argv: &[&str]) -> Result<String, String> {
     }
     let mut command = Command::new("pkexec");
     command.args(argv);
-    run(command, Duration::from_secs(15 * 60)).map_err(|error| {
+    run(command, Duration::from_mins(15)).map_err(|error| {
         if error.contains("exit status: 126") || error.contains("exit status: 127") {
             "The password prompt was dismissed.".to_owned()
         } else {
@@ -504,7 +588,7 @@ fn install_windows(
     let folder = format!("pistachio-v{version}-windows-x86_64");
     let name = format!("{folder}.zip");
     let archive = download_to_temp(release, &name, progress)?;
-    progress(Step::Working("Installing…"));
+    progress(Step::Installing("Installing…"));
     let dir = archive.parent().ok_or("no download folder")?;
     // tar.exe has come with Windows since 10 (1803) and reads zip files.
     let mut untar = Command::new("tar");
@@ -676,7 +760,16 @@ fn output(program: &str, args: &[&str]) -> Result<String, String> {
 
 /// Runs `command` with no input, waiting at most `timeout`; its standard output, or why it
 /// failed (with the last lines it printed).
-fn run(mut command: Command, timeout: Duration) -> Result<String, String> {
+fn run(command: Command, timeout: Duration) -> Result<String, String> {
+    run_polling(command, timeout, || {})
+}
+
+/// [`run`], calling `poll` every now and then while the command runs.
+fn run_polling(
+    mut command: Command,
+    timeout: Duration,
+    mut poll: impl FnMut(),
+) -> Result<String, String> {
     let name = command.get_program().to_string_lossy().into_owned();
     let mut child = command
         .stdin(Stdio::null())
@@ -696,7 +789,10 @@ fn run(mut command: Command, timeout: Duration) -> Result<String, String> {
                 let _ = child.wait();
                 return Err(format!("{name} took too long"));
             }
-            Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+            Ok(None) => {
+                poll();
+                std::thread::sleep(Duration::from_millis(100));
+            }
             Err(error) => return Err(format!("{name}: {error}")),
         }
     };
@@ -802,6 +898,82 @@ mod tests {
 
         let error = download(&release(Vec::new()), "file", &path, &|_| {}).unwrap_err();
         assert!(error.contains("no file to download"), "{error}");
+    }
+
+    #[test]
+    fn homebrews_download_is_measured_in_its_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let name = mac_asset_name("9.9.9");
+        let part = dir.path().join(format!("abc--{name}.incomplete"));
+        let downloading = |received| {
+            Some(Step::Downloading {
+                received,
+                total: 100,
+            })
+        };
+        let watch = || BrewDownload::new(dir.path().to_owned(), &name, 100);
+
+        let mut download = watch();
+        assert_eq!(download.poll(), None, "Homebrew has not started it");
+        // Another version, and a finished download, are not this one.
+        std::fs::write(
+            dir.path().join("abc--Pistachio-v9.9.8.zip.incomplete"),
+            "other",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join(format!("abc--{name}")), "done").unwrap();
+        assert_eq!(download.poll(), None);
+        std::fs::write(&part, [0; 10]).unwrap();
+        assert_eq!(download.poll(), downloading(10));
+        assert_eq!(download.poll(), None, "nothing new");
+        std::fs::write(&part, [0; 60]).unwrap();
+        assert_eq!(download.poll(), downloading(60));
+        std::fs::remove_file(&part).unwrap();
+        assert_eq!(download.poll(), Some(Step::Installing("Installing…")));
+        assert_eq!(download.poll(), None);
+
+        // What an interrupted download left counts once Homebrew continues it.
+        std::fs::write(&part, [0; 60]).unwrap();
+        let mut download = watch();
+        assert_eq!(download.poll(), None);
+        std::fs::write(&part, [0; 70]).unwrap();
+        assert_eq!(download.poll(), downloading(70));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_running_command_is_polled() {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "sleep 0.5; echo out"]);
+        let mut polls = 0;
+        let out = run_polling(command, Duration::from_secs(20), || polls += 1).unwrap();
+        assert_eq!(out.trim(), "out");
+        assert!(polls >= 2, "{polls}");
+    }
+
+    /// Watches Homebrew download the installed version again:
+    /// `cargo test -p pistachio brew_fetch -- --ignored --nocapture`.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "needs Homebrew, the tap and the network"]
+    fn brew_fetch_reports_its_progress() {
+        let brew = Path::new("/opt/homebrew/bin/brew");
+        let mut info = Command::new(brew);
+        info.args(["--cache", "--cask", "pistachio"]);
+        let cached = PathBuf::from(run(info, Duration::from_secs(60)).unwrap().trim());
+        let file = cached.file_name().unwrap().to_string_lossy().into_owned();
+        let name = file.split_once("--").unwrap().1;
+        let mut fetch = Command::new(brew);
+        fetch.args(["fetch", "--force", "--cask", "pistachio"]);
+        let mut watch = BrewDownload::new(brew_downloads(brew).unwrap(), name, 0);
+        let mut steps = Vec::new();
+        run_polling(fetch, Duration::from_secs(300), || {
+            steps.extend(watch.poll());
+        })
+        .unwrap();
+        println!("{steps:#?}");
+        assert!(matches!(steps.first(), Some(Step::Downloading { .. })));
+        assert_eq!(steps.last(), Some(&Step::Installing("Installing…")));
     }
 
     #[cfg(unix)]

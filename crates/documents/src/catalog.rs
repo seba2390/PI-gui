@@ -13,7 +13,7 @@ const PYTHON_DISK: u64 = 90_000_000;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Parser {
-    /// pdf-extract, which comes with the app.
+    /// What comes with the app.
     #[default]
     Builtin,
     Pymupdf4llm,
@@ -63,13 +63,16 @@ impl Parser {
     /// What it is good at.
     pub fn strengths(self) -> &'static str {
         match self {
-            Self::Builtin => "Plain text, page by page. Fast, and nothing to download.",
+            Self::Builtin => {
+                "The text of PDFs, page by page, and of Word, PowerPoint, Excel, OpenDocument and EPUB \
+                 files. Fast, and nothing to download."
+            }
             Self::Pymupdf4llm => {
                 "Fast. Headings, columns and tables of PDFs made on a computer. No scans or \
                  formulas."
             }
             Self::Docling => {
-                "Complex layouts, reading order, tables and scans. Also reads Word, PowerPoint and \
+                "Complex layouts, reading order, tables and scans. Also for Word, PowerPoint and \
                  Excel files in chats."
             }
             Self::Mineru => {

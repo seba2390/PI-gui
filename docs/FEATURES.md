@@ -15,13 +15,14 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   transcripts: `cargo run --release -p transcript --example label_corpus -- <session.jsonl…>`.
 - Tools that run other tools (subagents, code mode) show that work inside their own row: a
   live step count while running, and every nested call and reply when expanded.
-- Composer: attachments, working-folder picker (a long name fades out), model and thinking
-  pickers (only the thinking levels that differ on the model), context-window wheel,
-  `/` command completion, inline `@file` completion (paths with spaces are quoted like pi does),
-  ↑ / ↓ through earlier prompts, and `!cmd` shell commands (with live output; Esc stops them).
-  Messages typed while pi starts, compacts or is busy sending are listed above the input as
-  “Waiting to send”, each with a cancel button. A message you have not sent stays with its
-  session while the app runs, also when you open another one.
+- Composer: attachments (cards with a small picture of the file, its extension and its name; a
+  spinner turns on those still being read), working-folder picker (a long name fades out), model and
+  thinking pickers (only the thinking levels that differ on the model), context-window wheel, `/`
+  command completion, inline `@file` completion (paths with spaces are quoted like pi does), ↑ / ↓
+  through earlier prompts, and `!cmd` shell commands (with live output; Esc stops them). Messages
+  typed while pi starts, compacts or is busy sending are listed above the input as “Waiting to
+  send”, each with a cancel button. A message you have not sent stays with its session while the app
+  runs, also when you open another one.
 - If pi stops (a crash or a failed start), the chat offers **Restart pi** on the same session;
   anything not yet sent, or refused by pi, goes back into the message box.
 - pi gets your login shell's environment (API keys, proxies, cloud settings), also when the app is
@@ -33,9 +34,10 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   - **Chat**: plain conversation with **no file or shell tools**: the model cannot read, write
     or run anything on your computer. Chats run pi in a dedicated empty folder
     (`~/.pi/agent/pistachio/chat`) with only deep search's two web tools (`--tools
-    web_search,web_fetch --no-mcp`), which stay off until you turn web search on. Text
-    attachments are pasted into the prompt instead of being referenced by path (PDF files as
-    Markdown, see [Documents](#documents)), and `!` shell commands are disabled.
+    web_search,web_fetch --no-mcp`), which stay off until you turn web search on. The
+    text of attached files goes along with the message instead of a path (of PDF files as Markdown,
+    see [Documents](#documents)), and shows as a small page above it; `!` shell commands are
+    disabled.
   - **Web search** (Chat): the globe button next to the paperclip chooses how the model uses
     the web, per chat (remembered in the session; `/websearch off|search|deep` works too):
     - **Search**: a quick lookup when needed (a few searches and pages), then a concise answer
@@ -191,10 +193,11 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   reads (on the SSH host for remote sessions); the previous version is kept as
   `models.json.bak-pistachio`. pi reads the file only when it starts, so after saving it restarts
   on the same session (after the current turn, if one is running) and selects the new model.
-- **Pictures**: when the agent reads an image, a thumbnail shows next to the call (the first two
-  of an "Explored" group, with "+N"); pictures attached to a prompt show above it. Clicking one
-  opens a full-window viewer: ← / → or the arrows browse all of that call's, group's or
-  prompt's pictures, Esc closes it.
+- **Pictures**: when the agent reads an image, a thumbnail shows next to the call (the first two of
+  an "Explored" group, with "+N"); pictures attached to a prompt show above it, with their file
+  extension in a corner. Clicking one opens a full-window viewer: ← / → or the arrows browse all of
+  that call's, group's or prompt's pictures, Esc closes it. pi's notes to the model about pictures
+  it made smaller are not shown.
 - **Working indicator**: a little green π with orbiting dots shows a working agent in the
   chat ("Working… 12s · esc to interrupt", centred) and before its name in the sidebar. Settings
   → Appearance → Working indicator picks the style, with a live preview.
@@ -228,14 +231,14 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
 
 ## Documents
 
-PDF files are read as Markdown: the ones you attach to a chat, the ones chats find on the web, and
-the ones pi reads in Code sessions on this computer. Settings → Document parsing chooses what reads
+Documents are read as Markdown: the ones you attach to a chat, PDF files that chats find on the web,
+and those pi reads in Code sessions on this computer. Settings → Document parsing chooses what reads
 them. The built-in reader is the default and needs no download; the others are downloaded on request
 and can be removed again (macOS and Linux):
 
 | Parser | Good at | Download (on disk) | License |
 |---|---|---|---|
-| Built-in ([pdf-extract](https://crates.io/crates/pdf-extract)) | plain text, page by page | none | MIT |
+| Built-in ([pdf-extract](https://crates.io/crates/pdf-extract), [calamine](https://crates.io/crates/calamine) and our own) | plain text of PDFs, page by page; Word, PowerPoint, Excel, OpenDocument and EPUB files | none | MIT |
 | [PyMuPDF4LLM](https://github.com/pymupdf/pymupdf) | fast; headings, columns and tables of PDFs made on a computer | 143 MB (320 MB) | AGPL-3.0 |
 | [Docling](https://github.com/docling-project/docling) | complex layouts, tables, scans; also Word, PowerPoint and Excel files | 788 MB (1.8 GB); Linux 3.7 GB (8.5 GB) | MIT |
 | [MinerU](https://github.com/opendatalab/MinerU) | academic papers: formulas, dense columns, long tables, scans | 1.0 GB (1.3 GB) | MinerU Open Source License (Apache-2.0 with added terms) |
@@ -255,19 +258,45 @@ small test document before it replaces an old one. Parsers run one process per d
 network, and for at most 10 minutes (2 for a PDF from the web). If the chosen one is missing, fails
 or takes too long, the built-in reader is used and the result says so.
 
-- **Chats:** an attached PDF shows “Reading…” until it is done; it can be removed meanwhile, and the
-  message is not sent before. A document of more than 256 KB of text is shortened to its outline,
-  its start and the parts that match your message, and the message says so. With Docling, Word,
-  PowerPoint and Excel files (`.docx`, `.pptx`, `.xlsx`) can be attached the same way. Files on this
-  computer attached to a session on an SSH host are read too.
+- **Chats:** the card of an attached PDF shows its first page with a spinner and “Reading…” until it
+  is done; it can be removed meanwhile, and the message is not sent before. Once sent, its first
+  page shows above the message, with “.pdf” on it (macOS, and Linux with poppler's `pdftoppm`;
+  otherwise a page with its name); clicking either shows the file in the viewer (below). The text
+  goes to the model with the message but is not shown, and Edit and Retry keep it. The same goes for
+  Word, PowerPoint, Excel (`.docx`, `.pptx`, `.xlsx` and their kin, `.xls`, `.xlsb`), OpenDocument
+  (`.odt`, `.odp`, `.ods`) and EPUB files, whose headings, lists, tables, notes and footnotes are
+  kept: Docling reads the Office ones if it is chosen, the built-in reader all others. Plain text
+  can be in any common encoding and up to 16 MB. Pictures in BMP, TIFF and SVG are converted to PNG
+  (in Code sessions, SVG stays an `@path`). Files on this computer attached to a session on an SSH
+  host are read too.
+- **Long texts:** text of more than 256 KB, of a document or a plain file, is shortened to a quarter
+  of that: its outline, its start and the parts that match your message. The card says “Shortened”,
+  and the model is told. A slider in Settings → Document parsing changes the limit, from 32 KB to
+  all that fits. What does not fit in what is left of the model's context (a fifth of which is kept
+  for the answer) is always shortened. Logs, tables and source code are cut between lines, and their
+  start (the names of columns) is always there.
+- **Viewer:** PDF files are shown in the app, drawn by [hayro](https://github.com/LaurenzV/hayro) in
+  a helper process that ends with the viewer. Only the pages you look at and their neighbors are
+  drawn. The sun or moon chooses light or dark pages (like the app until you choose; remembered):
+  dark ones keep the hue of colors, and leave photos and pages that are dark anyway as they are.
+  Links open web pages and mail, or lead to a place in the file; ← at the top, or ⌘[ , goes back.
+  Zoom with the buttons, ⌘+ / ⌘- / ⌘0 (fill the width) or a pinch; scroll with ↑ / ↓, Space, Page Up
+  / Down, Home / End, and ← / → for pages. Another button opens the file in your usual app, to
+  print, search or copy from it. Files protected with a password are not shown.
+- **Text viewer:** attached text files (`.txt`, `.tex`, `.csv`, source code and any others that are
+  plain text) open in the app too, with line numbers and the colors of the Code setting. Text can be
+  selected, copied and searched (⌘F), and not changed; a button wraps long lines, which prose has
+  from the start, and another shows the file in its folder. Of a file of more than 2 MB the start is
+  shown, and above 512 KB there are no colors.
 - **Web search:** PDFs found on the web are read with the same parser; the model gets the passages
   that match, with tables kept whole.
 - **Code:** an attached PDF stays an `@path`. When pi reads a PDF, a small embedded extension returns
   its Markdown; `offset` and `limit` are lines of that. Other files are pi's own business, and so are
   all files in sessions on an SSH host.
-- `config.json` in that folder has the parser and the limits: `timeout_secs`, `web_timeout_secs` and
-  `max_file_bytes` (100 MB). The text of the last documents is kept in `cache` there (24 at most),
-  because long ones are read in parts.
+- `config.json` in that folder has the parser and the limits: `timeout_secs`, `web_timeout_secs`,
+  `max_file_bytes` (100 MB) and `whole_text_bytes` (256 KB; `null` for all that fits). The text of
+  the last documents is kept in `cache` there (24 at most), because long ones are read in parts;
+  `attached` has where attached files are and the small pictures of PDFs.
 - Try it without the GUI: `pistachio --documents-tool parse paper.pdf` prints the Markdown.
 
 ## Speech to text
@@ -361,6 +390,7 @@ the new version: `brew upgrade --cask pistachio` for a Homebrew install on macOS
 new app replaces the old one), the .deb or .rpm on Linux (the system asks for your password) or
 the binary the tarball installed, and `pistachio.exe` on Windows. The download is checked against
 GitHub's checksum; if anything fails, the old version stays and the prompt says what happened.
+A progress bar shows how much is downloaded, also when Homebrew downloads it.
 **Download instead** opens the download in your browser, and a version can be skipped. Nothing is
 downloaded or installed without a yes, and the automatic check can be turned off in Settings.
 

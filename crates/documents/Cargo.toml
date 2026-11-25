@@ -14,6 +14,18 @@ serde.workspace = true
 serde_json.workspace = true
 # PDF text; small, and only used by the helper process.
 pdf-extract = "0.12.1"
+# Draws the pages of PDF files, in a helper process; pure Rust, on the CPU.
+hayro = "0.9.0"
+# Office, OpenDocument and EPUB files are zip archives of XML; spreadsheets are read by calamine.
+zip = { version = "9.8.1", default-features = false, features = ["deflate"] }
+roxmltree = "0.21.2"
+calamine = "0.38.0"
+# The versions gpui already links, for the chapters of books.
+html5ever = "0.40"
+markup5ever_rcdom = "0.40"
+# Text in other encodings.
+encoding_rs = "0.8.44"
+chardetng = "1.0.0"
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", default-features = false, features = ["process"] }

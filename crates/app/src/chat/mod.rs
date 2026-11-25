@@ -1,23 +1,29 @@
 //! The chat column: transcript above, composer below.
 
+mod attachment_card;
 mod commands;
 pub mod composer;
 mod context_panel;
+mod convert;
 pub mod dialogs;
 mod document;
 mod file_links;
 mod file_picker;
+mod files;
 mod find;
 mod images;
 mod math;
 pub(crate) mod mention;
 pub mod models_dialog;
+pub mod pdf_viewer;
 mod queued;
 mod report;
 mod rows;
 pub mod session;
 #[cfg(all(test, unix))]
 mod session_tests;
+pub mod text_viewer;
+mod viewer_dialog;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -467,9 +473,9 @@ impl ChatView {
                     block: 0,
                 };
                 if self.markdown.get(&key).map(|markdown| markdown.source_len)
-                    != Some(user.text.len())
+                    != Some(user.typed().len())
                 {
-                    user_texts.push((key, user.text.clone()));
+                    user_texts.push((key, user.typed().to_owned()));
                 }
             }
             if let ItemKind::Assistant(assistant) = &item.kind {

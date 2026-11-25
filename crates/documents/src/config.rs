@@ -41,7 +41,12 @@ pub struct Config {
     pub web_timeout_secs: u64,
     /// Larger files are not read.
     pub max_file_bytes: u64,
+    /// Longer texts are shortened when they go along with a message of a chat; `null` for only
+    /// those the model has no room for.
+    pub whole_text_bytes: Option<u64>,
 }
+
+pub const WHOLE_TEXT_BYTES: u64 = 256 * 1024;
 
 impl Default for Config {
     fn default() -> Self {
@@ -50,6 +55,7 @@ impl Default for Config {
             timeout_secs: 600,
             web_timeout_secs: 120,
             max_file_bytes: 100_000_000,
+            whole_text_bytes: Some(WHOLE_TEXT_BYTES),
         }
     }
 }
@@ -111,6 +117,8 @@ mod tests {
         write(r#"{"parser": "marker", "timeout_secs": 30}"#);
         let config = load(dir.path());
         assert_eq!((config.parser, config.timeout_secs), (Parser::Builtin, 30));
+        write(r#"{"whole_text_bytes": null}"#);
+        assert_eq!(load(dir.path()).whole_text_bytes, None);
         write("{ not json");
         assert_eq!(load(dir.path()), Config::default());
     }

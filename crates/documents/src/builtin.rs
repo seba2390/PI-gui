@@ -1,4 +1,5 @@
-//! The built-in reader: the text of PDF files, page by page.
+//! The built-in reader: the text of PDF files, page by page, and that of other documents
+//! ([`office`]).
 
 use std::fmt::Write as _;
 use std::sync::mpsc;
@@ -9,19 +10,38 @@ const TIMEOUT: Duration = Duration::from_secs(40);
 /// Deeply nested PDFs need more stack than a thread usually has.
 const STACK: usize = 64 * 1024 * 1024;
 
+use crate::{Kind, office};
+
 /// The paragraphs of each page.
 pub fn read(bytes: Vec<u8>) -> Result<Vec<Vec<String>>, String> {
+    let pages = in_time(move || {
+        pdf_extract::extract_text_from_mem_by_pages(&bytes).map_err(|error| error.to_string())
+    })?;
+    Ok(pages.iter().map(|page| paragraphs(page)).collect())
+}
+
+/// The text of a document of `kind`, which is no PDF, as Markdown.
+pub fn read_other(kind: Kind, bytes: Vec<u8>) -> Result<String, String> {
+    let text = in_time(move || office::read(kind, bytes))?;
+    if text.trim().is_empty() {
+        return Err("there is no text in it".into());
+    }
+    Ok(text)
+}
+
+fn in_time<T: Send + 'static>(
+    read: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
     let (sender, receiver) = mpsc::channel();
     // Not joined: a PDF that takes too long is left to the end of the helper process.
     std::thread::Builder::new()
         .stack_size(STACK)
         .spawn(move || {
-            let _ = sender.send(pdf_extract::extract_text_from_mem_by_pages(&bytes));
+            let _ = sender.send(read());
         })
         .map_err(|error| error.to_string())?;
     match receiver.recv_timeout(TIMEOUT) {
-        Ok(Ok(pages)) => Ok(pages.iter().map(|page| paragraphs(page)).collect()),
-        Ok(Err(error)) => Err(error.to_string()),
+        Ok(result) => result,
         Err(_) => Err("it takes too long to read".into()),
     }
 }

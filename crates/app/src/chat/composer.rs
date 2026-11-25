@@ -8,11 +8,13 @@
 use pi_sessions::Mode;
 use remote::HostId;
 use std::fmt::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use deepsearch::effort::Effort;
+use documents::attached;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{
     Escape, IndentInline, InputEvent, MoveDown, MoveUp, Textarea, TextareaState,
@@ -30,15 +32,21 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use pi_rpc::protocol::ImageContent;
+use pi_sessions::prompt;
 
+use super::attachment_card::{self, Card, Preview};
 use super::commands::{self, CommandOutcome, Suggestion, SuggestionList};
-use super::document::{AttachedDocument, Reading};
+use super::convert;
+use super::document::{AttachedDocument, Reading, Room};
 use super::file_picker::{self, FilePicker, Pick};
+use super::images;
 use super::mention::{self, History};
+use super::pdf_viewer;
 use super::session::{Lifecycle, PiSession, WebMode};
+use super::text_viewer;
 use crate::config::{AppConfig, RecentFolders};
 use crate::theme::palette;
-use crate::ui::{AppIcon, FadingText, QuietButton as _};
+use crate::ui::{AppIcon, FadingText, QuietButton as _, spinner};
 use gpui_kit::component::WindowExt as _;
 
 actions!(
@@ -77,20 +85,26 @@ pub enum ComposerEvent {
 
 /// A file attached to the next prompt.
 struct Attachment {
+    /// Its place among the attachments and those still being read.
+    order: u64,
     path: PathBuf,
     name: SharedString,
+    preview: Preview,
     /// Images are sent as image content; other files as `@path` references,
     /// which is how pi's terminal refers to files.
     image: Option<ImageContent>,
-    /// In chat mode the model has no `read` tool, so text files and documents are pasted into
-    /// the prompt.
+    /// In chat mode the model has no `read` tool, so the text of files and documents goes along
+    /// with the prompt.
     inline: Option<InlineText>,
+    /// What the app knows a file whose text goes along by ([`documents::attached`]).
+    id: Option<String>,
 }
 
 /// An attachment's contents for chat mode, or why it could not be included.
 enum InlineText {
-    Text(String),
     Document(AttachedDocument),
+    /// The block of a message that came back, as it was sent.
+    Sent(String),
     Skipped(String),
 }
 
@@ -100,12 +114,13 @@ impl InlineText {
     }
 }
 
-/// Local files being read to attach, which the composer may be emptied before.
+/// A local file being read to attach, which the composer may be emptied before.
 struct Loading {
-    id: u64,
-    paths: Vec<PathBuf>,
-    /// A document, which can take a while: it has a chip of its own.
-    document: Option<Reading>,
+    order: u64,
+    path: PathBuf,
+    preview: Preview,
+    /// Dropping it stops the reading of a document, which can take a while.
+    _document: Option<Reading>,
 }
 
 /// What is typed and attached in a composer but not sent.
@@ -146,17 +161,15 @@ impl Draft {
     }
 }
 
-/// Text attachments larger than this are not pasted into a chat prompt, and documents only in
-/// part.
-pub(super) const MAX_INLINE_BYTES: usize = 256 * 1024;
-
 pub struct Composer {
     session: Entity<PiSession>,
     input: Entity<TextareaState>,
     attachments: Vec<Attachment>,
     /// Attachments still being read.
     loading: Vec<Loading>,
-    next_loading: u64,
+    next_attachment: u64,
+    /// Repaints the spinners while something is being read.
+    spinning: Option<Task<()>>,
     /// The attach popover's file list (searchable, indexed in the background).
     picker: Entity<ListState<FilePicker>>,
     picker_open: bool,
@@ -298,7 +311,8 @@ impl Composer {
             input,
             attachments: Vec::new(),
             loading: Vec::new(),
-            next_loading: 0,
+            next_attachment: 0,
+            spinning: None,
             picker,
             picker_open: false,
             context_open: false,
@@ -537,7 +551,19 @@ impl Composer {
     /// scripted end-to-end checks).
     pub fn send_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.set_text(text, window, cx);
-        self.submit(false, window, cx);
+        if self.loading.is_empty() {
+            self.submit(false, window, cx);
+            return;
+        }
+        // Once what is attached is read.
+        cx.spawn_in(window, async move |this, cx| {
+            let wait = Duration::from_millis(100);
+            while let Ok(true) = this.read_with(cx, |this, _| !this.loading.is_empty()) {
+                cx.background_executor().timer(wait).await;
+            }
+            let _ = this.update_in(cx, |this, window, cx| this.submit(false, window, cx));
+        })
+        .detach();
     }
 
     pub fn set_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -548,7 +574,7 @@ impl Composer {
     }
 
     /// Puts messages given back by the session into the composer: before the current draft
-    /// (or instead of it with `replace`), with their images as attachments.
+    /// (or instead of it with `replace`), with their files and images as attachments.
     pub fn restore(
         &mut self,
         text: &str,
@@ -558,18 +584,39 @@ impl Composer {
         cx: &mut Context<Self>,
     ) {
         let draft = self.input.read(cx).value().to_string();
-        let merged = merge_restored(text, &draft, replace);
+        let prompt = prompt::split(text);
+        let merged = merge_restored(prompt.text, &draft, replace);
         self.input
             .update(cx, |input, cx| input.set_value(merged, window, cx));
         if replace {
             self.attachments.clear();
         }
+        let dir = cx.global::<AppConfig>().documents_dir.clone();
+        for (file, block) in prompt.files {
+            let preview = match &file.id {
+                Some(id) => remembered_preview(&dir, id),
+                None => Preview::None,
+            };
+            self.attach(Attachment {
+                order: 0,
+                path: PathBuf::new(),
+                name: file.name.into(),
+                preview,
+                image: None,
+                inline: Some(InlineText::Sent(block.to_owned())),
+                id: file.id,
+            });
+        }
         for (index, image) in images.into_iter().enumerate() {
-            self.attachments.push(Attachment {
+            self.attach(Attachment {
+                order: 0,
                 path: PathBuf::new(),
                 name: format!("Image {}", index + 1).into(),
+                preview: images::from_base64(&image.data, &image.mime_type)
+                    .map_or(Preview::None, Preview::Image),
                 image: Some(image),
                 inline: None,
+                id: None,
             });
         }
         let focus = self.focus_handle(cx);
@@ -607,7 +654,7 @@ impl Composer {
             attachments: std::mem::take(&mut self.attachments),
             unread: std::mem::take(&mut self.loading)
                 .into_iter()
-                .flat_map(|loading| loading.paths)
+                .map(|loading| loading.path)
                 .collect(),
             host: self.session.read(cx).host().cloned(),
         };
@@ -644,12 +691,13 @@ impl Composer {
         let mut left_behind = Vec::new();
         for attachment in draft.attachments {
             let on_host = draft.host.is_some() && attachment.inline.is_none();
-            if attachment.image.is_some() {
-                self.attachments.push(attachment);
+            let sent = matches!(attachment.inline, Some(InlineText::Sent(_)));
+            if attachment.image.is_some() || sent {
+                self.attach(attachment);
             } else if on_host && moved {
                 left_behind.push(attachment.name);
             } else if on_host || attachment.inline.is_some() == inline {
-                self.attachments.push(attachment);
+                self.attach(attachment);
             } else {
                 local.push(attachment.path);
             }
@@ -697,10 +745,7 @@ impl Composer {
 
         // Still being read: the message waits here for it.
         if let Some(loading) = self.loading.first() {
-            let name = loading
-                .document
-                .as_ref()
-                .map_or("a file".into(), |document| document.name.clone());
+            let name = attachment_name(&loading.path);
             window.push_notification(
                 format!("Not sent yet: {name} is still being read. Wait for it, or remove it."),
                 cx,
@@ -719,17 +764,22 @@ impl Composer {
         }
 
         let cwd = self.session.read(cx).cwd().to_owned();
+        let mut blocks = Vec::new();
         let mut references = Vec::new();
         let mut images = Vec::new();
+        let mut room = self.room(cx);
         for attachment in self.attachments.drain(..) {
+            let block = |contents: &str| {
+                prompt::block(&attachment.name, attachment.id.as_deref(), contents)
+            };
             match (attachment.image, attachment.inline) {
                 (Some(image), _) => images.push(image),
-                (None, Some(InlineText::Text(text))) => {
-                    references.push(inline_file_block(&attachment.name, &text));
-                }
                 (None, Some(InlineText::Document(document))) => {
-                    references.push(document.block(&attachment.name, &text));
+                    let contents = document.contents(&text, &room);
+                    room.take(contents.len());
+                    blocks.push(block(&contents));
                 }
+                (None, Some(InlineText::Sent(sent))) => blocks.push(sent),
                 (None, Some(InlineText::Skipped(reason))) => {
                     references.push(format!(
                         "(Attachment `{}` was not included: {reason}.)",
@@ -748,7 +798,7 @@ impl Composer {
         let message = if references.is_empty() {
             text
         } else {
-            // Pasted files (chat mode) each get their own paragraph; `@path`s share a line.
+            // What is said of files (chat mode) gets paragraphs; `@path`s share a line.
             let separator = if self.session.read(cx).is_local_code() {
                 " "
             } else {
@@ -758,6 +808,8 @@ impl Composer {
                 .trim()
                 .to_owned()
         };
+
+        let message = prompt::join(blocks.iter().map(String::as_str), &message);
 
         self.session.update(cx, |session, cx| {
             session.submit(message, images, follow_up, cx);
@@ -859,11 +911,14 @@ impl Composer {
                     || path.display().to_string(),
                     |name| name.to_string_lossy().into_owned(),
                 );
-                self.attachments.push(Attachment {
+                self.attach(Attachment {
+                    order: 0,
                     path,
                     name: name.into(),
+                    preview: Preview::None,
                     image: None,
                     inline: None,
+                    id: None,
                 });
             }
             Pick::File(path) => self.attach_paths(vec![path], cx),
@@ -909,14 +964,17 @@ impl Composer {
                         self.attachments.len() + 1,
                         mime.trim_start_matches("image/")
                     );
-                    self.attachments.push(Attachment {
+                    self.attach(Attachment {
+                        order: 0,
                         path: PathBuf::from(&name),
                         name: name.into(),
+                        preview: Preview::Image(Arc::new(image.clone())),
                         image: Some(ImageContent::new(
                             base64::engine::general_purpose::STANDARD.encode(&image.bytes),
                             mime,
                         )),
                         inline: None,
+                        id: None,
                     });
                     consumed = true;
                 }
@@ -934,65 +992,125 @@ impl Composer {
         consumed
     }
 
-    fn attach_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
-        // Without local file access (chat, or pi on another machine) text files are pasted in.
+    pub fn attach_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        // Without local file access (chat, or pi on another machine) the text of files goes along.
         let inline = !self.session.read(cx).is_local_code();
-        let (documents, paths): (Vec<_>, Vec<_>) = paths
-            .into_iter()
-            .partition(|path| inline && AttachedDocument::is_one(path));
-        for path in documents {
-            self.read_document(path, cx);
+        // For how much of a text goes along.
+        crate::document_parsers::document_parsers(cx);
+        let dir = cx.global::<AppConfig>().documents_dir.clone();
+        let svg = cx.svg_renderer();
+        for path in paths {
+            if inline && AttachedDocument::is_one(&path) {
+                self.read_document(path, cx);
+                continue;
+            }
+            let order = self.start_loading(path.clone(), None, cx);
+            let (dir, svg) = (dir.clone(), svg.clone());
+            cx.spawn(async move |this, cx| {
+                let attachment = cx
+                    .background_executor()
+                    .spawn(async move { load_attachment(path, inline, &dir, &svg) })
+                    .await;
+                let _ = this.update(cx, |this, cx| this.loaded(order, attachment, cx));
+            })
+            .detach();
         }
-        if paths.is_empty() {
+    }
+
+    /// Adds `attachment` after the others.
+    fn attach(&mut self, attachment: Attachment) {
+        let order = self.next_order();
+        self.attachments.push(Attachment {
+            order,
+            ..attachment
+        });
+    }
+
+    fn next_order(&mut self) -> u64 {
+        self.next_attachment += 1;
+        self.next_attachment
+    }
+
+    fn start_loading(
+        &mut self,
+        path: PathBuf,
+        document: Option<Reading>,
+        cx: &mut Context<Self>,
+    ) -> u64 {
+        let order = self.next_order();
+        self.loading.push(Loading {
+            order,
+            path,
+            preview: Preview::None,
+            _document: document,
+        });
+        self.spin(cx);
+        cx.notify();
+        order
+    }
+
+    /// Repaints while something is being read.
+    fn spin(&mut self, cx: &mut Context<Self>) {
+        if self.spinning.is_some() || cx.reduce_motion() {
             return;
         }
-        let id = self.start_loading(paths.clone(), None);
-        cx.spawn(async move |this, cx| {
-            let attachments = cx
-                .background_executor()
-                .spawn(async move {
-                    paths
-                        .into_iter()
-                        .map(|path| load_attachment(path, inline))
-                        .collect::<Vec<_>>()
-                })
-                .await;
-            let _ = this.update(cx, |this, cx| this.loaded(id, attachments, cx));
-        })
-        .detach();
+        self.spinning = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(spinner::FRAME).await;
+                let spinning = this.update(cx, |this, cx| {
+                    let reading = this.is_reading();
+                    if reading {
+                        cx.notify();
+                    } else {
+                        this.spinning = None;
+                    }
+                    reading
+                });
+                if !spinning.unwrap_or(false) {
+                    break;
+                }
+            }
+        }));
     }
 
-    fn start_loading(&mut self, paths: Vec<PathBuf>, document: Option<Reading>) -> u64 {
-        let id = self.next_loading;
-        self.next_loading += 1;
-        self.loading.push(Loading {
-            id,
-            paths,
-            document,
-        });
-        id
-    }
-
-    fn loaded(&mut self, id: u64, attachments: Vec<Attachment>, cx: &mut Context<Self>) {
-        // Removed, or taken with the draft meanwhile: they are read again where it went.
-        let Some(index) = self.loading.iter().position(|loading| loading.id == id) else {
+    /// What is loading as `order` was read; it keeps its place.
+    fn loaded(&mut self, order: u64, attachment: Attachment, cx: &mut Context<Self>) {
+        // Removed, or taken with the draft meanwhile: it is read again where it went.
+        let Some(index) = self.loading.iter().position(|l| l.order == order) else {
             return;
         };
         self.loading.remove(index);
-        self.attachments.extend(attachments);
+        let index = self.attachments.partition_point(|a| a.order < order);
+        self.attachments.insert(
+            index,
+            Attachment {
+                order,
+                ..attachment
+            },
+        );
         cx.notify();
     }
 
     /// Reads a document for a chat with the parser in the settings.
     fn read_document(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        let name = attachment_name(&path);
-        let (reading, stopped) = Reading::new(name.clone());
-        let id = self.start_loading(vec![path.clone()], Some(reading));
-        cx.notify();
+        let (reading, stopped) = Reading::new();
+        let order = self.start_loading(path.clone(), Some(reading), cx);
         let (exe, dir) = {
             let config = cx.global::<AppConfig>();
             (config.exe.clone(), config.documents_dir.clone())
         };
+        // Its first page shows while it is read.
+        let remembered = cx.background_executor().spawn({
+            let (dir, path) = (dir.clone(), path.clone());
+            async move {
+                let id = attached::remember(&dir, &path);
+                let preview = match &id {
+                    Some(id) => remembered_preview(&dir, id),
+                    None => Preview::None,
+                };
+                (id, preview)
+            }
+        });
         let (tx, rx) = async_channel::bounded(1);
         // A thread of its own: it can take minutes.
         let spawned = std::thread::Builder::new()
@@ -1005,20 +1123,36 @@ impl Composer {
                 }
             });
         cx.spawn(async move |this, cx| {
+            let (id, preview) = remembered.await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(loading) = this.loading.iter_mut().find(|l| l.order == order) {
+                    loading.preview = preview.clone();
+                    cx.notify();
+                }
+            });
             let read = match spawned {
                 Ok(_) => rx.recv().await.unwrap_or_else(|e| Err(e.to_string())),
                 Err(error) => Err(error.to_string()),
             };
+            // What has no picture shows its start.
+            let preview = match (&read, preview) {
+                (Ok(document), Preview::None) => attached::start(document.text())
+                    .map_or(Preview::None, |start| Preview::Text(start.into())),
+                (_, preview) => preview,
+            };
             let attachment = Attachment {
+                order,
+                name: attachment_name(&path),
                 path,
-                name,
+                preview,
                 image: None,
                 inline: Some(match read {
                     Ok(document) => InlineText::Document(document),
                     Err(reason) => InlineText::Skipped(reason),
                 }),
+                id,
             };
-            let _ = this.update(cx, |this, cx| this.loaded(id, vec![attachment], cx));
+            let _ = this.update(cx, |this, cx| this.loaded(order, attachment, cx));
         })
         .detach();
     }
@@ -1553,84 +1687,86 @@ impl Composer {
     }
 
     fn render_attachments(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let chips = self
-            .attachments
-            .iter()
-            .enumerate()
-            .map(|(index, attachment)| {
-                let (remark, why) = attachment.remark();
-                chip(cx)
-                    .id(("attachment", index))
-                    .when_some(why, |this, why| {
-                        this.tooltip(move |window, cx| Tooltip::new(why.clone()).build(window, cx))
-                    })
-                    .child(if attachment.image.is_some() {
-                        Icon::from(AppIcon::Image).xsmall()
-                    } else {
-                        Icon::new(IconName::File).xsmall()
-                    })
-                    .child(attachment.name.clone())
-                    .children(
-                        remark.map(|remark| {
-                            div().text_color(cx.theme().muted_foreground).child(remark)
-                        }),
-                    )
-                    .child(
-                        Button::new(("remove-attachment", index))
-                            .accessibility_label(format!("Remove {}", attachment.name))
-                            .quiet(cx)
-                            .xsmall()
-                            .icon(IconName::Close)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if index < this.attachments.len() {
-                                    this.attachments.remove(index);
-                                    cx.notify();
-                                }
-                            })),
-                    )
-            })
-            .collect::<Vec<_>>();
-        let reading = self.loading.iter().filter_map(|loading| {
-            let name = loading.document.as_ref()?.name.clone();
-            let id = loading.id;
-            Some(
-                chip(cx)
-                    .debug_selector(|| "reading-document".into())
-                    .child(Icon::new(IconName::File).xsmall())
-                    .child(name.clone())
-                    .child(
-                        div()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("Reading…"),
-                    )
-                    .child(
-                        Button::new(("stop-reading", usize::try_from(id).unwrap_or_default()))
-                            .accessibility_label(format!("Remove {name}"))
-                            .quiet(cx)
-                            .xsmall()
-                            .icon(IconName::Close)
-                            // Dropping it stops the reading.
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.loading.retain(|loading| loading.id != id);
-                                cx.notify();
-                            })),
-                    ),
-            )
-        });
+        let mut cards: Vec<(u64, AnyElement)> = Vec::new();
+        let mut room = self.room(cx);
+        for attachment in &self.attachments {
+            let order = attachment.order;
+            let remove = cx.listener(move |this, _: &ClickEvent, _, cx| {
+                this.attachments.retain(|a| a.order != order);
+                cx.notify();
+            });
+            let show = cx.listener(move |this, _: &ClickEvent, window, cx| {
+                this.show_attachment(order, window, cx);
+            });
+            let card = attachment.card(&mut room).render(remove, show, cx);
+            cards.push((order, card.into_any_element()));
+        }
+        for loading in &self.loading {
+            let order = loading.order;
+            let remove = cx.listener(move |this, _: &ClickEvent, _, cx| {
+                this.loading.retain(|loading| loading.order != order);
+                cx.notify();
+            });
+            let show = cx.listener(move |this, _: &ClickEvent, window, cx| {
+                this.show_attachment(order, window, cx);
+            });
+            let card = loading.card().render(remove, show, cx);
+            cards.push((order, card.into_any_element()));
+        }
+        cards.sort_by_key(|(order, _)| *order);
         h_flex()
+            .id("attachments")
             .flex_wrap()
-            .gap_1()
+            .gap_2()
             .px_3()
-            .pt_2()
-            .children(chips)
-            .children(reading)
+            .pt_3()
+            .max_h(px(attachment_card::MAX_HEIGHT))
+            .overflow_y_scroll()
+            .children(cards.into_iter().map(|(_, card)| card))
     }
 
-    /// Documents are still being read.
+    /// How much text may go along with the next message.
+    fn room(&self, cx: &App) -> Room {
+        let limit = match crate::document_parsers::existing(cx) {
+            Some(parsers) => parsers.whole_text(),
+            None => usize::try_from(documents::config::WHOLE_TEXT_BYTES).ok(),
+        };
+        Room::new(limit, self.session.read(cx).context_usage())
+    }
+
+    /// Shows an attached picture, PDF or text file in its viewer.
+    fn show_attachment(&self, order: u64, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(loading) = self.loading.iter().find(|l| l.order == order) {
+            pdf_viewer::open(loading.path.clone(), window, cx);
+            return;
+        }
+        let Some(attachment) = self.attachments.iter().find(|a| a.order == order) else {
+            return;
+        };
+        if let Some(image) = &attachment.image {
+            let image = transcript::Image::new(&image.data, &image.mime_type);
+            images::open_viewer(Arc::new([image]), 0, window, cx);
+            return;
+        }
+        // Of a message that came back, only what is remembered is known.
+        let dir = &cx.global::<AppConfig>().documents_dir;
+        let remembered = || attached::original(dir, attachment.id.as_deref()?);
+        let path = Some(attachment.path.clone())
+            .filter(|path| path.is_file())
+            .or_else(remembered);
+        match path {
+            Some(path) if attachment.is_plain() => text_viewer::open(path, window, cx),
+            Some(path) => pdf_viewer::open(path, window, cx),
+            None => {
+                let name = &attachment.name;
+                window.push_notification(format!("{name} is not on this computer."), cx);
+            }
+        }
+    }
+
+    /// Attachments are still being read.
     fn is_reading(&self) -> bool {
-        self.loading
-            .iter()
-            .any(|loading| loading.document.is_some())
+        !self.loading.is_empty()
     }
 
     /// The commands that complete what is typed, best first; none after Esc, or while the
@@ -1861,7 +1997,7 @@ impl Composer {
         let session = self.session.read(cx);
         mention::history_entries(session.transcript().items().iter().filter_map(|item| {
             match &item.kind {
-                transcript::ItemKind::User(user) => Some(user.text.as_str()),
+                transcript::ItemKind::User(user) => Some(user.typed()),
                 _ => None,
             }
         }))
@@ -2032,11 +2168,7 @@ impl Composer {
             .into_iter()
             .enumerate()
             .map(|(index, (text, images))| {
-                let text = match (text.is_empty(), images) {
-                    (_, 0) => text,
-                    (true, n) => format!("[{n} image(s)]"),
-                    (false, n) => format!("{text} [+{n} image(s)]"),
-                };
+                let text = waiting_line(&text, images);
                 h_flex()
                     .gap_2()
                     .text_xs()
@@ -2075,7 +2207,7 @@ impl Composer {
                     .gap_2()
                     .text_xs()
                     .child(div().text_color(muted).child(format!("↳ {kind}:")))
-                    .child(div().truncate().child(text))
+                    .child(div().truncate().child(waiting_line(&text, 0)))
             });
         let widget_lines = widgets
             .values()
@@ -2247,6 +2379,22 @@ fn append_dictation(draft: &str, spoken: &str) -> String {
 }
 
 /// The composer text after restoring `restored` into a composer holding `draft`.
+/// A message that waits to be sent, in one line.
+fn waiting_line(text: &str, images: usize) -> String {
+    let prompt = prompt::split(text);
+    let files = prompt.files.len();
+    let with: Vec<_> = [(files, "file(s)"), (images, "image(s)")]
+        .into_iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, what)| format!("{n} {what}"))
+        .collect();
+    match (prompt.text, with.join(", ")) {
+        (text, with) if with.is_empty() => text.to_owned(),
+        ("", with) => format!("[{with}]"),
+        (text, with) => format!("{text} [+{with}]"),
+    }
+}
+
 fn merge_restored(restored: &str, draft: &str, replace: bool) -> String {
     let (restored, draft) = (restored.trim_end(), draft.trim());
     if replace || draft.is_empty() {
@@ -2258,27 +2406,78 @@ fn merge_restored(restored: &str, draft: &str, replace: bool) -> String {
     }
 }
 
-fn chip(cx: &App) -> Div {
-    h_flex()
-        .gap_1()
-        .pl_2()
-        .pr_1()
-        .py_0p5()
-        .rounded_md()
-        .bg(cx.theme().secondary)
-        .text_xs()
+impl Loading {
+    fn card(&self) -> Card {
+        let name = attachment_name(&self.path);
+        Card {
+            id: ElementId::NamedInteger("attachment".into(), self.order),
+            extension: marker(&name, None),
+            name,
+            preview: self.preview.clone(),
+            status: "Reading…".into(),
+            why: None,
+            left_out: false,
+            reading: true,
+            can_show: is_pdf(&self.path),
+        }
+    }
 }
 
 impl Attachment {
-    /// What its chip says besides the name, and why.
-    fn remark(&self) -> (Option<&'static str>, Option<SharedString>) {
+    /// Its card, after others took their part of `room`.
+    fn card(&self, room: &mut Room) -> Card {
+        let (remark, why) = self.remark(room);
+        if let Some(InlineText::Document(document)) = &self.inline {
+            room.take(document.text().len());
+        }
+        Card {
+            id: ElementId::NamedInteger("attachment".into(), self.order),
+            name: self.name.clone(),
+            extension: marker(&self.name, self.image.as_ref()),
+            preview: self.preview.clone(),
+            status: remark.unwrap_or_else(|| self.kind()).into(),
+            why,
+            left_out: matches!(self.inline, Some(InlineText::Skipped(_))),
+            reading: false,
+            can_show: self.image.is_some()
+                || self.is_plain()
+                || is_pdf(Path::new(self.name.as_ref())),
+        }
+    }
+
+    /// Whether it is plain text.
+    fn is_plain(&self) -> bool {
+        let read = matches!(self.inline, Some(InlineText::Document(_)));
+        documents::Kind::of(Path::new(self.name.as_ref())).is_none()
+            && self.image.is_none()
+            && (read || matches!(self.preview, Preview::Text(_)))
+    }
+
+    fn kind(&self) -> &'static str {
+        if self.image.is_some() {
+            "Image"
+        } else if let Some(kind) = documents::Kind::of(Path::new(self.name.as_ref())) {
+            kind.label()
+        } else if self.is_plain() {
+            "Text"
+        } else {
+            "File"
+        }
+    }
+
+    /// What its card says besides the name and the kind of file, and why.
+    fn remark(&self, room: &Room) -> (Option<&'static str>, Option<SharedString>) {
         match &self.inline {
             Some(InlineText::Skipped(reason)) => (
-                Some("not included"),
+                Some("Not included"),
                 Some(format!("It is not included: {reason}.").into()),
             ),
+            Some(InlineText::Document(document)) if document.is_cut(room) => (
+                Some("Shortened"),
+                Some(shortened(document.text().len()).into()),
+            ),
             Some(InlineText::Document(document)) => match document.note() {
-                Some(note) => (Some("built-in reader"), Some(note.to_owned().into())),
+                Some(note) => (Some("Built-in reader"), Some(note.to_owned().into())),
                 None => (None, None),
             },
             _ => (None, None),
@@ -2286,7 +2485,51 @@ impl Attachment {
     }
 }
 
-fn attachment_name(path: &std::path::Path) -> SharedString {
+/// The extension a card shows: pictures have that of their format, as once they are sent.
+fn marker(name: &str, image: Option<&ImageContent>) -> Option<SharedString> {
+    image
+        .and_then(|image| transcript::image_extension(&image.mime_type))
+        .map(SharedString::from)
+        .or_else(|| prompt::extension(name).map(Into::into))
+}
+
+/// The small picture of the file that is remembered as `id`.
+fn remembered_preview(dir: &Path, id: &str) -> Preview {
+    match attached::picture(dir, id) {
+        Some(page) => Preview::Page(page),
+        None => attached::original(dir, id)
+            .as_deref()
+            .map_or(Preview::None, text_preview),
+    }
+}
+
+fn shortened(bytes: usize) -> String {
+    let size = if bytes < 1024 * 1024 {
+        format!("{} KB", bytes / 1024)
+    } else {
+        #[allow(clippy::cast_precision_loss)] // a size to show
+        let mb = bytes as f64 / (1024. * 1024.);
+        format!("{mb:.1} MB")
+    };
+    format!(
+        "It is {size} of text, so the model gets its start and the parts that match your message. \
+         Settings → Document parsing says how much goes whole."
+    )
+}
+
+fn is_pdf(path: &Path) -> bool {
+    documents::Kind::of(path) == Some(documents::Kind::Pdf)
+}
+
+fn text_preview(path: &Path) -> Preview {
+    // Some PDFs start like a text.
+    if documents::Kind::of(path).is_some() {
+        return Preview::None;
+    }
+    attached::first_lines(path).map_or(Preview::None, |lines| Preview::Text(lines.into()))
+}
+
+fn attachment_name(path: &Path) -> SharedString {
     path.file_name()
         .map_or_else(
             || path.display().to_string(),
@@ -2295,66 +2538,55 @@ fn attachment_name(path: &std::path::Path) -> SharedString {
         .into()
 }
 
-fn load_attachment(path: PathBuf, inline: bool) -> Attachment {
+fn load_attachment(path: PathBuf, inline: bool, dir: &Path, svg: &SvgRenderer) -> Attachment {
     let name = attachment_name(&path);
-    let mime = match path
+    let extension = path
         .extension()
         .and_then(|ext| ext.to_str())
         .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("png") => Some("image/png"),
-        Some("jpg" | "jpeg") => Some("image/jpeg"),
-        Some("gif") => Some("image/gif"),
-        Some("webp") => Some("image/webp"),
+        .unwrap_or_default();
+    let as_it_is = match extension.as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
         _ => None,
     };
-    let image = mime.and_then(|mime| {
-        let bytes = std::fs::read(&path).ok()?;
-        Some(ImageContent::new(
+    let image = match as_it_is {
+        Some(mime) => std::fs::read(&path).ok().map(|bytes| (bytes, mime)),
+        // In Code sessions the source of a drawing is what matters.
+        None if extension == "svg" && !inline => None,
+        None => convert::to_png(&path, &extension, svg).map(|png| (png, "image/png")),
+    };
+    let image = image.map(|(bytes, mime)| {
+        ImageContent::new(
             base64::engine::general_purpose::STANDARD.encode(bytes),
             mime,
-        ))
+        )
     });
-    let inline = (inline && image.is_none()).then(|| read_inline_text(&path));
+    let preview = match &image {
+        Some(image) => {
+            images::from_base64(&image.data, &image.mime_type).map_or(Preview::None, Preview::Image)
+        }
+        None => text_preview(&path),
+    };
+    let inline = (inline && image.is_none()).then(|| match AttachedDocument::read_plain(&path) {
+        Ok(text) => InlineText::Document(text),
+        Err(reason) => InlineText::skipped(reason),
+    });
+    let id = match &inline {
+        Some(InlineText::Document(_)) => attached::remember(dir, &path),
+        _ => None,
+    };
     Attachment {
+        order: 0,
         path,
         name,
+        preview,
         image,
         inline,
+        id,
     }
-}
-
-fn read_inline_text(path: &std::path::Path) -> InlineText {
-    match std::fs::metadata(path) {
-        Ok(meta) if meta.len() > MAX_INLINE_BYTES as u64 => {
-            InlineText::skipped("larger than 256 KB")
-        }
-        Ok(_) => match std::fs::read(path).map(String::from_utf8) {
-            Ok(Ok(text)) => InlineText::Text(text),
-            Ok(Err(_)) => InlineText::skipped("not a text file"),
-            Err(_) => InlineText::skipped("could not be read"),
-        },
-        Err(_) => InlineText::skipped("could not be read"),
-    }
-}
-
-/// A file pasted into a chat prompt: its name, then its contents.
-fn inline_file_block(name: &str, contents: &str) -> String {
-    fenced(&format!("`{name}`:"), contents)
-}
-
-/// `contents` below `heading`, in a fenced block whose fence is longer than any backtick run
-/// inside, so the contents can't close it early.
-pub(super) fn fenced(heading: &str, contents: &str) -> String {
-    let longest = contents
-        .split(|c| c != '`')
-        .map(str::len)
-        .max()
-        .unwrap_or(0);
-    let fence = "`".repeat(longest.max(2) + 1);
-    let body = contents.strip_suffix('\n').unwrap_or(contents);
-    format!("{heading}\n{fence}\n{body}\n{fence}")
 }
 
 /// Builds the folder menu: recent working folders (instant, no disk access) and a fallback to
@@ -2442,10 +2674,7 @@ fn device_menu(
 }
 
 /// `(folder name, shortened parent)` for a menu row; the home folder is just `~`.
-pub(crate) fn folder_label(
-    folder: &std::path::Path,
-    home: Option<&std::path::Path>,
-) -> (SharedString, SharedString) {
+pub(crate) fn folder_label(folder: &Path, home: Option<&Path>) -> (SharedString, SharedString) {
     let short = crate::ui::short_path(folder, home);
     match (folder.file_name(), folder.parent()) {
         _ if short == "~" => ("~".into(), SharedString::default()),
@@ -2609,8 +2838,6 @@ fn folder_menu(
 
 #[cfg(test)]
 mod inline_tests {
-    use super::inline_file_block;
-
     #[test]
     fn every_effort_has_its_place_on_the_slider() {
         use super::{Effort, effort_at, effort_value};
@@ -2655,15 +2882,6 @@ mod inline_tests {
         assert_eq!(append_dictation("Fix", "the tests"), "Fix the tests");
         assert_eq!(append_dictation("Fix\n", "the tests"), "Fix\nthe tests");
         assert_eq!(append_dictation("Keep", "  "), "Keep");
-    }
-
-    #[test]
-    fn inlined_files_use_a_fence_longer_than_their_backticks() {
-        assert_eq!(inline_file_block("a.txt", "hi\n"), "`a.txt`:\n```\nhi\n```");
-        assert_eq!(
-            inline_file_block("b.md", "```rust\nx\n```"),
-            "`b.md`:\n````\n```rust\nx\n```\n````"
-        );
     }
 }
 
@@ -3008,7 +3226,10 @@ mod draft_tests {
     use pi_rpc::protocol::ImageContent;
     use pi_sessions::Mode;
 
-    use super::{Attachment, Composer, Dictation, Draft, InlineText, PiSession};
+    use super::{
+        AttachedDocument, Attachment, Composer, Dictation, Draft, InlineText, PiSession, Preview,
+        prompt, waiting_line,
+    };
     use crate::config::AppConfig;
     use crate::hosts::{Hosts, HostsHandle};
 
@@ -3049,10 +3270,14 @@ mod draft_tests {
 
     fn file(path: &Path, inline: Option<&str>) -> Attachment {
         Attachment {
+            order: 0,
             path: path.to_path_buf(),
             name: path.to_string_lossy().into_owned().into(),
+            preview: Preview::None,
             image: None,
-            inline: inline.map(|text| InlineText::Text(text.to_owned())),
+            inline: inline
+                .map(|text| InlineText::Document(AttachedDocument::plain(path, text.to_owned()))),
+            id: None,
         }
     }
 
@@ -3096,11 +3321,14 @@ mod draft_tests {
 
         let draft = act(&from, cx, |from, window, cx| {
             from.set_text("fix this ", window, cx);
-            from.attachments.push(Attachment {
+            from.attach(Attachment {
+                order: 0,
                 path: "pasted.png".into(),
                 name: "pasted.png".into(),
+                preview: Preview::None,
                 image: Some(ImageContent::new("AAAA", "image/png")),
                 inline: None,
+                id: None,
             });
             // Still being read when the draft is taken.
             from.attach_paths(vec![path.clone()], cx);
@@ -3157,7 +3385,7 @@ mod draft_tests {
         std::fs::write(&path, "text").unwrap();
         let ([local, host], cx) = composers([code(), on_host()], cx);
         let draft = act(&local, cx, |local, window, cx| {
-            local.attachments.push(file(&path, None));
+            local.attach(file(&path, None));
             local.take_draft(window, cx)
         });
         act(&host, cx, |host, window, cx| {
@@ -3166,13 +3394,14 @@ mod draft_tests {
         settle(&host, cx);
         cx.read(|cx| {
             let attachment = &host.read(cx).attachments[0];
-            assert!(matches!(&attachment.inline, Some(InlineText::Text(text)) if text == "text"));
+            assert!(
+                matches!(&attachment.inline, Some(InlineText::Document(text)) if text.text() == "text")
+            );
         });
 
         // Back, with a file picked on the host, which stays behind.
         let draft = act(&host, cx, |host, window, cx| {
-            host.attachments
-                .push(file(&PathBuf::from("/srv/remote.txt"), None));
+            host.attach(file(&PathBuf::from("/srv/remote.txt"), None));
             host.take_draft(window, cx)
         });
         act(&local, cx, |local, window, cx| {
@@ -3204,10 +3433,13 @@ mod draft_tests {
 
     #[cfg(unix)]
     fn remark(composer: &Entity<Composer>, cx: &VisualTestContext) -> Option<&'static str> {
-        cx.read(|cx| composer.read(cx).attachments[0].remark().0)
+        cx.read(|cx| {
+            let composer = composer.read(cx);
+            composer.attachments[0].remark(&composer.room(cx)).0
+        })
     }
 
-    /// A chip says that a document is read, and Enter waits for it.
+    /// A card says that a document is read, and Enter waits for it.
     #[cfg(unix)]
     #[gpui_kit::test]
     fn a_document_is_read_before_it_is_sent(cx: &mut TestAppContext) {
@@ -3227,7 +3459,7 @@ mod draft_tests {
             composer.attach_paths(vec![pdf], cx);
             assert!(composer.is_reading() && composer.has_draft(cx));
         });
-        assert!(cx.debug_bounds("reading-document").is_some());
+        assert!(cx.debug_bounds("reading-attachment").is_some());
         act(&composer, cx, |composer, window, cx| {
             composer.submit(false, window, cx);
         });
@@ -3237,27 +3469,261 @@ mod draft_tests {
         std::fs::write(go, "").unwrap();
         settle(&composer, cx);
         cx.run_until_parked();
-        assert!(cx.debug_bounds("reading-document").is_none());
+        assert!(cx.debug_bounds("reading-attachment").is_none());
         assert_eq!(names(&composer, cx), ["report.pdf"]);
-        assert_eq!(remark(&composer, cx), Some("built-in reader"));
+        assert_eq!(remark(&composer, cx), Some("Built-in reader"));
         cx.read(|cx| {
             let inline = &composer.read(cx).attachments[0].inline;
             let Some(InlineText::Document(document)) = inline else {
                 panic!("not read");
             };
             assert_eq!(document.note(), Some("Docling failed."));
-            let block = document.block("report.pdf", "What is this?");
-            assert!(
-                block.ends_with("Docling failed.\n```\n# Hi\n```"),
-                "{block}"
+            let room = composer.read(cx).room(cx);
+            assert_eq!(document.contents("What is this?", &room), "# Hi");
+        });
+    }
+
+    /// Cards stay in the order they were attached in, whatever is read first, and show what is in
+    /// a file while it is read.
+    #[cfg(unix)]
+    #[gpui_kit::test]
+    fn cards_keep_their_places(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let pdf = dir.path().join("report.PDF");
+        std::fs::write(
+            &pdf,
+            include_bytes!("../../../documents/src/check.pdf").as_slice(),
+        )
+        .unwrap();
+        let text = dir.path().join("notes.txt");
+        std::fs::write(&text, "two\nlines").unwrap();
+        let image = dir.path().join("photo.jpeg");
+        std::fs::write(&image, "not really").unwrap();
+        let go = dir.path().join("go");
+        let reply = r##"{"ok":true,"markdown":"# Hi","parser":"builtin"}"##;
+        let script = format!(
+            "read line; while ! test -e '{}'; do sleep 0.05; done; echo '{reply}'",
+            go.display()
+        );
+        let (composer, cx) = chat(dir.path(), &script, cx);
+        cx.update(|_, cx| {
+            cx.global_mut::<AppConfig>().documents_dir = dir.path().join("documents");
+        });
+        act(&composer, cx, |composer, _, cx| {
+            composer.attach_paths(vec![pdf, text, image], cx);
+            let reading: Vec<_> = composer.loading.iter().map(|l| l.card().status).collect();
+            assert_eq!(reading, ["Reading…"; 3]);
+        });
+        for _ in 0..500 {
+            cx.run_until_parked();
+            let shown = cx.read(|cx| {
+                let composer = composer.read(cx);
+                let page = matches!(
+                    composer.loading.first().map(|l| &l.preview),
+                    Some(Preview::Page(_))
+                );
+                composer.attachments.len() == 2 && (page || !cfg!(target_os = "macos"))
+            });
+            if shown {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(names(&composer, cx), ["notes.txt", "photo.jpeg"]);
+        cx.read(|cx| {
+            let reading = &composer.read(cx).loading[0];
+            assert_eq!(reading.card().extension.as_deref(), Some(".pdf"));
+            assert_eq!(
+                matches!(reading.preview, Preview::Page(_)),
+                cfg!(target_os = "macos")
             );
+        });
+
+        std::fs::write(go, "").unwrap();
+        settle(&composer, cx);
+        assert_eq!(
+            names(&composer, cx),
+            ["report.PDF", "notes.txt", "photo.jpeg"]
+        );
+        cx.read(|cx| {
+            let mut room = composer.read(cx).room(cx);
+            let attachments = &composer.read(cx).attachments;
+            let cards: Vec<_> = attachments
+                .iter()
+                .map(|attachment| {
+                    let card = attachment.card(&mut room);
+                    (card.extension.unwrap().to_string(), card.status.to_string())
+                })
+                .collect();
+            let cards: Vec<_> = cards
+                .iter()
+                .map(|(extension, status)| (extension.as_str(), status.as_str()))
+                .collect();
+            assert_eq!(
+                cards,
+                [(".pdf", "PDF"), (".txt", "Text"), (".jpg", "Image")]
+            );
+            let shown: Vec<_> = attachments
+                .iter()
+                .map(|a| a.card(&mut room).can_show)
+                .collect();
+            assert_eq!(shown, [true, true, true]);
+            assert!(matches!(&attachments[1].preview, Preview::Text(text) if text == "two\nlines"));
+        });
+        // Clicking the picture of the text or the PDF, with nothing else after it, shows it.
+        for left in [2, 1] {
+            act(&composer, cx, |composer, window, cx| {
+                window.close_all_dialogs(cx);
+                composer.attachments.truncate(left);
+                cx.notify();
+            });
+            assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
+            let picture = cx.debug_bounds("attachment-picture").unwrap();
+            cx.simulate_click(picture.center(), gpui_kit::Modifiers::none());
+            assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+        }
+    }
+
+    /// The text of attached files goes along with a message, and comes back as files with it.
+    #[gpui_kit::test]
+    fn attached_files_come_and_go_with_their_message(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.txt");
+        std::fs::write(&path, "two\nlines").unwrap();
+        let session = PiSession::idle(std::env::temp_dir(), Mode::Chat);
+        let ([composer], cx) = composers([session], cx);
+        cx.update(|_, cx| {
+            cx.global_mut::<AppConfig>().documents_dir = dir.path().join("documents");
+        });
+        act(&composer, cx, |composer, _, cx| {
+            composer.attach_paths(vec![path.clone()], cx);
+        });
+        settle(&composer, cx);
+        let send = |cx: &mut VisualTestContext| {
+            act(&composer, cx, |composer, window, cx| {
+                composer.submit(false, window, cx);
+                let session = composer.session.read(cx);
+                let (text, _, _) = session.pending_prompts().last().unwrap();
+                text.to_owned()
+            })
+        };
+        act(&composer, cx, |composer, window, cx| {
+            composer.set_text("What is this?", window, cx);
+        });
+        let sent = send(cx);
+        assert_eq!(names(&composer, cx), [""; 0]);
+        let prompt = prompt::split(&sent);
+        assert_eq!(prompt.text, "What is this?");
+        let (file, block) = &prompt.files[0];
+        assert_eq!(file.name, "notes.txt");
+        assert!(block.contains("\ntwo\nlines\n"), "{block}");
+        assert!(!sent.contains("reader") && !sent.contains(&*path.to_string_lossy()));
+        let id = file.id.as_deref().unwrap();
+        let documents = dir.path().join("documents");
+        assert_eq!(documents::attached::original(&documents, id), Some(path));
+        assert_eq!(waiting_line(&sent, 0), "What is this? [+1 file(s)]");
+        assert_eq!(waiting_line(block, 2), "[1 file(s), 2 image(s)]");
+        assert_eq!(waiting_line("hi", 0), "hi");
+
+        // Given back, with what pi adds about a picture, and sent again.
+        act(&composer, cx, |composer, window, cx| {
+            let noted = format!("{sent}\n\n[Image: original 9x9, displayed at 3x3. Multiply…]");
+            composer.restore(&noted, Vec::new(), true, window, cx);
+        });
+        assert_eq!(cx.read(|cx| composer.read(cx).text(cx)), "What is this?");
+        assert_eq!(names(&composer, cx), ["notes.txt"]);
+        cx.read(|cx| {
+            let preview = &composer.read(cx).attachments[0].preview;
+            assert!(matches!(preview, Preview::Text(text) if text == "two\nlines"));
+        });
+        let draft = act(&composer, cx, |composer, window, cx| {
+            composer.take_draft(window, cx)
+        });
+        act(&composer, cx, |composer, window, cx| {
+            composer.set_draft(draft, window, cx);
+        });
+        assert_eq!(send(cx), sent);
+    }
+
+    /// A text that is too long says that it is shortened, and is, unless the settings allow more.
+    #[gpui_kit::test]
+    fn long_text_is_shortened(cx: &mut TestAppContext) {
+        use std::fmt::Write as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("server.log");
+        let mut log = String::new();
+        for n in 0..20_000 {
+            let _ = writeln!(log, "{n} something happened");
+        }
+        std::fs::write(&path, &log).unwrap();
+        let session = PiSession::idle(std::env::temp_dir(), Mode::Chat);
+        let ([composer], cx) = composers([session], cx);
+        cx.update(|_, cx| {
+            cx.global_mut::<AppConfig>().documents_dir = dir.path().join("documents");
+        });
+        for (limit, short) in [(Some(256 * 1024), true), (Some(1024 * 1024), false)] {
+            act(&composer, cx, |composer, window, cx| {
+                composer.set_text("What about 12345?", window, cx);
+                composer.attach_paths(vec![path.clone()], cx);
+                let parsers = crate::document_parsers::document_parsers(cx);
+                parsers.update(cx, |parsers, cx| parsers.set_whole_text(limit, cx));
+            });
+            settle(&composer, cx);
+            let status = cx.read(|cx| {
+                let composer = composer.read(cx);
+                composer.attachments[0].card(&mut composer.room(cx)).status
+            });
+            assert_eq!(status, if short { "Shortened" } else { "Text" });
+            let sent = act(&composer, cx, |composer, window, cx| {
+                composer.submit(false, window, cx);
+                let session = composer.session.read(cx);
+                session.pending_prompts().last().unwrap().0.to_owned()
+            });
+            assert!(sent.contains("\n12345 something happened\n"));
+            assert_eq!(sent.len() > log.len(), !short, "{}", sent.len());
+        }
+    }
+
+    /// Pictures that models do not take are converted; the source of a drawing is for Code.
+    #[gpui_kit::test]
+    fn other_pictures_are_converted(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let svg = dir.path().join("a.svg");
+        let drawing = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"9\" height=\"9\"/>";
+        std::fs::write(&svg, drawing).unwrap();
+        let bmp = dir.path().join("b.bmp");
+        image::RgbaImage::new(2, 2).save(&bmp).unwrap();
+        let broken = dir.path().join("c.svg");
+        std::fs::write(&broken, "<svg>not closed").unwrap();
+        let chat = PiSession::idle(std::env::temp_dir(), Mode::Chat);
+        let ([chat, code], cx) = composers([chat, code()], cx);
+        let mime = |composer: &Entity<Composer>, cx: &mut VisualTestContext| {
+            act(composer, cx, |composer, _, cx| {
+                composer.attach_paths(vec![svg.clone(), bmp.clone(), broken.clone()], cx);
+            });
+            settle(composer, cx);
+            cx.read(|cx| {
+                let attachments = &composer.read(cx).attachments;
+                let image = |a: &Attachment| a.image.as_ref().map(|i| i.mime_type.clone());
+                attachments.iter().map(image).collect::<Vec<_>>()
+            })
+        };
+        let png = || Some("image/png".to_owned());
+        assert_eq!(mime(&chat, cx), [png(), png(), None]);
+        assert_eq!(mime(&code, cx), [None, png(), None]);
+        cx.read(|cx| {
+            // What cannot be drawn is still text.
+            let attachment = &chat.read(cx).attachments[2];
+            assert!(matches!(&attachment.inline, Some(InlineText::Document(_))));
+            assert!(code.read(cx).attachments[0].inline.is_none());
         });
     }
 
     /// Removing a document, or leaving the chat, stops reading it.
     #[cfg(unix)]
     #[gpui_kit::test]
-    fn reading_a_document_stops_with_its_chip(cx: &mut TestAppContext) {
+    fn reading_a_document_stops_with_its_card(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         let pdf = dir.path().join("report.pdf");
         std::fs::write(&pdf, "%PDF-1.4").unwrap();
@@ -3303,19 +3769,17 @@ mod draft_tests {
         let dir = tempfile::tempdir().unwrap();
         let docx = dir.path().join("letter.docx");
         std::fs::write(&docx, "PK").unwrap();
-        let script = r#"echo '{"ok":false,"error":"only Docling reads Office files"}'"#;
+        let script = r#"echo '{"ok":false,"error":"the file is odd"}'"#;
         let (composer, cx) = chat(dir.path(), script, cx);
         act(&composer, cx, |composer, _, cx| {
             composer.attach_paths(vec![docx], cx);
         });
         settle(&composer, cx);
-        assert_eq!(remark(&composer, cx), Some("not included"));
+        assert_eq!(remark(&composer, cx), Some("Not included"));
         cx.read(|cx| {
-            let (_, why) = composer.read(cx).attachments[0].remark();
-            assert_eq!(
-                why.unwrap(),
-                "It is not included: only Docling reads Office files."
-            );
+            let composer = composer.read(cx);
+            let (_, why) = composer.attachments[0].remark(&composer.room(cx));
+            assert_eq!(why.unwrap(), "It is not included: the file is odd.");
         });
     }
 
@@ -3327,7 +3791,7 @@ mod draft_tests {
         let ([composer], cx) = composers([code()], cx);
         act(&composer, cx, |composer, _, cx| {
             composer.attach_paths(vec![pdf], cx);
-            assert!(!composer.is_reading());
+            assert!(composer.loading[0]._document.is_none());
         });
         settle(&composer, cx);
         assert!(cx.read(|cx| composer.read(cx).attachments[0].inline.is_none()));

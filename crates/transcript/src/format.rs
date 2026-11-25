@@ -38,7 +38,7 @@ mod tests {
         assert_eq!(format_duration(Duration::from_millis(850)), "<1s");
         assert_eq!(format_duration(Duration::from_secs(4)), "4s");
         assert_eq!(format_duration(Duration::from_secs(63)), "1m 3s");
-        assert_eq!(format_duration(Duration::from_secs(7_500)), "2h 5m");
+        assert_eq!(format_duration(Duration::from_mins(125)), "2h 5m");
     }
 
     #[test]

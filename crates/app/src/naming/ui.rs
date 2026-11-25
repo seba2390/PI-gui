@@ -12,6 +12,7 @@ use super::catalog::{self, DEFAULT_MODEL, MODELS, Model};
 use super::{Namer, models};
 use crate::settings::AppSettings;
 use crate::theme::palette;
+use crate::ui::AppIcon;
 
 /// Makes `model` the naming model (and local naming the namer) and starts downloading it.
 pub fn start_download(model: &'static Model, cx: &mut App) {
@@ -136,6 +137,7 @@ pub fn settings_model_rows(cx: &App) -> AnyElement {
                     .into_any_element()
             } else {
                 Button::new(SharedString::from(format!("naming-get-{}", model.id)))
+                    .icon(AppIcon::Download)
                     .label(format!("Download {}", model.size_label()))
                     .outline()
                     .xsmall()

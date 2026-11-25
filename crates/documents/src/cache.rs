@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 const MAX_FILES: usize = 24;
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
 /// A parser that failed gets another chance after this long.
-const RETRY: Duration = Duration::from_secs(10 * 60);
+const RETRY: Duration = Duration::from_mins(10);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -60,7 +60,7 @@ pub fn store(dir: &Path, document: &[u8], revision: &str, entry: &Entry) {
 }
 
 /// Readable only by the user: it is the text of their documents.
-fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
+pub fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
     use std::io::Write as _;
     let mut options = fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
@@ -70,7 +70,7 @@ fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
 }
 
 /// Deletes the oldest files beyond the limits.
-fn trim(folder: &Path, max_files: usize, max_bytes: u64) {
+pub fn trim(folder: &Path, max_files: usize, max_bytes: u64) {
     let Ok(entries) = fs::read_dir(folder) else {
         return;
     };
