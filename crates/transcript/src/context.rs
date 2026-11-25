@@ -67,7 +67,10 @@ impl ContextEstimate {
                 ItemKind::Notice(notice) if notice.kind == NoticeKind::Compaction => {
                     out.summary += tokens(notice.text.len());
                 }
-                ItemKind::Notice(_) | ItemKind::Step(_) | ItemKind::TurnSummary(_) => {}
+                ItemKind::Notice(_)
+                | ItemKind::Step(_)
+                | ItemKind::Check(_)
+                | ItemKind::TurnSummary(_) => {}
             }
         }
         out

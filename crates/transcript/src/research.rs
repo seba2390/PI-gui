@@ -12,7 +12,10 @@
 use pi_rpc::protocol::StopReason;
 use serde_json::Value;
 
-use crate::model::{AssistantItem, Block, BlockKind, ItemKind, NoticeKind, Standing, StepItem};
+use crate::model::{
+    AboutReport, AssistantItem, Block, BlockKind, CheckItem, ItemKind, NoticeKind, Standing,
+    StepItem,
+};
 use crate::reducer::Transcript;
 
 /// The extension's messages.
@@ -91,12 +94,9 @@ impl Transcript {
                     .and_then(|back| usize::try_from(back).ok())
                     .unwrap_or(0);
                 self.resolve(checked, back);
-                let kind = if checked {
-                    NoticeKind::Info
-                } else {
-                    NoticeKind::Warning
-                };
-                self.push_notice(kind, text);
+                let about = details.get("about").cloned().unwrap_or_default();
+                let about = serde_json::from_value(about).ok();
+                self.push_check(checked, text, about);
             }
             _ if display => self.push_notice(NoticeKind::Info, text),
             _ => {}
@@ -106,11 +106,16 @@ impl Transcript {
     /// The run is over, also if the extension had no time to say so.
     pub(crate) fn end_research(&mut self) {
         if self.researching.is_some() && self.resolve(false, 0) {
-            self.push_notice(
-                NoticeKind::Warning,
-                "This report was not checked: it was stopped.",
-            );
+            self.push_check(false, "This report was not checked: it was stopped.", None);
         }
+    }
+
+    fn push_check(&mut self, checked: bool, text: &str, about: Option<Box<AboutReport>>) {
+        self.push(ItemKind::Check(CheckItem {
+            checked,
+            text: text.to_owned(),
+            about,
+        }));
     }
 
     /// The next prompt in history. One that steered a run finds its last text marked as a draft;

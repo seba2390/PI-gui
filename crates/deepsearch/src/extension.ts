@@ -36,19 +36,32 @@ type DeepBudget = Budget & {
 type CheckLimits = { timeout_secs: number; total_secs: number; max_tokens: number };
 
 type Link = { url: string; state: "read" | "unread" | "broken"; note: string };
-type Claim = { id: number; text: string; urls: string[]; evidence: string };
-type Unsourced = { text: string; urls: string[]; sure: boolean };
+type Claim = { id: number; text: string; urls: string[]; evidence: string; elsewhere?: string };
+type Unsourced = { text: string; urls: string[]; elsewhere?: string; sure: boolean };
 type Checked = { links: Link[]; claims: Claim[]; unsourced: Unsourced[]; total_claims: number };
 
 // What a message of CHECK_TYPE tells Pistachio (`details`): the plan, that the text above it was
 // only a draft and what is done with it, or that it is the answer. Without one the text of deep
 // search is not shown as an answer.
 type Step = { title: string; detail: string; lines: string[] };
+type Problem = { kind: "broken" | "unread" | "unbacked" | "partly" | "unsourced"; text: string; why: string; urls: string[] };
+// What the popup about a report shows.
+type About = {
+  effort: Effort;
+  searches: number;
+  pages: number;
+  sites: number;
+  links: { total: number; broken: number; unread: number };
+  // `unchecked`: more than the effort level checks, or it could not be.
+  claims?: { total: number; backed: number; partly: number; unbacked: number; unsourced: number; unchecked: number };
+  problems: Problem[];
+  notes: string[];
+};
 type Stage =
   | { stage: "plan"; steps: Step[] }
   | { stage: "draft"; steps: Step[] }
   // `back`: how many drafts before the last one the answer is.
-  | { stage: "final"; checked: boolean; back: number };
+  | { stage: "final"; checked: boolean; back: number; about?: Partial<About> };
 
 // Deep search for one message.
 type Run = {
@@ -72,6 +85,11 @@ type Run = {
   covered: boolean;
   revisions: number;
   rewrites: number;
+  // The model is made to call a tool while its research is short.
+  force: boolean;
+  forced: boolean;
+  // Calls in a row that found nothing new.
+  barren: number;
   // The length of each draft.
   drafts: number[];
   // What the check of the draft before this one said.
@@ -273,6 +291,9 @@ function newRun(effort: Effort, limits: DeepBudget, check: CheckLimits, question
     covered: false,
     revisions: 0,
     rewrites: 0,
+    force: true,
+    forced: false,
+    barren: 0,
     drafts: [],
     note: "",
     done: false,
@@ -298,6 +319,11 @@ function floor(run: Run) {
     pages,
     sites: Math.min(limits.min_sites, pages),
   };
+}
+
+function isShort(run: Run): boolean {
+  const least = floor(run);
+  return run.queries.size < least.searches || run.pages.size < least.pages || run.sites.size < least.sites;
 }
 
 const done = (run: Run) =>
@@ -352,7 +378,9 @@ export default function (pi: any) {
     async execute(_id: string, params: any, signal?: AbortSignal) {
       const seen = run ? [...run.seen] : [];
       const result = await tool("search", { ...params, max_results: params.max_results ?? run?.limits.max_results, seen }, signal);
+      const before = run?.seen.size;
       for (const found of (result.details as any)?.results ?? []) run?.seen.add(found.url);
+      if (run) run.barren = run.seen.size === before ? run.barren + 1 : 0;
       run?.queries.add(String(params.query ?? "").trim().toLowerCase());
       return result;
     },
@@ -375,7 +403,9 @@ export default function (pi: any) {
       faded.delete(url);
       read.add(url);
       const page = String((result.details as any)?.final_url ?? url);
+      const before = run?.pages.size;
       run?.pages.add(page.split("#")[0]);
+      if (run) run.barren = run.pages.size === before ? run.barren + 1 : 0;
       run?.sites.add(site(page));
       return result;
     },
@@ -485,14 +515,27 @@ export default function (pi: any) {
   pi.on("tool_result", async (event: any, ctx: any) => {
     if (!run || !TOOLS.includes(event.toolName)) return;
     const details = { ...(event.details ?? {}), deep: run.effort };
+    if (event.isError) run.barren += 1;
     progress(ctx, `Researching: ${done(run)}`);
     if (event.isError || !run.questions) return { details };
     const least = floor(run);
-    const enough = run.queries.size >= least.searches && run.pages.size >= least.pages && run.sites.size >= least.sites;
-    const text = enough
+    const text = !isShort(run)
       ? `(Research so far: ${done(run)}. Write the report once every sub-question is answered by a page you read.)`
       : `(Research so far: ${done(run)}. At least ${plural(least.searches, "search")} and ${plural(least.pages, "page")} from ${plural(least.sites, "site")} before the report: go on with another sub-question or site.)`;
     return { content: [...event.content, { type: "text", text }], details };
+  });
+
+  // While its research is short, a weak model writes one report after the other that is only sent
+  // back. Where the API can, it is made to call a tool instead, until nothing new turns up.
+  pi.on("before_provider_request", async (event: any, ctx: any) => {
+    if (!run) return;
+    run.forced = false;
+    const { payload } = event;
+    const able = ctx.model?.api === "openai-completions" && Array.isArray(payload?.tools) && payload.tools.length > 0;
+    const left = used.web_search < run.limits.max_searches && used.web_fetch < run.limits.max_fetches;
+    if (!able || !left || !run.force || !run.planned || run.covered || run.done || run.barren > 7 || !isShort(run)) return;
+    run.forced = true;
+    return { ...payload, tool_choice: "required" };
   });
 
   // The sub-questions a message has to be answered by.
@@ -616,13 +659,46 @@ Answer with only a JSON array of strings, e.g. ["What does X cost in shops today
   // The answer is what the model wrote last, as it is.
   const unchecked = (run: Run, why: string, back = 0) => {
     run.done = true;
-    return message(`This report was not checked: ${why}`, { stage: "final", checked: false, back }, true);
+    const about = { ...research(run), notes: [`Not checked: ${why}`] };
+    return message(`This report was not checked: ${why}`, { stage: "final", checked: false, back, about }, true);
   };
+
+  const research = (run: Run) => ({
+    effort: run.effort,
+    searches: run.queries.size,
+    pages: run.pages.size,
+    sites: run.sites.size,
+  });
 
   const sendBack = (content: string, steps: Step[]) => message(content, { stage: "draft", steps }, false);
 
+  // What the model is told about a problem, and what the steps in the chat say. Rows of a table
+  // have the same sources: naming them for each would be most of the text.
+  const brief = ({ kind, text, why, urls }: Problem): string => {
+    const quote = `"${text.slice(0, 300)}"`;
+    const from = urls.length === 1 ? ` (${urls[0]})` : "";
+    const reason = why ? `: ${why.replace(/\.+$/, "")}` : "";
+    switch (kind) {
+      case "broken":
+        return `Broken link: ${text}`;
+      case "unread":
+        return `Cited, but not read: ${text}${reason}`;
+      case "unsourced":
+        return `No source${urls.length ? " that was read" : ""}: ${quote}${reason}`;
+      default:
+        return `${kind === "partly" ? "Only partly backed" : "Not backed"} by its source: ${quote}${from}${reason}`;
+    }
+  };
+  const REMEDY: Record<Problem["kind"], string> = {
+    broken: "remove the links, and what rests only on them",
+    unread: "read the pages with web_fetch, or cite ones you read",
+    unbacked: "correct the claims, find a source that says them, or leave them out",
+    partly: "say only what the source says, or find one that says more",
+    unsourced: "cite a page you read that says it as a link in the same sentence or row, or leave it out",
+  };
+
   // What was found when the report was checked, or why it could not be.
-  type Result = { problems: string[]; step: Step; summary: string };
+  type Result = { problems: Problem[]; step: Step; summary: string; about: About };
   const checkReport = async (run: Run, report: string, ctx: any, signal?: AbortSignal): Promise<Result> => {
     const { limits, check } = run;
     const total = limited(check.total_secs, signal);
@@ -702,34 +778,57 @@ Answer with only a JSON array of strings, e.g. ["What does X cost in shops today
       const wrong = verdicts.filter((verdict) => verdict.verdict === "partly" || verdict.verdict === "unsupported");
       const supported = verdicts.filter((verdict) => verdict.verdict === "supported").length;
       const unknown = verdicts.filter((verdict) => verdict.verdict === "unknown").length;
-      const problems = [
-        ...broken.map((link) => `- Broken link: ${link.url}. Remove it, and what rests only on it.`),
-        ...unread.map((link) => `- You cite ${link.url} but did not read it (${link.note.slice(0, 200)}). Read it with web_fetch, or cite a page you read.`),
-        ...wrong.map(({ claim, verdict, why }) => `- ${verdict === "partly" ? "Only partly backed" : "Not backed"} by its source: "${claim.text.slice(0, 400)}" (${claim.urls.join(", ")})${why ? `: ${why.slice(0, 300)}` : ""}. Correct it, find a source that says it, or leave it out.`),
-        ...unsourced.map((claim) => `- No source${claim.urls.length ? " that you read" : ""}: "${claim.text.slice(0, 300)}". Cite a page you read that says it, or leave it out.`),
+      const problems: Problem[] = [
+        ...broken.map((link) => ({ kind: "broken" as const, text: link.url, why: "", urls: [link.url] })),
+        ...unread.map((link) => ({ kind: "unread" as const, text: link.url, why: link.note === "you did not read this page" ? "" : link.note.slice(0, 200), urls: [link.url] })),
+        ...wrong.map(({ claim, verdict, why }) => ({
+          kind: verdict === "partly" ? ("partly" as const) : ("unbacked" as const),
+          text: claim.text,
+          why: [why.trim().slice(0, 300), claim.elsewhere ? `${claim.elsewhere} has these numbers.` : ""].filter(Boolean).join(" "),
+          urls: claim.urls,
+        })),
+        ...unsourced.map((claim) => ({
+          kind: "unsourced" as const,
+          text: claim.text,
+          why: claim.elsewhere ? `${claim.elsewhere} has these numbers.` : "",
+          urls: claim.urls,
+        })),
       ];
-      if (!links.some((link) => link.state === "read")) problems.unshift("- It cites none of the pages you read.");
-
       const count = total_claims + needs.size;
-      const checkedClaims = `${claims.length} of ${plural(count, "claim")}`;
+      const partly = wrong.filter((verdict) => verdict.verdict === "partly").length;
+      const counts = {
+        total: count,
+        backed: supported,
+        partly,
+        unbacked: wrong.length - partly,
+        unsourced: unsourced.length,
+        unchecked: Math.max(0, count - supported - wrong.length - unsourced.length),
+      };
+      const badLinks = [broken.length && `${broken.length} broken`, unread.length && `${unread.length} not read`].filter(Boolean).join(", ");
+      const linkText = links.length ? `${plural(links.length, "link")} (${badLinks || "all read"})` : "no links";
+      const claimText = [
+        `${counts.backed} backed by their source`,
+        counts.partly && `${counts.partly} only partly`,
+        counts.unbacked && `${counts.unbacked} not backed`,
+        counts.unsourced && `${counts.unsourced} without a source`,
+        counts.unchecked && `${counts.unchecked} not checked`,
+      ].filter(Boolean).join(", ");
+      const judges = limits.max_claims > 0;
       const parts = [
-        links.length
-          ? `${plural(links.length, "link")}${broken.length + unread.length ? ` (${[broken.length && `${broken.length} broken`, unread.length && `${unread.length} not read`].filter(Boolean).join(", ")})` : ", all read"}`
-          : "no links",
-        ...(limits.max_claims > 0
-          ? [
-              claims.length
-                ? `${supported} of ${plural(claims.length, "checked claim")} backed by their source${unknown ? `, ${unknown} could not be checked` : ""}${count > claims.length ? ` (${plural(count, "claim")} in all)` : ""}`
-                : "no claims with a source",
-            ]
-          : []),
-        ...(unsourced.length ? [`${unsourced.length} without a source`] : []),
+        linkText,
+        ...(judges ? [`${plural(count, "claim")}: ${count ? claimText : "none"}`] : unsourced.length ? [`${plural(unsourced.length, "claim")} without a source`] : []),
       ];
-      const summary = `${done(run)}; ${parts.join("; ")}`;
       return {
         problems,
-        summary,
-        step: { title: "Checked", detail: limits.max_claims > 0 ? checkedClaims : plural(links.length, "link"), lines: parts },
+        summary: `${done(run)}; ${parts.join("; ")}`,
+        step: { title: "Checked", detail: judges ? `${claims.length} of ${plural(count, "claim")}` : plural(links.length, "link"), lines: parts },
+        about: {
+          ...research(run),
+          links: { total: links.length, broken: broken.length, unread: unread.length },
+          ...(judges ? { claims: counts } : {}),
+          problems,
+          notes: links.some((link) => link.state === "read") ? [] : ["It cites none of the pages that were read."],
+        },
       };
     } finally {
       total.end();
@@ -769,8 +868,7 @@ Answer with only a JSON array of strings, e.g. ["What does X cost in shops today
       return;
     }
     const least = floor(run);
-    const short =
-      run.queries.size < least.searches || run.pages.size < least.pages || run.sites.size < least.sites;
+    const short = isShort(run);
     let open: string[] = [];
     if (report && (!short || run.rounds === 0) && limits.max_claims > 0) open = await stillOpen(run, report, ctx, signal);
     if (report && !short && !open.length) {
@@ -851,29 +949,38 @@ Answer with only a JSON array of strings, e.g. ["What does X cost in shops today
         }
       }
 
-      const { problems, step, summary } = await checkReport(current, report, ctx, signal);
-      if (problems.length && current.revisions < current.limits.max_revisions) {
+      const { problems, step, summary, about } = await checkReport(current, report, ctx, signal);
+      const uncited = about.notes.length > 0;
+      if ((problems.length || uncited) && current.revisions < current.limits.max_revisions) {
         current.revisions += 1;
         current.note = `${summary}.`;
         progress(ctx, `Revising the report: ${plural(problems.length, "problem")}`);
         const shown = problems.slice(0, 40);
-        const content = `Your report is a draft. It was checked against its sources. Problems found:\n${shown.join("\n")}${problems.length > shown.length ? `\n(and ${problems.length - shown.length} more like these)` : ""}\n\nFix every one of them (use web_search and web_fetch where needed, within the budget), then write the whole report again, complete and corrected, without mentioning this check.`;
-        const steps = [step, { title: "Revising", detail: plural(problems.length, "problem"), lines: problems.map((problem) => problem.replace(/^- /, "")) }];
+        const kinds = [...new Set(shown.map((problem) => problem.kind))];
+        const content = [
+          "Your report is a draft. It was checked against its sources. Problems found:",
+          [...(uncited ? ["- It cites none of the pages you read."] : []), ...shown.map((problem) => `- ${brief(problem)}`)].join("\n") +
+            (problems.length > shown.length ? `\n(and ${problems.length - shown.length} more like these)` : ""),
+          `What to do: ${kinds.map((kind) => `${kind === "broken" ? "broken" : kind === "unread" ? "not read" : kind === "unsourced" ? "no source" : kind === "partly" ? "partly backed" : "not backed"}: ${REMEDY[kind]}`).join("; ")}. Use web_search and web_fetch where needed, within the budget. Cite with Markdown links, [Short title](https://example.com/page): in a table, in a column of each row.`,
+          "Then write the whole report again, complete and corrected, without mentioning this check.",
+        ].join("\n\n");
+        const steps = [step, { title: "Revising", detail: plural(problems.length, "problem"), lines: problems.map(brief) }];
         return { entries: [...event.entries, sendBack(content, steps)], continue: true };
       }
 
       // What stays wrong is said to the user.
-      const left = problems.slice(0, 5).map((problem) => problem.replace(/ (Correct it, find|Read it with|Cite a page|Remove it)[^.]*\.$/, ""));
-      const more = problems.length - left.length;
       const level = ctx.thinkingLevel;
-      const little = ctx.model?.reasoning && current.limits.max_claims > 12 && (level === "off" || level === "minimal");
+      if (ctx.model?.reasoning && current.limits.max_claims > 12 && (level === "off" || level === "minimal")) {
+        about.notes.push(`Thinking was ${level}. With more of it, deep search usually finds and checks more.`);
+      }
+      const left = problems.slice(0, 5).map((problem) => `- ${brief(problem)}`);
+      const more = problems.length - left.length;
       const note = [
         `Checked the report: ${summary}.`,
         left.length ? `Still open:\n${left.join("\n")}${more > 0 ? `\n- and ${more} more` : ""}` : "",
-        little ? `Thinking was ${level}: with more of it, deep search usually finds and checks more.` : "",
       ].filter(Boolean).join("\n\n");
       current.done = true;
-      return { entries: [...event.entries, message(note, { stage: "final", checked: true, back: 0 }, true)] };
+      return { entries: [...event.entries, message(note, { stage: "final", checked: true, back: 0, about }, true)] };
     } catch (error) {
       const why = signal?.aborted ? "it was stopped." : error instanceof Error ? error.message : String(error);
       return { entries: [...event.entries, unchecked(current, why)] };
@@ -882,7 +989,14 @@ Answer with only a JSON array of strings, e.g. ["What does X cost in shops today
 
   // The run failed for good while there was something to show.
   pi.on("agent_before_settle", async (event: any) => {
-    if (!run || run.done || !run.drafts.length) return;
+    if (!run || run.done) return;
+    if (event.outcome === "error" && run.forced) {
+      // Some servers know no `tool_choice`: without it.
+      run.force = false;
+      run.forced = false;
+      return { entries: [...event.entries, message("Go on with your research.", { stage: "plan", steps: [] }, false)], continue: true };
+    }
+    if (!run.drafts.length) return;
     const why = event.outcome === "error" ? "the model stopped with an error." : "the model did not finish it.";
     return { entries: [...event.entries, unchecked(run, why)] };
   });

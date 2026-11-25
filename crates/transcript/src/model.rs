@@ -31,6 +31,8 @@ pub enum ItemKind {
     Notice(Notice),
     /// What an extension did for the answer besides the model's own steps.
     Step(StepItem),
+    /// How a deep search's report was checked.
+    Check(CheckItem),
     /// "Worked for 1m 3s" after the agent settles.
     TurnSummary(TurnSummary),
 }
@@ -147,6 +149,95 @@ impl StepItem {
             "Checked" => ToolKind::Search,
             "Continuing research" => ToolKind::Web,
             _ => ToolKind::Write,
+        }
+    }
+}
+
+/// What deep search says about its report.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct CheckItem {
+    /// Otherwise the report is the answer as it is.
+    pub checked: bool,
+    /// All of it as text.
+    pub text: String,
+    /// The same in parts; chats from before there were any have only the text.
+    pub about: Option<Box<AboutReport>>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AboutReport {
+    pub effort: String,
+    pub searches: u32,
+    pub pages: u32,
+    pub sites: u32,
+    pub links: LinkCounts,
+    /// From the effort on that checks them.
+    pub claims: Option<ClaimCounts>,
+    pub problems: Vec<Problem>,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LinkCounts {
+    pub total: u32,
+    pub broken: u32,
+    pub unread: u32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ClaimCounts {
+    pub total: u32,
+    pub backed: u32,
+    pub partly: u32,
+    pub unbacked: u32,
+    pub unsourced: u32,
+    pub unchecked: u32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Problem {
+    pub kind: ProblemKind,
+    pub text: String,
+    pub why: String,
+    pub urls: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProblemKind {
+    Unbacked,
+    Partly,
+    Unsourced,
+    Broken,
+    Unread,
+    #[default]
+    #[serde(other)]
+    Other,
+}
+
+impl ProblemKind {
+    /// In the order they are shown.
+    pub const ALL: [Self; 6] = [
+        Self::Unbacked,
+        Self::Partly,
+        Self::Unsourced,
+        Self::Broken,
+        Self::Unread,
+        Self::Other,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Unbacked => "Not backed by their source",
+            Self::Partly => "Only partly backed",
+            Self::Unsourced => "Without a source that was read",
+            Self::Broken => "Broken links",
+            Self::Unread => "Cited, but not read",
+            Self::Other => "Other",
         }
     }
 }

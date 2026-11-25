@@ -14,9 +14,9 @@ use transcript::explore::{Group, RowRole};
 use transcript::search::Field;
 use transcript::tool::{self, DiffKind, PathContext, ToolKind};
 use transcript::{
-    AssistantItem, BashItem, BashStatus, BlockKind, ItemId, ItemKind, NestedEntry, NoticeKind,
-    RunStatus, Standing, StepItem, TextBlock, ThinkingBlock, ToolBlock, ToolStatus, TranscriptItem,
-    format_duration,
+    AssistantItem, BashItem, BashStatus, BlockKind, CheckItem, ItemId, ItemKind, NestedEntry,
+    NoticeKind, RunStatus, Standing, StepItem, TextBlock, ThinkingBlock, ToolBlock, ToolStatus,
+    TranscriptItem, format_duration,
 };
 
 use super::images;
@@ -99,6 +99,12 @@ pub fn render_row(
     let content = match (items.get(row), chat.role(row)) {
         // Folded into the "Explored" group of an earlier row.
         (Some(_), Some(RowRole::Hidden)) => return div().into_any_element(),
+        // On the row that ends its turn.
+        (Some(item), _)
+            if matches!(item.kind, ItemKind::Check(_)) && turn_end(items, row).is_some() =>
+        {
+            return div().into_any_element();
+        }
         (Some(_), Some(RowRole::Group(group))) => render_group(group, &context),
         (Some(item), _) => render_item(item, &context, theme.muted, cx),
         (None, _) => render_working(&session.working_status(), session.web_progress(), &context),
@@ -211,6 +217,9 @@ fn render_item(item: &TranscriptItem, cx: &RowContext<'_>, bubble: Hsla, app: &A
             .into_any_element(),
         ItemKind::Assistant(assistant) => render_assistant(item, assistant, cx),
         ItemKind::Step(step) => render_step(item.id, step, cx),
+        ItemKind::Check(check) => h_flex()
+            .child(super::report::symbol(item.id.0, check, app))
+            .into_any_element(),
         ItemKind::Bash(bash) => render_bash(item.id, bash, cx),
         ItemKind::Notice(notice) => {
             let (icon, color): (Icon, Hsla) = match notice.kind {
@@ -245,7 +254,11 @@ fn render_item(item: &TranscriptItem, cx: &RowContext<'_>, bubble: Hsla, app: &A
                         .text_xs()
                         .text_color(cx.palette.subtle)
                         .child(crate::ui::spinner::resting_pi(px(11.), cx.palette.accent))
-                        .child(label),
+                        .child(label)
+                        .children(
+                            turn_check(cx.items, cx.row)
+                                .map(|check| super::report::symbol(item.id.0, check, app)),
+                        ),
                 )
                 .child(turn_actions(item.id.0, cx, app))
                 .into_any_element()
@@ -454,6 +467,18 @@ pub(crate) fn turn_end(items: &[TranscriptItem], row: usize) -> Option<usize> {
         .position(|item| matches!(item.kind, ItemKind::User(_) | ItemKind::TurnSummary(_)))
         .map(|offset| row + offset)
         .filter(|end| matches!(items[*end].kind, ItemKind::TurnSummary(_)))
+}
+
+/// How the report of the turn that ends at `row` was checked.
+fn turn_check(items: &[TranscriptItem], row: usize) -> Option<&CheckItem> {
+    items[..row]
+        .iter()
+        .rev()
+        .take_while(|item| !matches!(item.kind, ItemKind::User(_)))
+        .find_map(|item| match &item.kind {
+            ItemKind::Check(check) => Some(check),
+            _ => None,
+        })
 }
 
 /// How many prompts come after `row` (0 for the last one): pi's fork list is matched from

@@ -2,6 +2,7 @@
 //! `[1]`, `(Short title)` or a bare address, with the links in a list at the end.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 
 use crate::check::links;
 
@@ -53,7 +54,7 @@ fn bare_addresses(report: &str) -> String {
         }
         out.push_str(&report[from..at]);
         // A definition, `[1]: https://…`.
-        out.push_str(&format!("[{url}]({url})"));
+        let _ = write!(out, "[{url}]({url})");
         from = at + url.len();
     }
     out.push_str(&report[from..]);
@@ -195,7 +196,7 @@ impl Pages {
                     let label = &line[open + 1..end];
                     for (index, url) in found.iter().enumerate() {
                         let label = if index == 0 { label } else { "" };
-                        out.push_str(&format!("[{label}]({url})"));
+                        let _ = write!(out, "[{label}]({url})");
                     }
                     from = end + 1;
                 }

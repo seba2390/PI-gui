@@ -761,6 +761,14 @@ impl Transcript {
                 duration: now.saturating_duration_since(started),
                 aborted,
             }));
+            // It shows what belongs to the turn's end.
+            for index in (0..self.items.len()).rev() {
+                match &self.items[index].kind {
+                    ItemKind::User(_) => break,
+                    ItemKind::Check(_) => self.touch(index),
+                    _ => {}
+                }
+            }
         }
         self.status = RunStatus::Idle;
         self.revision += 1;

@@ -5,7 +5,7 @@ use std::time::Instant;
 use pi_rpc::protocol::{AgentMessage, Event};
 use pretty_assertions::assert_eq;
 use serde_json::{Value, json};
-use transcript::{ItemKind, Standing, Transcript};
+use transcript::{ItemKind, ProblemKind, Standing, Transcript};
 
 fn user(text: &str) -> Value {
     json!({"role": "user", "content": text, "timestamp": 1})
@@ -125,6 +125,14 @@ fn shown(transcript: &Transcript) -> Vec<String> {
                 (!text.is_empty() || assistant.has_tools()).then(|| format!("{line}: {text}"))
             }
             ItemKind::Notice(notice) => Some(format!("{:?}: {}", notice.kind, notice.text)),
+            ItemKind::Check(check) => {
+                let kind = if check.checked {
+                    "checked"
+                } else {
+                    "not checked"
+                };
+                Some(format!("{kind}: {}", check.text))
+            }
             ItemKind::Step(step) => Some(format!("step: {}", step.title)),
             ItemKind::Bash(_) | ItemKind::TurnSummary(_) => None,
         })
@@ -193,7 +201,7 @@ fn a_report_is_the_answer_once_it_is_final() {
             "draft: Second report",
             "step: Revising",
             "answer: Third report",
-            "Info: The note.",
+            "checked: The note.",
         ]
     );
 }
@@ -239,7 +247,7 @@ fn stopping_keeps_the_last_complete_report() {
             "remark +tools: ",
             "draft: The rep",
             "unchecked: The report",
-            "Warning: The note.",
+            "not checked: The note.",
         ]
     );
 }
@@ -263,7 +271,7 @@ fn a_version_before_can_be_the_answer() {
             "step: Revising",
             "draft: Only a bit",
             "unchecked: The whole report",
-            "Warning: The note.",
+            "not checked: The note.",
         ]
     );
 }
@@ -281,7 +289,7 @@ fn a_report_nothing_was_said_about_is_not_lost() {
         "user: q",
         "remark +tools: ",
         "unchecked: The report",
-        "Warning: This report was not checked: it was stopped.",
+        "not checked: This report was not checked: it was stopped.",
     ];
     assert_eq!(at_the_end(&messages), ended);
 
@@ -294,6 +302,38 @@ fn a_report_nothing_was_said_about_is_not_lost() {
     let mut expected = ended.map(str::to_owned).to_vec();
     expected.extend(["user: thanks".to_owned(), "answer: Welcome".to_owned()]);
     assert_eq!(shown(&Transcript::from_messages(&history)), expected);
+}
+
+#[test]
+fn a_check_says_what_it_found() {
+    let about = json!({
+        "effort": "max", "searches": 64, "pages": 44, "sites": 22,
+        "links": {"total": 22, "broken": 0, "unread": 1},
+        "claims": {"total": 59, "backed": 50, "partly": 4, "unbacked": 3, "unsourced": 1,
+            "unchecked": 1},
+        "problems": [
+            {"kind": "partly", "text": "A claim", "why": "it says less", "urls": ["https://a.org"]},
+            {"kind": "a later one", "text": "B", "why": "", "urls": []},
+        ],
+        "notes": ["Thinking was minimal."],
+    });
+    let details = json!({"stage": "final", "checked": true, "back": 0, "about": about});
+    let messages = [
+        user("q"),
+        assistant("", &["1"], "toolUse"),
+        result("1", true),
+        assistant("The report", &[], "stop"),
+        check("The note.", details),
+    ];
+    let transcript = live(&messages);
+    let Some(ItemKind::Check(check)) = transcript.items().last().map(|item| &item.kind) else {
+        panic!("no check");
+    };
+    let about = check.about.as_ref().expect("about");
+    assert_eq!((about.searches, about.links.unread), (64, 1));
+    assert_eq!(about.claims.as_ref().expect("claims").backed, 50);
+    let kinds: Vec<_> = about.problems.iter().map(|problem| problem.kind).collect();
+    assert_eq!(kinds, [ProblemKind::Partly, ProblemKind::Other]);
 }
 
 #[test]
@@ -317,7 +357,7 @@ fn steering_does_not_end_the_research() {
             "step: Revising",
             "user: also in Sweden",
             "answer: A better report",
-            "Info: The note.",
+            "checked: The note.",
         ]
     );
 }
