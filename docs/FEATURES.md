@@ -231,14 +231,14 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
 
 ## Documents
 
-PDF files are read as Markdown: the ones you attach to a chat, the ones chats find on the web, and
-the ones pi reads in Code sessions on this computer. Settings → Document parsing chooses what reads
+Documents are read as Markdown: the ones you attach to a chat, PDF files that chats find on the web,
+and those pi reads in Code sessions on this computer. Settings → Document parsing chooses what reads
 them. The built-in reader is the default and needs no download; the others are downloaded on request
 and can be removed again (macOS and Linux):
 
 | Parser | Good at | Download (on disk) | License |
 |---|---|---|---|
-| Built-in ([pdf-extract](https://crates.io/crates/pdf-extract)) | plain text, page by page | none | MIT |
+| Built-in ([pdf-extract](https://crates.io/crates/pdf-extract), [calamine](https://crates.io/crates/calamine) and our own) | plain text of PDFs, page by page; Word, PowerPoint, Excel, OpenDocument and EPUB files | none | MIT |
 | [PyMuPDF4LLM](https://github.com/pymupdf/pymupdf) | fast; headings, columns and tables of PDFs made on a computer | 143 MB (320 MB) | AGPL-3.0 |
 | [Docling](https://github.com/docling-project/docling) | complex layouts, tables, scans; also Word, PowerPoint and Excel files | 788 MB (1.8 GB); Linux 3.7 GB (8.5 GB) | MIT |
 | [MinerU](https://github.com/opendatalab/MinerU) | academic papers: formulas, dense columns, long tables, scans | 1.0 GB (1.3 GB) | MinerU Open Source License (Apache-2.0 with added terms) |
@@ -262,11 +262,19 @@ or takes too long, the built-in reader is used and the result says so.
   is done; it can be removed meanwhile, and the message is not sent before. Once sent, its first
   page shows above the message, with “.pdf” on it (macOS, and Linux with poppler's `pdftoppm`;
   otherwise a page with its name); clicking either shows the file in the viewer (below). The text
-  goes to the model with the message but is not shown, and Edit and Retry keep it. A document of
-  more than 256 KB of text is shortened to its outline, its start and the parts that match your
-  message, and the model is told. With Docling, Word, PowerPoint and Excel files (`.docx`, `.pptx`,
-  `.xlsx`) can be attached the same way. Files on this computer attached to a session on an SSH host
-  are read too.
+  goes to the model with the message but is not shown, and Edit and Retry keep it. The same goes for
+  Word, PowerPoint, Excel (`.docx`, `.pptx`, `.xlsx` and their kin, `.xls`, `.xlsb`), OpenDocument
+  (`.odt`, `.odp`, `.ods`) and EPUB files, whose headings, lists, tables, notes and footnotes are
+  kept: Docling reads the Office ones if it is chosen, the built-in reader all others. Plain text
+  can be in any common encoding and up to 16 MB. Pictures in BMP, TIFF and SVG are converted to PNG
+  (in Code sessions, SVG stays an `@path`). Files on this computer attached to a session on an SSH
+  host are read too.
+- **Long texts:** text of more than 256 KB, of a document or a plain file, is shortened to a quarter
+  of that: its outline, its start and the parts that match your message. The card says “Shortened”,
+  and the model is told. A slider in Settings → Document parsing changes the limit, from 32 KB to
+  all that fits. What does not fit in what is left of the model's context (a fifth of which is kept
+  for the answer) is always shortened. Logs, tables and source code are cut between lines, and their
+  start (the names of columns) is always there.
 - **Viewer:** PDF files are shown in the app, drawn by [hayro](https://github.com/LaurenzV/hayro) in
   a helper process that ends with the viewer. Only the pages you look at and their neighbors are
   drawn. The sun or moon chooses light or dark pages (like the app until you choose; remembered):
@@ -280,10 +288,10 @@ or takes too long, the built-in reader is used and the result says so.
 - **Code:** an attached PDF stays an `@path`. When pi reads a PDF, a small embedded extension returns
   its Markdown; `offset` and `limit` are lines of that. Other files are pi's own business, and so are
   all files in sessions on an SSH host.
-- `config.json` in that folder has the parser and the limits: `timeout_secs`, `web_timeout_secs` and
-  `max_file_bytes` (100 MB). The text of the last documents is kept in `cache` there (24 at most),
-  because long ones are read in parts; `attached` has where attached files are and the small
-  pictures of PDFs.
+- `config.json` in that folder has the parser and the limits: `timeout_secs`, `web_timeout_secs`,
+  `max_file_bytes` (100 MB) and `whole_text_bytes` (256 KB; `null` for all that fits). The text of
+  the last documents is kept in `cache` there (24 at most), because long ones are read in parts;
+  `attached` has where attached files are and the small pictures of PDFs.
 - Try it without the GUI: `pistachio --documents-tool parse paper.pdf` prints the Markdown.
 
 ## Speech to text

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use crate::{Kind, cache};
+use crate::{Kind, cache, plain};
 
 const MAX_FILES: usize = 1000;
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
@@ -69,21 +69,24 @@ pub fn first_lines(path: &Path) -> Option<String> {
     let mut bytes = Vec::new();
     let file = fs::File::open(path).ok()?;
     file.take(START_BYTES).read_to_end(&mut bytes).ok()?;
-    let text = match std::str::from_utf8(&bytes) {
-        Ok(text) => text,
-        // Cut within a character.
-        Err(error) if error.error_len().is_none() => {
-            std::str::from_utf8(&bytes[..error.valid_up_to()]).ok()?
-        }
-        Err(_) => return None,
-    };
+    // Cut within a character.
+    if let Err(error) = std::str::from_utf8(&bytes)
+        && error.error_len().is_none()
+    {
+        bytes.truncate(error.valid_up_to());
+    }
+    start(&plain::decode(bytes)?)
+}
+
+/// [`first_lines`] of a text.
+pub fn start(text: &str) -> Option<String> {
     let lines: Vec<String> = text
         .trim_start_matches('\u{feff}')
         .lines()
         .take(START_LINES)
         .map(|line| line.chars().take(START_CHARS).collect())
         .collect();
-    let is_text = !text.contains('\0') && lines.iter().any(|line| !line.trim().is_empty());
+    let is_text = lines.iter().any(|line| !line.trim().is_empty());
     is_text.then(|| lines.join("\n"))
 }
 
@@ -199,7 +202,12 @@ mod tests {
             lines(b"1\n".repeat(99).as_slice()).unwrap().lines().count(),
             8
         );
-        for other in [b"\x89PNG\xff\xfe".as_slice(), b"a\0b", b" \n\n", b""] {
+        for other in [
+            b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\xff".as_slice(),
+            b"a\0b",
+            b" \n\n",
+            b"",
+        ] {
             assert_eq!(lines(other), None);
         }
         assert_eq!(first_lines(dir.path()), None);

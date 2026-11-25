@@ -4,6 +4,7 @@ mod attachment_card;
 mod commands;
 pub mod composer;
 mod context_panel;
+mod convert;
 pub mod dialogs;
 mod document;
 mod file_links;

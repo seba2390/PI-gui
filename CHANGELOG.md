@@ -12,6 +12,14 @@ All notable changes to PI-gui are listed here. The format follows
   picture of what you attach. It opens at once and draws only the pages you look at. Links work, on
   the web and within the file (with a way back). Pages are light or dark, with photos left as they
   are. The keys scroll and zoom, and so do the trackpad and the buttons.
+- Chats read many more files, without a download: Word, PowerPoint and Excel (also `.xls` and
+  `.xlsb`), OpenDocument (`.odt`, `.odp`, `.ods`) and EPUB, with headings, lists and tables; plain
+  text that is not UTF-8 (UTF-16, Windows-1252, Shift JIS and others); and BMP, TIFF and SVG
+  pictures. Docling is still used for the Office files it reads, if it is chosen.
+- Text files of more than 256 KB are no longer left out of chats: they are shortened, like long
+  documents, to their start and the parts that match your message. Their card says so. Settings →
+  Document parsing has a slider for how much text goes whole, from 32 KB to all that fits. What the
+  model has no room left for is always shortened.
 
 ### Changed
 

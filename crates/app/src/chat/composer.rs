@@ -36,7 +36,8 @@ use pi_sessions::prompt;
 
 use super::attachment_card::{self, Card, Preview};
 use super::commands::{self, CommandOutcome, Suggestion, SuggestionList};
-use super::document::{AttachedDocument, Reading};
+use super::convert;
+use super::document::{AttachedDocument, Reading, Room};
 use super::file_picker::{self, FilePicker, Pick};
 use super::images;
 use super::mention::{self, History};
@@ -100,7 +101,6 @@ struct Attachment {
 
 /// An attachment's contents for chat mode, or why it could not be included.
 enum InlineText {
-    Text(String),
     Document(AttachedDocument),
     /// The block of a message that came back, as it was sent.
     Sent(String),
@@ -159,10 +159,6 @@ impl Draft {
         &self.text
     }
 }
-
-/// Text attachments larger than this do not go along with a chat prompt, and documents only in
-/// part.
-pub(super) const MAX_INLINE_BYTES: usize = 256 * 1024;
 
 pub struct Composer {
     session: Entity<PiSession>,
@@ -770,15 +766,17 @@ impl Composer {
         let mut blocks = Vec::new();
         let mut references = Vec::new();
         let mut images = Vec::new();
+        let mut room = self.room(cx);
         for attachment in self.attachments.drain(..) {
             let block = |contents: &str| {
                 prompt::block(&attachment.name, attachment.id.as_deref(), contents)
             };
             match (attachment.image, attachment.inline) {
                 (Some(image), _) => images.push(image),
-                (None, Some(InlineText::Text(contents))) => blocks.push(block(&contents)),
                 (None, Some(InlineText::Document(document))) => {
-                    blocks.push(block(&document.contents(&text)));
+                    let contents = document.contents(&text, &room);
+                    room.take(contents.len());
+                    blocks.push(block(&contents));
                 }
                 (None, Some(InlineText::Sent(sent))) => blocks.push(sent),
                 (None, Some(InlineText::Skipped(reason))) => {
@@ -996,18 +994,21 @@ impl Composer {
     pub fn attach_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
         // Without local file access (chat, or pi on another machine) the text of files goes along.
         let inline = !self.session.read(cx).is_local_code();
+        // For how much of a text goes along.
+        crate::document_parsers::document_parsers(cx);
         let dir = cx.global::<AppConfig>().documents_dir.clone();
+        let svg = cx.svg_renderer();
         for path in paths {
             if inline && AttachedDocument::is_one(&path) {
                 self.read_document(path, cx);
                 continue;
             }
             let order = self.start_loading(path.clone(), None, cx);
-            let dir = dir.clone();
+            let (dir, svg) = (dir.clone(), svg.clone());
             cx.spawn(async move |this, cx| {
                 let attachment = cx
                     .background_executor()
-                    .spawn(async move { load_attachment(path, inline, &dir) })
+                    .spawn(async move { load_attachment(path, inline, &dir, &svg) })
                     .await;
                 let _ = this.update(cx, |this, cx| this.loaded(order, attachment, cx));
             })
@@ -1131,6 +1132,12 @@ impl Composer {
             let read = match spawned {
                 Ok(_) => rx.recv().await.unwrap_or_else(|e| Err(e.to_string())),
                 Err(error) => Err(error.to_string()),
+            };
+            // What has no picture shows its start.
+            let preview = match (&read, preview) {
+                (Ok(document), Preview::None) => attached::start(document.text())
+                    .map_or(Preview::None, |start| Preview::Text(start.into())),
+                (_, preview) => preview,
             };
             let attachment = Attachment {
                 order,
@@ -1680,6 +1687,7 @@ impl Composer {
 
     fn render_attachments(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let mut cards: Vec<(u64, AnyElement)> = Vec::new();
+        let mut room = self.room(cx);
         for attachment in &self.attachments {
             let order = attachment.order;
             let remove = cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -1689,7 +1697,7 @@ impl Composer {
             let show = cx.listener(move |this, _: &ClickEvent, window, cx| {
                 this.show_attachment(order, window, cx);
             });
-            let card = attachment.card().render(remove, show, cx);
+            let card = attachment.card(&mut room).render(remove, show, cx);
             cards.push((order, card.into_any_element()));
         }
         for loading in &self.loading {
@@ -1714,6 +1722,15 @@ impl Composer {
             .max_h(px(attachment_card::MAX_HEIGHT))
             .overflow_y_scroll()
             .children(cards.into_iter().map(|(_, card)| card))
+    }
+
+    /// How much text may go along with the next message.
+    fn room(&self, cx: &App) -> Room {
+        let limit = match crate::document_parsers::existing(cx) {
+            Some(parsers) => parsers.whole_text(),
+            None => usize::try_from(documents::config::WHOLE_TEXT_BYTES).ok(),
+        };
+        Room::new(limit, self.session.read(cx).context_usage())
     }
 
     /// Shows an attached picture or PDF file in its viewer.
@@ -2405,8 +2422,12 @@ impl Loading {
 }
 
 impl Attachment {
-    fn card(&self) -> Card {
-        let (remark, why) = self.remark();
+    /// Its card, after others took their part of `room`.
+    fn card(&self, room: &mut Room) -> Card {
+        let (remark, why) = self.remark(room);
+        if let Some(InlineText::Document(document)) = &self.inline {
+            room.take(document.text().len());
+        }
         Card {
             id: ElementId::NamedInteger("attachment".into(), self.order),
             name: self.name.clone(),
@@ -2433,11 +2454,15 @@ impl Attachment {
     }
 
     /// What its card says besides the name and the kind of file, and why.
-    fn remark(&self) -> (Option<&'static str>, Option<SharedString>) {
+    fn remark(&self, room: &Room) -> (Option<&'static str>, Option<SharedString>) {
         match &self.inline {
             Some(InlineText::Skipped(reason)) => (
                 Some("Not included"),
                 Some(format!("It is not included: {reason}.").into()),
+            ),
+            Some(InlineText::Document(document)) if document.is_cut(room) => (
+                Some("Shortened"),
+                Some(shortened(document.text().len()).into()),
             ),
             Some(InlineText::Document(document)) => match document.note() {
                 Some(note) => (Some("Built-in reader"), Some(note.to_owned().into())),
@@ -2466,6 +2491,20 @@ fn remembered_preview(dir: &Path, id: &str) -> Preview {
     }
 }
 
+fn shortened(bytes: usize) -> String {
+    let size = if bytes < 1024 * 1024 {
+        format!("{} KB", bytes / 1024)
+    } else {
+        #[allow(clippy::cast_precision_loss)] // a size to show
+        let mb = bytes as f64 / (1024. * 1024.);
+        format!("{mb:.1} MB")
+    };
+    format!(
+        "It is {size} of text, so the model gets its start and the parts that match your message. \
+         Settings → Document parsing says how much goes whole."
+    )
+}
+
 fn is_pdf(path: &Path) -> bool {
     documents::Kind::of(path) == Some(documents::Kind::Pdf)
 }
@@ -2487,26 +2526,31 @@ fn attachment_name(path: &Path) -> SharedString {
         .into()
 }
 
-fn load_attachment(path: PathBuf, inline: bool, dir: &Path) -> Attachment {
+fn load_attachment(path: PathBuf, inline: bool, dir: &Path, svg: &SvgRenderer) -> Attachment {
     let name = attachment_name(&path);
-    let mime = match path
+    let extension = path
         .extension()
         .and_then(|ext| ext.to_str())
         .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("png") => Some("image/png"),
-        Some("jpg" | "jpeg") => Some("image/jpeg"),
-        Some("gif") => Some("image/gif"),
-        Some("webp") => Some("image/webp"),
+        .unwrap_or_default();
+    let as_it_is = match extension.as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
         _ => None,
     };
-    let image = mime.and_then(|mime| {
-        let bytes = std::fs::read(&path).ok()?;
-        Some(ImageContent::new(
+    let image = match as_it_is {
+        Some(mime) => std::fs::read(&path).ok().map(|bytes| (bytes, mime)),
+        // In Code sessions the source of a drawing is what matters.
+        None if extension == "svg" && !inline => None,
+        None => convert::to_png(&path, &extension, svg).map(|png| (png, "image/png")),
+    };
+    let image = image.map(|(bytes, mime)| {
+        ImageContent::new(
             base64::engine::general_purpose::STANDARD.encode(bytes),
             mime,
-        ))
+        )
     });
     let preview = match &image {
         Some(image) => {
@@ -2514,9 +2558,12 @@ fn load_attachment(path: PathBuf, inline: bool, dir: &Path) -> Attachment {
         }
         None => text_preview(&path),
     };
-    let inline = (inline && image.is_none()).then(|| read_inline_text(&path));
+    let inline = (inline && image.is_none()).then(|| match AttachedDocument::read_plain(&path) {
+        Ok(text) => InlineText::Document(text),
+        Err(reason) => InlineText::skipped(reason),
+    });
     let id = match &inline {
-        Some(InlineText::Text(_)) => attached::remember(dir, &path),
+        Some(InlineText::Document(_)) => attached::remember(dir, &path),
         _ => None,
     };
     Attachment {
@@ -2527,20 +2574,6 @@ fn load_attachment(path: PathBuf, inline: bool, dir: &Path) -> Attachment {
         image,
         inline,
         id,
-    }
-}
-
-fn read_inline_text(path: &Path) -> InlineText {
-    match std::fs::metadata(path) {
-        Ok(meta) if meta.len() > MAX_INLINE_BYTES as u64 => {
-            InlineText::skipped("larger than 256 KB")
-        }
-        Ok(_) => match std::fs::read(path).map(String::from_utf8) {
-            Ok(Ok(text)) => InlineText::Text(text),
-            Ok(Err(_)) => InlineText::skipped("not a text file"),
-            Err(_) => InlineText::skipped("could not be read"),
-        },
-        Err(_) => InlineText::skipped("could not be read"),
     }
 }
 
@@ -3182,8 +3215,8 @@ mod draft_tests {
     use pi_sessions::Mode;
 
     use super::{
-        Attachment, Composer, Dictation, Draft, InlineText, PiSession, Preview, prompt,
-        waiting_line,
+        AttachedDocument, Attachment, Composer, Dictation, Draft, InlineText, PiSession, Preview,
+        prompt, waiting_line,
     };
     use crate::config::AppConfig;
     use crate::hosts::{Hosts, HostsHandle};
@@ -3230,7 +3263,8 @@ mod draft_tests {
             name: path.to_string_lossy().into_owned().into(),
             preview: Preview::None,
             image: None,
-            inline: inline.map(|text| InlineText::Text(text.to_owned())),
+            inline: inline
+                .map(|text| InlineText::Document(AttachedDocument::plain(path, text.to_owned()))),
             id: None,
         }
     }
@@ -3348,7 +3382,9 @@ mod draft_tests {
         settle(&host, cx);
         cx.read(|cx| {
             let attachment = &host.read(cx).attachments[0];
-            assert!(matches!(&attachment.inline, Some(InlineText::Text(text)) if text == "text"));
+            assert!(
+                matches!(&attachment.inline, Some(InlineText::Document(text)) if text.text() == "text")
+            );
         });
 
         // Back, with a file picked on the host, which stays behind.
@@ -3385,7 +3421,10 @@ mod draft_tests {
 
     #[cfg(unix)]
     fn remark(composer: &Entity<Composer>, cx: &VisualTestContext) -> Option<&'static str> {
-        cx.read(|cx| composer.read(cx).attachments[0].remark().0)
+        cx.read(|cx| {
+            let composer = composer.read(cx);
+            composer.attachments[0].remark(&composer.room(cx)).0
+        })
     }
 
     /// A card says that a document is read, and Enter waits for it.
@@ -3427,7 +3466,8 @@ mod draft_tests {
                 panic!("not read");
             };
             assert_eq!(document.note(), Some("Docling failed."));
-            assert_eq!(document.contents("What is this?"), "# Hi");
+            let room = composer.read(cx).room(cx);
+            assert_eq!(document.contents("What is this?", &room), "# Hi");
         });
     }
 
@@ -3494,11 +3534,12 @@ mod draft_tests {
             ["report.PDF", "notes.txt", "photo.jpeg"]
         );
         cx.read(|cx| {
+            let mut room = composer.read(cx).room(cx);
             let attachments = &composer.read(cx).attachments;
             let cards: Vec<_> = attachments
                 .iter()
                 .map(|attachment| {
-                    let card = attachment.card();
+                    let card = attachment.card(&mut room);
                     (card.extension.unwrap().to_string(), card.status.to_string())
                 })
                 .collect();
@@ -3510,7 +3551,10 @@ mod draft_tests {
                 cards,
                 [(".pdf", "PDF"), (".txt", "Text"), (".jpg", "Image")]
             );
-            let shown: Vec<_> = attachments.iter().map(|a| a.card().can_show).collect();
+            let shown: Vec<_> = attachments
+                .iter()
+                .map(|a| a.card(&mut room).can_show)
+                .collect();
             assert_eq!(shown, [true, false, true]);
             assert!(matches!(&attachments[1].preview, Preview::Text(text) if text == "two\nlines"));
         });
@@ -3585,6 +3629,81 @@ mod draft_tests {
         assert_eq!(send(cx), sent);
     }
 
+    /// A text that is too long says that it is shortened, and is, unless the settings allow more.
+    #[gpui_kit::test]
+    fn long_text_is_shortened(cx: &mut TestAppContext) {
+        use std::fmt::Write as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("server.log");
+        let mut log = String::new();
+        for n in 0..20_000 {
+            let _ = writeln!(log, "{n} something happened");
+        }
+        std::fs::write(&path, &log).unwrap();
+        let session = PiSession::idle(std::env::temp_dir(), Mode::Chat);
+        let ([composer], cx) = composers([session], cx);
+        cx.update(|_, cx| {
+            cx.global_mut::<AppConfig>().documents_dir = dir.path().join("documents");
+        });
+        for (limit, short) in [(Some(256 * 1024), true), (Some(1024 * 1024), false)] {
+            act(&composer, cx, |composer, window, cx| {
+                composer.set_text("What about 12345?", window, cx);
+                composer.attach_paths(vec![path.clone()], cx);
+                let parsers = crate::document_parsers::document_parsers(cx);
+                parsers.update(cx, |parsers, cx| parsers.set_whole_text(limit, cx));
+            });
+            settle(&composer, cx);
+            let status = cx.read(|cx| {
+                let composer = composer.read(cx);
+                composer.attachments[0].card(&mut composer.room(cx)).status
+            });
+            assert_eq!(status, if short { "Shortened" } else { "Text" });
+            let sent = act(&composer, cx, |composer, window, cx| {
+                composer.submit(false, window, cx);
+                let session = composer.session.read(cx);
+                session.pending_prompts().last().unwrap().0.to_owned()
+            });
+            assert!(sent.contains("\n12345 something happened\n"));
+            assert_eq!(sent.len() > log.len(), !short, "{}", sent.len());
+        }
+    }
+
+    /// Pictures that models do not take are converted; the source of a drawing is for Code.
+    #[gpui_kit::test]
+    fn other_pictures_are_converted(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let svg = dir.path().join("a.svg");
+        let drawing = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"9\" height=\"9\"/>";
+        std::fs::write(&svg, drawing).unwrap();
+        let bmp = dir.path().join("b.bmp");
+        image::RgbaImage::new(2, 2).save(&bmp).unwrap();
+        let broken = dir.path().join("c.svg");
+        std::fs::write(&broken, "<svg>not closed").unwrap();
+        let chat = PiSession::idle(std::env::temp_dir(), Mode::Chat);
+        let ([chat, code], cx) = composers([chat, code()], cx);
+        let mime = |composer: &Entity<Composer>, cx: &mut VisualTestContext| {
+            act(composer, cx, |composer, _, cx| {
+                composer.attach_paths(vec![svg.clone(), bmp.clone(), broken.clone()], cx);
+            });
+            settle(composer, cx);
+            cx.read(|cx| {
+                let attachments = &composer.read(cx).attachments;
+                let image = |a: &Attachment| a.image.as_ref().map(|i| i.mime_type.clone());
+                attachments.iter().map(image).collect::<Vec<_>>()
+            })
+        };
+        let png = || Some("image/png".to_owned());
+        assert_eq!(mime(&chat, cx), [png(), png(), None]);
+        assert_eq!(mime(&code, cx), [None, png(), None]);
+        cx.read(|cx| {
+            // What cannot be drawn is still text.
+            let attachment = &chat.read(cx).attachments[2];
+            assert!(matches!(&attachment.inline, Some(InlineText::Document(_))));
+            assert!(code.read(cx).attachments[0].inline.is_none());
+        });
+    }
+
     /// Removing a document, or leaving the chat, stops reading it.
     #[cfg(unix)]
     #[gpui_kit::test]
@@ -3634,7 +3753,7 @@ mod draft_tests {
         let dir = tempfile::tempdir().unwrap();
         let docx = dir.path().join("letter.docx");
         std::fs::write(&docx, "PK").unwrap();
-        let script = r#"echo '{"ok":false,"error":"only Docling reads Office files"}'"#;
+        let script = r#"echo '{"ok":false,"error":"the file is odd"}'"#;
         let (composer, cx) = chat(dir.path(), script, cx);
         act(&composer, cx, |composer, _, cx| {
             composer.attach_paths(vec![docx], cx);
@@ -3642,11 +3761,9 @@ mod draft_tests {
         settle(&composer, cx);
         assert_eq!(remark(&composer, cx), Some("Not included"));
         cx.read(|cx| {
-            let (_, why) = composer.read(cx).attachments[0].remark();
-            assert_eq!(
-                why.unwrap(),
-                "It is not included: only Docling reads Office files."
-            );
+            let composer = composer.read(cx);
+            let (_, why) = composer.attachments[0].remark(&composer.room(cx));
+            assert_eq!(why.unwrap(), "It is not included: the file is odd.");
         });
     }
 

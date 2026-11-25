@@ -1,4 +1,5 @@
-//! Reading documents (PDF files, and Office files with Docling) as Markdown.
+//! Reading documents (PDF, Office, OpenDocument and EPUB files) as Markdown, and plain text in any
+//! encoding ([`plain`]).
 //!
 //! The built-in reader ([`builtin`]) comes with the app. The others ([`Parser`]) are downloaded on
 //! request ([`install`]): nothing of them ships with the app, each has a private Python, packages
@@ -27,6 +28,8 @@ pub mod client;
 pub mod config;
 pub mod helper;
 mod install;
+mod office;
+pub mod plain;
 mod read;
 mod text;
 pub mod viewer;
@@ -34,7 +37,7 @@ pub mod viewer;
 pub use catalog::Parser;
 pub use install::{Installed, Progress, Stage, install, installed, remove};
 pub use python_env::InstallError;
-pub use read::{Content, Document, Kind, can_read, read, read_bytes};
+pub use read::{Content, Document, Kind, read, read_bytes};
 
 use std::fs;
 use std::io;
