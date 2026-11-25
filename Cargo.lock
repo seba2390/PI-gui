@@ -1861,9 +1861,9 @@ checksum = "be1e0bca6c3637f992fc1cc7cbc52a78c1ef6db076dbf1059c4323d6a2048376"
 name = "deepsearch"
 version = "0.4.9"
 dependencies = [
+ "documents",
  "html5ever 0.40.1",
  "markup5ever_rcdom 0.40.1+unofficial",
- "pdf-extract",
  "pretty_assertions",
  "searxng",
  "serde",
@@ -2055,6 +2055,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d4b8a88685455ed29a21542a33abd9cb6510b6b129abadabdcef0f4c55bc8f61"
 dependencies = [
  "litrs",
+]
+
+[[package]]
+name = "documents"
+version = "0.4.9"
+dependencies = [
+ "pdf-extract",
+ "pretty_assertions",
+ "python-env",
+ "rustix",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
