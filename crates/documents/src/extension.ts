@@ -12,14 +12,6 @@ const BIN = process.env.PISTACHIO_DOCUMENTS_BIN;
 
 type Reply = { ok: true; markdown: string; parser: string; note: string | null } | { ok: false; error: string };
 
-// What a reading says about itself, as `Reply::heading` in cli.rs.
-const NAMES: Record<string, string> = {
-  builtin: "the built-in reader",
-  pymupdf4llm: "PyMuPDF4LLM",
-  docling: "Docling",
-  mineru: "MinerU",
-};
-
 function parse(bin: string, path: string, signal?: AbortSignal): Promise<Reply> {
   return new Promise((resolve) => {
     if (signal?.aborted) {
@@ -75,8 +67,7 @@ export default function (pi: any) {
             reply = await parse(BIN, file, ctx.signal);
             if (!reply.ok) throw new Error(reply.error);
             const note = reply.note ? ` ${reply.note}` : "";
-            const name = NAMES[reply.parser] ?? reply.parser;
-            const heading = `[${basename(file)} as Markdown, read with ${name}.${note}]`;
+            const heading = `[The text of ${basename(file)}, as Markdown.${note}]`;
             return Buffer.from(`${heading}\n\n${reply.markdown}`);
           },
         },

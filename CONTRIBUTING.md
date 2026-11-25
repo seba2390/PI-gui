@@ -86,7 +86,8 @@ checks scriptable:
   every tool call in the chat (like Ctrl+O); `view-file:<path>` opens a file (relative to the
   folder) in the Files tab's viewer.
 - Sessions and popovers: `latest`, `new-chat` (like ⌘N), `attach`, `context`; `find:<text>` opens the find bar
-  searching for `<text>`; `send:<text>` sends `<text>` as a message; `image-viewer:<n>` opens the picture viewer on the session's
+  searching for `<text>`; `attach:<path>` attaches a file and `send:<text>` sends `<text>` as a
+  message, once what is attached is read; `image-viewer:<n>` opens the picture viewer on the session's
   `<n>`th picture; `report-check` opens how the session's last deep search report was checked.
 - Dialogs: `add-host`, `manage-hosts`, `add-model`, `add-provider`, `edit-models`.
 - Skills page: `skills`, `new-skill`, `open-skill:<path>`; the Settings page: `settings`

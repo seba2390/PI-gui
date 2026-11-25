@@ -1,9 +1,11 @@
 //! Transcript data types. Plain data: the reducer mutates, views read.
 
+use std::ops::Range;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use pi_rpc::protocol::StopReason;
+use pi_sessions::prompt::{self, AttachedFile};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -39,10 +41,45 @@ pub enum ItemKind {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct UserItem {
+    /// The prompt as pi has it.
     pub text: String,
     /// Images attached to the prompt.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<Image>,
+    /// Files whose text is part of the prompt.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<AttachedFile>,
+    /// Where in `text` what the user typed is.
+    #[serde(skip)]
+    typed: Range<usize>,
+}
+
+impl UserItem {
+    pub fn new(text: String, images: Vec<Image>) -> Self {
+        let prompt = prompt::split(&text);
+        let typed = prompt.range;
+        let files = prompt.files.into_iter().map(|(file, _)| file).collect();
+        Self {
+            text,
+            images,
+            files,
+            typed,
+        }
+    }
+
+    /// What the user typed: the prompt without the text of attached files.
+    pub fn typed(&self) -> &str {
+        &self.text[self.typed.clone()]
+    }
+
+    /// A line that says what the prompt is about.
+    pub fn title(&self) -> Option<&str> {
+        let typed = self.typed().lines().map(str::trim);
+        typed
+            .filter(|line| !line.is_empty())
+            .chain(self.files.iter().map(|file| file.name.as_str()))
+            .next()
+    }
 }
 
 /// An image in the conversation (attached to a prompt, or returned by a tool such as

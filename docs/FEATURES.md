@@ -33,9 +33,10 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   - **Chat**: plain conversation with **no file or shell tools**: the model cannot read, write
     or run anything on your computer. Chats run pi in a dedicated empty folder
     (`~/.pi/agent/pistachio/chat`) with only deep search's two web tools (`--tools
-    web_search,web_fetch --no-mcp`), which stay off until you turn web search on. Text
-    attachments are pasted into the prompt instead of being referenced by path (PDF files as
-    Markdown, see [Documents](#documents)), and `!` shell commands are disabled.
+    web_search,web_fetch --no-mcp`), which stay off until you turn web search on. The
+    text of attached files goes along with the message instead of a path (of PDF files as Markdown,
+    see [Documents](#documents)), and shows as a small page above it; `!` shell commands are
+    disabled.
   - **Web search** (Chat): the globe button next to the paperclip chooses how the model uses
     the web, per chat (remembered in the session; `/websearch off|search|deep` works too):
     - **Search**: a quick lookup when needed (a few searches and pages), then a concise answer
@@ -194,7 +195,8 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
 - **Pictures**: when the agent reads an image, a thumbnail shows next to the call (the first two
   of an "Explored" group, with "+N"); pictures attached to a prompt show above it. Clicking one
   opens a full-window viewer: ← / → or the arrows browse all of that call's, group's or
-  prompt's pictures, Esc closes it.
+  prompt's pictures, Esc closes it. pi's notes to the model about pictures it made smaller are not
+  shown.
 - **Working indicator**: a little green π with orbiting dots shows a working agent in the
   chat ("Working… 12s · esc to interrupt", centred) and before its name in the sidebar. Settings
   → Appearance → Working indicator picks the style, with a live preview.
@@ -256,10 +258,13 @@ network, and for at most 10 minutes (2 for a PDF from the web). If the chosen on
 or takes too long, the built-in reader is used and the result says so.
 
 - **Chats:** an attached PDF shows “Reading…” until it is done; it can be removed meanwhile, and the
-  message is not sent before. A document of more than 256 KB of text is shortened to its outline,
-  its start and the parts that match your message, and the message says so. With Docling, Word,
-  PowerPoint and Excel files (`.docx`, `.pptx`, `.xlsx`) can be attached the same way. Files on this
-  computer attached to a session on an SSH host are read too.
+  message is not sent before. Its first page shows above the message, with “.pdf” on it (macOS, and
+  Linux with poppler's `pdftoppm`; otherwise a page with its name); clicking it opens the file. The
+  text goes to the model with the message but is not shown, and Edit and Retry keep it. A document
+  of more than 256 KB of text is shortened to its outline, its start and the parts that match your
+  message, and the model is told. With Docling, Word, PowerPoint and Excel files (`.docx`, `.pptx`,
+  `.xlsx`) can be attached the same way. Files on this computer attached to a session on an SSH host
+  are read too.
 - **Web search:** PDFs found on the web are read with the same parser; the model gets the passages
   that match, with tables kept whole.
 - **Code:** an attached PDF stays an `@path`. When pi reads a PDF, a small embedded extension returns
@@ -267,7 +272,8 @@ or takes too long, the built-in reader is used and the result says so.
   all files in sessions on an SSH host.
 - `config.json` in that folder has the parser and the limits: `timeout_secs`, `web_timeout_secs` and
   `max_file_bytes` (100 MB). The text of the last documents is kept in `cache` there (24 at most),
-  because long ones are read in parts.
+  because long ones are read in parts; `attached` has where attached files are and the small
+  pictures of PDFs.
 - Try it without the GUI: `pistachio --documents-tool parse paper.pdf` prints the Markdown.
 
 ## Speech to text

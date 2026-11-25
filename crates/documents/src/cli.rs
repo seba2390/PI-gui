@@ -23,7 +23,7 @@ pub(crate) struct Request {
     pub path: PathBuf,
 }
 
-/// What a document says, as the model and the app get it.
+/// What a document says.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Reply {
     pub markdown: String,
@@ -31,21 +31,6 @@ pub struct Reply {
     pub parser: Parser,
     /// Why that is not the chosen parser.
     pub note: Option<String>,
-}
-
-impl Reply {
-    /// Says what `name`'s text below is.
-    pub fn heading(&self, name: &str) -> String {
-        let note = self
-            .note
-            .as_deref()
-            .map(|note| format!(" {note}"))
-            .unwrap_or_default();
-        format!(
-            "{name} as Markdown, read with {}.{note}",
-            self.parser.name()
-        )
-    }
 }
 
 /// Runs the helper when the process was started with [`FLAG`], returning its exit code.
@@ -124,29 +109,4 @@ fn reply(request: &Request) -> Result<Reply, String> {
 
 fn failure(error: &str) -> serde_json::Value {
     json!({ "ok": false, "error": error })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_heading_says_what_read_it() {
-        let mut reply = Reply {
-            markdown: String::new(),
-            parser: Parser::Docling,
-            note: None,
-        };
-        assert_eq!(
-            reply.heading("a.pdf"),
-            "a.pdf as Markdown, read with Docling."
-        );
-        reply.parser = Parser::Builtin;
-        reply.note = Some("Docling could not be used (x), so the built-in reader was.".into());
-        assert_eq!(
-            reply.heading("a.pdf"),
-            "a.pdf as Markdown, read with the built-in reader. Docling could not be used (x), so \
-             the built-in reader was."
-        );
-    }
 }

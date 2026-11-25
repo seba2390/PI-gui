@@ -1,15 +1,16 @@
-//! Documents (PDF and Office files) attached to a chat: their text goes into the message, as a
-//! helper process reads it.
+//! Documents (PDF and Office files) attached to a chat: their text goes along with the message, as
+//! a helper process reads it.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use deepsearch::excerpt::{self, Fitted};
 use documents::client::{self, Stop, Stopped};
 use gpui_kit::SharedString;
 
-use super::composer::{MAX_INLINE_BYTES, fenced};
+use super::composer::MAX_INLINE_BYTES;
 
-/// How much of a document that is longer than [`MAX_INLINE_BYTES`] goes into a message.
+/// How much of a document that is longer than [`MAX_INLINE_BYTES`] goes along with a message.
 const EXCERPT_BYTES: usize = 64 * 1024;
 
 /// A document that is being read; dropping it stops that.
@@ -62,19 +63,15 @@ impl AttachedDocument {
         self.reply.note.as_deref()
     }
 
-    /// What goes into a message that says `message`: the document, or what matches it.
-    pub fn block(&self, name: &str, message: &str) -> String {
-        let heading = self.reply.heading(&format!("`{name}`"));
+    /// What the model gets with a message that says `message`: the document, or what matches it.
+    pub fn contents(&self, message: &str) -> Cow<'_, str> {
         match self.text.fit(message, EXCERPT_BYTES) {
-            Fitted::Whole(text) => fenced(&heading, text),
-            Fitted::Excerpt { text, shown, total } => fenced(
-                &format!(
-                    "{heading} It is too long to include all of it. This is its outline, its \
-                     start and what matches this message: {shown} of {total} parts, with […] where \
-                     some are left out."
-                ),
-                &text,
-            ),
+            Fitted::Whole(text) => Cow::Borrowed(text),
+            Fitted::Excerpt { text, shown, total } => Cow::Owned(format!(
+                "(It is too long to include all of it. This is its outline, its start and what \
+                 matches this message: {shown} of {total} parts, with […] where some are left \
+                 out.)\n\n{text}"
+            )),
         }
     }
 }
@@ -97,14 +94,11 @@ mod tests {
     }
 
     #[test]
-    fn a_document_goes_into_the_message_as_markdown() {
-        let block = document("# Hi\n\n```\ncode\n```\n".into(), None).block("a.pdf", "x");
-        assert_eq!(
-            block,
-            "`a.pdf` as Markdown, read with Docling.\n````\n# Hi\n\n```\ncode\n```\n````"
-        );
-        let block = document("text".into(), Some("MinerU failed.")).block("a.pdf", "x");
-        assert!(block.starts_with("`a.pdf` as Markdown, read with Docling. MinerU failed.\n"));
+    fn the_model_gets_the_text_and_nothing_about_how_it_was_read() {
+        let text = "# Hi\n\n```\ncode\n```\n";
+        let document = document(text.into(), Some("MinerU failed."));
+        assert_eq!(document.contents("x"), text);
+        assert_eq!(document.note(), Some("MinerU failed."));
     }
 
     #[test]
@@ -115,7 +109,8 @@ mod tests {
             let _ = write!(text, "## Chapter {n}\n\n{filler}\n\n");
         }
         assert!(text.len() > MAX_INLINE_BYTES);
-        let block = document(text, None).block("book.pdf", "What is topic321?");
+        let book = document(text, None);
+        let block = book.contents("What is topic321?");
         assert!(block.contains("too long to include all of it"));
         assert!(block.contains("about topic321."));
         assert!(block.contains("Outline:\n\n- The Book"));

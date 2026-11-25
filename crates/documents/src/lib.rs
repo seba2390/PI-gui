@@ -14,9 +14,11 @@
 //! - `config.json`: the settings;
 //! - `parsers/<parser>/app/`: an installation, moved into place when it is complete;
 //! - `cache/`: what was read lately, so that a file read in parts is parsed once;
+//! - `attached/`: where files attached to chats are, with a small picture of PDFs;
 //! - `tmp/`: what parsers write while they run;
 //! - `extension.ts`: the pi extension.
 
+pub mod attached;
 pub mod builtin;
 mod cache;
 pub mod catalog;

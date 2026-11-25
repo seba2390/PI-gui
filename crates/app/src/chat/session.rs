@@ -19,6 +19,7 @@ use pi_rpc::protocol::{
     SessionState, SessionStats, SlashCommand, StreamingBehavior, ThinkingLevel,
 };
 use pi_rpc::{ClientEvent, PiClient, PiProcess, RpcError, SpawnOptions};
+use pi_sessions::prompt;
 use transcript::{BashStatus, NoticeKind, RunStatus, Transcript};
 
 use super::queued::QueuedPrompts;
@@ -740,12 +741,9 @@ impl PiSession {
                 .items()
                 .iter()
                 .find_map(|item| match &item.kind {
-                    transcript::ItemKind::User(user) => user
-                        .text
-                        .lines()
-                        .map(str::trim)
-                        .find(|line| !line.is_empty())
-                        .map(|line| line.chars().take(80).collect()),
+                    transcript::ItemKind::User(user) => {
+                        user.title().map(|line| line.chars().take(80).collect())
+                    }
                     _ => None,
                 })
         })
@@ -843,7 +841,7 @@ impl PiSession {
         if self.naming == Naming::NotYet {
             self.naming = Naming::Considered;
             if sent.first {
-                self.start_naming(&sent.prompt.text, cx);
+                self.start_naming(&about(&sent.prompt.text), cx);
             }
         }
     }
@@ -1574,7 +1572,10 @@ impl PiSession {
                             replace: true,
                         });
                     }
-                    Some((text, images, AfterFork::Resend)) => this.submit(text, images, false, cx),
+                    Some((text, images, AfterFork::Resend)) => {
+                        // pi adds its notes on the pictures again.
+                        this.submit(prompt::split(&text).as_typed(), images, false, cx);
+                    }
                     Some((_, _, AfterFork::Keep)) | None => {}
                 }
                 cx.notify();
@@ -1902,11 +1903,23 @@ impl PiSession {
     }
 }
 
+/// What a namer reads of the prompt `text`: the message, and the names of the files.
+fn about(text: &str) -> String {
+    let prompt = prompt::split(text);
+    if prompt.files.is_empty() {
+        return prompt.text.to_owned();
+    }
+    let names: Vec<_> = prompt.files.iter().map(|(f, _)| f.name.as_str()).collect();
+    format!("{}\n\n(Attached: {})", prompt.text, names.join(", "))
+        .trim()
+        .to_owned()
+}
+
 /// Gives messages back to the composer, if there are any.
 fn restore(texts: &[String], images: Vec<ImageContent>, cx: &mut Context<PiSession>) {
     if !texts.is_empty() || !images.is_empty() {
         cx.emit(SessionEvent::RestoreToEditor {
-            text: texts.join("\n\n"),
+            text: prompt::merge(texts),
             images,
             replace: false,
         });
@@ -2614,6 +2627,18 @@ mod tests {
 
     use super::{Lifecycle, PiSession, SessionEvent};
     use crate::config::AppConfig;
+
+    #[test]
+    fn a_conversation_is_named_after_its_message_and_files() {
+        use pi_sessions::prompt::block;
+        assert_eq!(super::about("Hi there"), "Hi there");
+        let file = block("paper.pdf", None, "## Page 1");
+        assert_eq!(
+            super::about(&format!("{file}\n\nExplain this")),
+            "Explain this\n\n(Attached: paper.pdf)"
+        );
+        assert_eq!(super::about(&file), "(Attached: paper.pdf)");
+    }
 
     /// The "Add model" flow against real pi (`pi` on PATH): pi starts without the model, the
     /// model is added to models.json the way the dialog does it, pi is restarted (as the

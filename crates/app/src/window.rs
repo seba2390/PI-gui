@@ -574,6 +574,11 @@ impl MainWindow {
                     let composer = self.chat.read(cx).composer().clone();
                     composer.update(cx, |composer, cx| composer.send_text(&text, window, cx));
                 }
+                other if other.starts_with("attach:") => {
+                    let path = other["attach:".len()..].into();
+                    let composer = self.chat.read(cx).composer().clone();
+                    composer.update(cx, |composer, cx| composer.attach_paths(vec![path], cx));
+                }
                 other if other.starts_with("find:") => {
                     let chat = self.chat.clone();
                     let text = other["find:".len()..].to_owned();

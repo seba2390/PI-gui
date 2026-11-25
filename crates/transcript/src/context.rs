@@ -110,10 +110,10 @@ mod tests {
     }
 
     fn user(text: &str, images: usize) -> TranscriptItem {
-        item(ItemKind::User(UserItem {
-            text: text.to_owned(),
-            images: vec![crate::model::Image::new("", "image/png"); images],
-        }))
+        item(ItemKind::User(UserItem::new(
+            text.to_owned(),
+            vec![crate::model::Image::new("", "image/png"); images],
+        )))
     }
 
     #[test]

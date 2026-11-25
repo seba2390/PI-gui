@@ -16,12 +16,12 @@ use transcript::tool::{self, DiffKind, PathContext, ToolKind};
 use transcript::{
     AssistantItem, BashItem, BashStatus, BlockKind, CheckItem, ItemId, ItemKind, NestedEntry,
     NoticeKind, RunStatus, Standing, StepItem, TextBlock, ThinkingBlock, ToolBlock, ToolStatus,
-    TranscriptItem, format_duration,
+    TranscriptItem, UserItem, format_duration,
 };
 
-use super::images;
 use super::session::{AfterFork, PiSession};
 use super::{BlockKey, CONTENT_MAX_WIDTH, ChatView, markdown_view};
+use super::{files, images};
 use crate::code_highlight::{self, LineStyles, Side};
 use crate::config::AppConfig;
 use crate::theme::{Palette, palette};
@@ -185,35 +185,52 @@ fn render_item(item: &TranscriptItem, cx: &RowContext<'_>, bubble: Hsla, app: &A
             .items_end()
             .gap_1()
             .group("user-message")
-            // Attached pictures, above the bubble; they open in the viewer.
-            .children(images::thumbnails(
-                ("prompt-images", item.id.0),
-                &user.images,
-                images::PROMPT_THUMBNAILS,
-                size(px(72.), px(54.)),
-                app,
-            ))
-            .child(
-                v_flex()
-                    .min_w_0()
-                    .max_w(relative(0.85))
-                    .px_4()
-                    .py_2p5()
-                    .rounded_xl()
-                    .bg(bubble)
-                    .text_color(cx.foreground)
-                    .gap_1()
-                    .child(
-                        match cx.chat.markdown(BlockKey {
-                            item: item.id,
-                            block: 0,
-                        }) {
-                            Some(state) => markdown_view(state).into_any_element(),
-                            None => div().child(user.text.clone()).into_any_element(),
-                        },
-                    ),
+            // Attached files and pictures, above the bubble; pictures open in the viewer.
+            .when(!user.files.is_empty() || !user.images.is_empty(), |this| {
+                this.child(
+                    h_flex()
+                        .max_w(relative(0.85))
+                        .flex_wrap()
+                        .justify_end()
+                        .items_end()
+                        .gap_1()
+                        .children(files::pages(item.id.0, &user.files, app))
+                        .children(images::thumbnails(
+                            ("prompt-images", item.id.0),
+                            &user.images,
+                            images::PROMPT_THUMBNAILS,
+                            size(px(72.), px(54.)),
+                            app,
+                        )),
+                )
+            })
+            // Only files or pictures: there is nothing to say below them.
+            .when(
+                !user.typed().is_empty() || (user.files.is_empty() && user.images.is_empty()),
+                |this| {
+                    this.child(
+                        v_flex()
+                            .min_w_0()
+                            .max_w(relative(0.85))
+                            .px_4()
+                            .py_2p5()
+                            .rounded_xl()
+                            .bg(bubble)
+                            .text_color(cx.foreground)
+                            .gap_1()
+                            .child(
+                                match cx.chat.markdown(BlockKey {
+                                    item: item.id,
+                                    block: 0,
+                                }) {
+                                    Some(state) => markdown_view(state).into_any_element(),
+                                    None => div().child(user.typed().to_owned()).into_any_element(),
+                                },
+                            ),
+                    )
+                },
             )
-            .child(user_actions(item.id.0, &user.text, cx, app))
+            .child(user_actions(item.id.0, user, cx, app))
             .into_any_element(),
         ItemKind::Assistant(assistant) => render_assistant(item, assistant, cx),
         ItemKind::Step(step) => render_step(item.id, step, cx),
@@ -351,14 +368,17 @@ fn render_bash_running(since: Instant, cx: &RowContext<'_>) -> impl IntoElement 
 
 /// Hover actions under a prompt: copy it, or edit it (the conversation continues in a new
 /// branch from just before it).
-fn user_actions(id: u64, text: &str, cx: &RowContext<'_>, app: &App) -> impl IntoElement {
+fn user_actions(id: u64, user: &UserItem, cx: &RowContext<'_>, app: &App) -> impl IntoElement {
     let from_end = users_after(cx.items, cx.row);
-    let edit_text = text.to_owned();
+    let edit_text = user.text.clone();
+    let typed = user.typed().to_owned();
     h_flex()
         .gap_0p5()
         .invisible()
         .group_hover("user-message", |style| style.visible())
-        .child(CopyButton::new(("copy-prompt", id), text.to_owned()).tooltip("Copy"))
+        .when(!typed.is_empty(), |this| {
+            this.child(CopyButton::new(("copy-prompt", id), typed).tooltip("Copy"))
+        })
         .when(cx.idle, |this| {
             this.child(action_button(
                 ("edit-prompt", id),
@@ -1542,10 +1562,7 @@ mod tests {
     fn prompt(id: u64) -> TranscriptItem {
         item(
             id,
-            ItemKind::User(UserItem {
-                text: "hi".to_owned(),
-                images: Vec::new(),
-            }),
+            ItemKind::User(UserItem::new("hi".to_owned(), Vec::new())),
         )
     }
 

@@ -7,6 +7,7 @@ pub mod dialogs;
 mod document;
 mod file_links;
 mod file_picker;
+mod files;
 mod find;
 mod images;
 mod math;
@@ -467,9 +468,9 @@ impl ChatView {
                     block: 0,
                 };
                 if self.markdown.get(&key).map(|markdown| markdown.source_len)
-                    != Some(user.text.len())
+                    != Some(user.typed().len())
                 {
-                    user_texts.push((key, user.text.clone()));
+                    user_texts.push((key, user.typed().to_owned()));
                 }
             }
             if let ItemKind::Assistant(assistant) = &item.kind {

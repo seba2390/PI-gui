@@ -9,9 +9,14 @@ All notable changes to PI-gui are listed here. The format follows
 ### Changed
 
 - The buttons that download models and document parsers have the download symbol.
+- PDF and other files attached to a chat show as small pages above the message, like pictures,
+  instead of their text in the message. Clicking a document opens it. Conversations are named after
+  the message, not the text of the file.
 
 ### Fixed
 
+- The model is no longer told how an attached file was read, which it could take for a tool it does
+  not have. pi's notes about pictures it made smaller no longer show in messages.
 - The update prompt's progress bar fills as the new version downloads, also when Homebrew downloads
   it. Before, a Homebrew update showed a full, pulsing bar the whole time.
 

@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use deepsearch::effort::Effort;
+use documents::attached;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{
     Escape, IndentInline, InputEvent, MoveDown, MoveUp, Textarea, TextareaState,
@@ -30,6 +31,7 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use pi_rpc::protocol::ImageContent;
+use pi_sessions::prompt;
 
 use super::commands::{self, CommandOutcome, Suggestion, SuggestionList};
 use super::document::{AttachedDocument, Reading};
@@ -82,15 +84,19 @@ struct Attachment {
     /// Images are sent as image content; other files as `@path` references,
     /// which is how pi's terminal refers to files.
     image: Option<ImageContent>,
-    /// In chat mode the model has no `read` tool, so text files and documents are pasted into
-    /// the prompt.
+    /// In chat mode the model has no `read` tool, so the text of files and documents goes along
+    /// with the prompt.
     inline: Option<InlineText>,
+    /// What the app knows a file whose text goes along by ([`documents::attached`]).
+    id: Option<String>,
 }
 
 /// An attachment's contents for chat mode, or why it could not be included.
 enum InlineText {
     Text(String),
     Document(AttachedDocument),
+    /// The block of a message that came back, as it was sent.
+    Sent(String),
     Skipped(String),
 }
 
@@ -146,7 +152,7 @@ impl Draft {
     }
 }
 
-/// Text attachments larger than this are not pasted into a chat prompt, and documents only in
+/// Text attachments larger than this do not go along with a chat prompt, and documents only in
 /// part.
 pub(super) const MAX_INLINE_BYTES: usize = 256 * 1024;
 
@@ -537,7 +543,19 @@ impl Composer {
     /// scripted end-to-end checks).
     pub fn send_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.set_text(text, window, cx);
-        self.submit(false, window, cx);
+        if self.loading.is_empty() {
+            self.submit(false, window, cx);
+            return;
+        }
+        // Once what is attached is read.
+        cx.spawn_in(window, async move |this, cx| {
+            let wait = Duration::from_millis(100);
+            while let Ok(true) = this.read_with(cx, |this, _| !this.loading.is_empty()) {
+                cx.background_executor().timer(wait).await;
+            }
+            let _ = this.update_in(cx, |this, window, cx| this.submit(false, window, cx));
+        })
+        .detach();
     }
 
     pub fn set_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -548,7 +566,7 @@ impl Composer {
     }
 
     /// Puts messages given back by the session into the composer: before the current draft
-    /// (or instead of it with `replace`), with their images as attachments.
+    /// (or instead of it with `replace`), with their files and images as attachments.
     pub fn restore(
         &mut self,
         text: &str,
@@ -558,11 +576,21 @@ impl Composer {
         cx: &mut Context<Self>,
     ) {
         let draft = self.input.read(cx).value().to_string();
-        let merged = merge_restored(text, &draft, replace);
+        let prompt = prompt::split(text);
+        let merged = merge_restored(prompt.text, &draft, replace);
         self.input
             .update(cx, |input, cx| input.set_value(merged, window, cx));
         if replace {
             self.attachments.clear();
+        }
+        for (file, block) in prompt.files {
+            self.attachments.push(Attachment {
+                path: PathBuf::new(),
+                name: file.name.into(),
+                image: None,
+                inline: Some(InlineText::Sent(block.to_owned())),
+                id: file.id,
+            });
         }
         for (index, image) in images.into_iter().enumerate() {
             self.attachments.push(Attachment {
@@ -570,6 +598,7 @@ impl Composer {
                 name: format!("Image {}", index + 1).into(),
                 image: Some(image),
                 inline: None,
+                id: None,
             });
         }
         let focus = self.focus_handle(cx);
@@ -644,7 +673,8 @@ impl Composer {
         let mut left_behind = Vec::new();
         for attachment in draft.attachments {
             let on_host = draft.host.is_some() && attachment.inline.is_none();
-            if attachment.image.is_some() {
+            let sent = matches!(attachment.inline, Some(InlineText::Sent(_)));
+            if attachment.image.is_some() || sent {
                 self.attachments.push(attachment);
             } else if on_host && moved {
                 left_behind.push(attachment.name);
@@ -719,17 +749,20 @@ impl Composer {
         }
 
         let cwd = self.session.read(cx).cwd().to_owned();
+        let mut blocks = Vec::new();
         let mut references = Vec::new();
         let mut images = Vec::new();
         for attachment in self.attachments.drain(..) {
+            let block = |contents: &str| {
+                prompt::block(&attachment.name, attachment.id.as_deref(), contents)
+            };
             match (attachment.image, attachment.inline) {
                 (Some(image), _) => images.push(image),
-                (None, Some(InlineText::Text(text))) => {
-                    references.push(inline_file_block(&attachment.name, &text));
-                }
+                (None, Some(InlineText::Text(contents))) => blocks.push(block(&contents)),
                 (None, Some(InlineText::Document(document))) => {
-                    references.push(document.block(&attachment.name, &text));
+                    blocks.push(block(&document.contents(&text)));
                 }
+                (None, Some(InlineText::Sent(sent))) => blocks.push(sent),
                 (None, Some(InlineText::Skipped(reason))) => {
                     references.push(format!(
                         "(Attachment `{}` was not included: {reason}.)",
@@ -748,7 +781,7 @@ impl Composer {
         let message = if references.is_empty() {
             text
         } else {
-            // Pasted files (chat mode) each get their own paragraph; `@path`s share a line.
+            // What is said of files (chat mode) gets paragraphs; `@path`s share a line.
             let separator = if self.session.read(cx).is_local_code() {
                 " "
             } else {
@@ -758,6 +791,8 @@ impl Composer {
                 .trim()
                 .to_owned()
         };
+
+        let message = prompt::join(blocks.iter().map(String::as_str), &message);
 
         self.session.update(cx, |session, cx| {
             session.submit(message, images, follow_up, cx);
@@ -864,6 +899,7 @@ impl Composer {
                     name: name.into(),
                     image: None,
                     inline: None,
+                    id: None,
                 });
             }
             Pick::File(path) => self.attach_paths(vec![path], cx),
@@ -917,6 +953,7 @@ impl Composer {
                             mime,
                         )),
                         inline: None,
+                        id: None,
                     });
                     consumed = true;
                 }
@@ -934,8 +971,8 @@ impl Composer {
         consumed
     }
 
-    fn attach_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
-        // Without local file access (chat, or pi on another machine) text files are pasted in.
+    pub fn attach_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        // Without local file access (chat, or pi on another machine) the text of files goes along.
         let inline = !self.session.read(cx).is_local_code();
         let (documents, paths): (Vec<_>, Vec<_>) = paths
             .into_iter()
@@ -947,13 +984,14 @@ impl Composer {
             return;
         }
         let id = self.start_loading(paths.clone(), None);
+        let dir = cx.global::<AppConfig>().documents_dir.clone();
         cx.spawn(async move |this, cx| {
             let attachments = cx
                 .background_executor()
                 .spawn(async move {
                     paths
                         .into_iter()
-                        .map(|path| load_attachment(path, inline))
+                        .map(|path| load_attachment(path, inline, &dir))
                         .collect::<Vec<_>>()
                 })
                 .await;
@@ -1001,13 +1039,20 @@ impl Composer {
                 let path = path.clone();
                 move || {
                     let read = AttachedDocument::read(exe.as_ref(), &dir, &path, &stopped);
-                    let _ = tx.send_blocking(read);
+                    let id = read
+                        .is_ok()
+                        .then(|| attached::remember(&dir, &path))
+                        .flatten();
+                    let _ = tx.send_blocking((read, id));
                 }
             });
         cx.spawn(async move |this, cx| {
-            let read = match spawned {
-                Ok(_) => rx.recv().await.unwrap_or_else(|e| Err(e.to_string())),
-                Err(error) => Err(error.to_string()),
+            let (read, file_id) = match spawned {
+                Ok(_) => rx
+                    .recv()
+                    .await
+                    .unwrap_or_else(|e| (Err(e.to_string()), None)),
+                Err(error) => (Err(error.to_string()), None),
             };
             let attachment = Attachment {
                 path,
@@ -1017,6 +1062,7 @@ impl Composer {
                     Ok(document) => InlineText::Document(document),
                     Err(reason) => InlineText::Skipped(reason),
                 }),
+                id: file_id,
             };
             let _ = this.update(cx, |this, cx| this.loaded(id, vec![attachment], cx));
         })
@@ -1861,7 +1907,7 @@ impl Composer {
         let session = self.session.read(cx);
         mention::history_entries(session.transcript().items().iter().filter_map(|item| {
             match &item.kind {
-                transcript::ItemKind::User(user) => Some(user.text.as_str()),
+                transcript::ItemKind::User(user) => Some(user.typed()),
                 _ => None,
             }
         }))
@@ -2032,11 +2078,7 @@ impl Composer {
             .into_iter()
             .enumerate()
             .map(|(index, (text, images))| {
-                let text = match (text.is_empty(), images) {
-                    (_, 0) => text,
-                    (true, n) => format!("[{n} image(s)]"),
-                    (false, n) => format!("{text} [+{n} image(s)]"),
-                };
+                let text = waiting_line(&text, images);
                 h_flex()
                     .gap_2()
                     .text_xs()
@@ -2075,7 +2117,7 @@ impl Composer {
                     .gap_2()
                     .text_xs()
                     .child(div().text_color(muted).child(format!("↳ {kind}:")))
-                    .child(div().truncate().child(text))
+                    .child(div().truncate().child(waiting_line(&text, 0)))
             });
         let widget_lines = widgets
             .values()
@@ -2247,6 +2289,22 @@ fn append_dictation(draft: &str, spoken: &str) -> String {
 }
 
 /// The composer text after restoring `restored` into a composer holding `draft`.
+/// A message that waits to be sent, in one line.
+fn waiting_line(text: &str, images: usize) -> String {
+    let prompt = prompt::split(text);
+    let files = prompt.files.len();
+    let with: Vec<_> = [(files, "file(s)"), (images, "image(s)")]
+        .into_iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, what)| format!("{n} {what}"))
+        .collect();
+    match (prompt.text, with.join(", ")) {
+        (text, with) if with.is_empty() => text.to_owned(),
+        ("", with) => format!("[{with}]"),
+        (text, with) => format!("{text} [+{with}]"),
+    }
+}
+
 fn merge_restored(restored: &str, draft: &str, replace: bool) -> String {
     let (restored, draft) = (restored.trim_end(), draft.trim());
     if replace || draft.is_empty() {
@@ -2295,7 +2353,7 @@ fn attachment_name(path: &std::path::Path) -> SharedString {
         .into()
 }
 
-fn load_attachment(path: PathBuf, inline: bool) -> Attachment {
+fn load_attachment(path: PathBuf, inline: bool, dir: &std::path::Path) -> Attachment {
     let name = attachment_name(&path);
     let mime = match path
         .extension()
@@ -2317,11 +2375,16 @@ fn load_attachment(path: PathBuf, inline: bool) -> Attachment {
         ))
     });
     let inline = (inline && image.is_none()).then(|| read_inline_text(&path));
+    let id = match &inline {
+        Some(InlineText::Text(_)) => attached::remember(dir, &path),
+        _ => None,
+    };
     Attachment {
         path,
         name,
         image,
         inline,
+        id,
     }
 }
 
@@ -2337,24 +2400,6 @@ fn read_inline_text(path: &std::path::Path) -> InlineText {
         },
         Err(_) => InlineText::skipped("could not be read"),
     }
-}
-
-/// A file pasted into a chat prompt: its name, then its contents.
-fn inline_file_block(name: &str, contents: &str) -> String {
-    fenced(&format!("`{name}`:"), contents)
-}
-
-/// `contents` below `heading`, in a fenced block whose fence is longer than any backtick run
-/// inside, so the contents can't close it early.
-pub(super) fn fenced(heading: &str, contents: &str) -> String {
-    let longest = contents
-        .split(|c| c != '`')
-        .map(str::len)
-        .max()
-        .unwrap_or(0);
-    let fence = "`".repeat(longest.max(2) + 1);
-    let body = contents.strip_suffix('\n').unwrap_or(contents);
-    format!("{heading}\n{fence}\n{body}\n{fence}")
 }
 
 /// Builds the folder menu: recent working folders (instant, no disk access) and a fallback to
@@ -2609,8 +2654,6 @@ fn folder_menu(
 
 #[cfg(test)]
 mod inline_tests {
-    use super::inline_file_block;
-
     #[test]
     fn every_effort_has_its_place_on_the_slider() {
         use super::{Effort, effort_at, effort_value};
@@ -2655,15 +2698,6 @@ mod inline_tests {
         assert_eq!(append_dictation("Fix", "the tests"), "Fix the tests");
         assert_eq!(append_dictation("Fix\n", "the tests"), "Fix\nthe tests");
         assert_eq!(append_dictation("Keep", "  "), "Keep");
-    }
-
-    #[test]
-    fn inlined_files_use_a_fence_longer_than_their_backticks() {
-        assert_eq!(inline_file_block("a.txt", "hi\n"), "`a.txt`:\n```\nhi\n```");
-        assert_eq!(
-            inline_file_block("b.md", "```rust\nx\n```"),
-            "`b.md`:\n````\n```rust\nx\n```\n````"
-        );
     }
 }
 
@@ -3008,7 +3042,9 @@ mod draft_tests {
     use pi_rpc::protocol::ImageContent;
     use pi_sessions::Mode;
 
-    use super::{Attachment, Composer, Dictation, Draft, InlineText, PiSession};
+    use super::{
+        Attachment, Composer, Dictation, Draft, InlineText, PiSession, prompt, waiting_line,
+    };
     use crate::config::AppConfig;
     use crate::hosts::{Hosts, HostsHandle};
 
@@ -3053,6 +3089,7 @@ mod draft_tests {
             name: path.to_string_lossy().into_owned().into(),
             image: None,
             inline: inline.map(|text| InlineText::Text(text.to_owned())),
+            id: None,
         }
     }
 
@@ -3101,6 +3138,7 @@ mod draft_tests {
                 name: "pasted.png".into(),
                 image: Some(ImageContent::new("AAAA", "image/png")),
                 inline: None,
+                id: None,
             });
             // Still being read when the draft is taken.
             from.attach_paths(vec![path.clone()], cx);
@@ -3246,12 +3284,65 @@ mod draft_tests {
                 panic!("not read");
             };
             assert_eq!(document.note(), Some("Docling failed."));
-            let block = document.block("report.pdf", "What is this?");
-            assert!(
-                block.ends_with("Docling failed.\n```\n# Hi\n```"),
-                "{block}"
-            );
+            assert_eq!(document.contents("What is this?"), "# Hi");
         });
+    }
+
+    /// The text of attached files goes along with a message, and comes back as files with it.
+    #[gpui_kit::test]
+    fn attached_files_come_and_go_with_their_message(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.txt");
+        std::fs::write(&path, "two\nlines").unwrap();
+        let session = PiSession::idle(std::env::temp_dir(), Mode::Chat);
+        let ([composer], cx) = composers([session], cx);
+        cx.update(|_, cx| {
+            cx.global_mut::<AppConfig>().documents_dir = dir.path().join("documents");
+        });
+        act(&composer, cx, |composer, _, cx| {
+            composer.attach_paths(vec![path.clone()], cx);
+        });
+        settle(&composer, cx);
+        let send = |cx: &mut VisualTestContext| {
+            act(&composer, cx, |composer, window, cx| {
+                composer.submit(false, window, cx);
+                let session = composer.session.read(cx);
+                let (text, _, _) = session.pending_prompts().last().unwrap();
+                text.to_owned()
+            })
+        };
+        act(&composer, cx, |composer, window, cx| {
+            composer.set_text("What is this?", window, cx);
+        });
+        let sent = send(cx);
+        assert_eq!(names(&composer, cx), [""; 0]);
+        let prompt = prompt::split(&sent);
+        assert_eq!(prompt.text, "What is this?");
+        let (file, block) = &prompt.files[0];
+        assert_eq!(file.name, "notes.txt");
+        assert!(block.contains("\ntwo\nlines\n"), "{block}");
+        assert!(!sent.contains("reader") && !sent.contains(&*path.to_string_lossy()));
+        let id = file.id.as_deref().unwrap();
+        let documents = dir.path().join("documents");
+        assert_eq!(documents::attached::original(&documents, id), Some(path));
+        assert_eq!(waiting_line(&sent, 0), "What is this? [+1 file(s)]");
+        assert_eq!(waiting_line(block, 2), "[1 file(s), 2 image(s)]");
+        assert_eq!(waiting_line("hi", 0), "hi");
+
+        // Given back, with what pi adds about a picture, and sent again.
+        act(&composer, cx, |composer, window, cx| {
+            let noted = format!("{sent}\n\n[Image: original 9x9, displayed at 3x3. Multiply…]");
+            composer.restore(&noted, Vec::new(), true, window, cx);
+        });
+        assert_eq!(cx.read(|cx| composer.read(cx).text(cx)), "What is this?");
+        assert_eq!(names(&composer, cx), ["notes.txt"]);
+        let draft = act(&composer, cx, |composer, window, cx| {
+            composer.take_draft(window, cx)
+        });
+        act(&composer, cx, |composer, window, cx| {
+            composer.set_draft(draft, window, cx);
+        });
+        assert_eq!(send(cx), sent);
     }
 
     /// Removing a document, or leaving the chat, stops reading it.
