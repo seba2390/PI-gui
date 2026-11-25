@@ -102,6 +102,10 @@ pub fn open_main_window(cx: &mut App) {
     };
     let opened = open_window(options, cx, |window, cx| {
         crate::theme::sync_with_window(window, cx);
+        // Shown by X11 window managers and in task lists; macOS shows the app's name itself.
+        if cfg!(target_os = "linux") {
+            window.set_window_title("Pistachio");
+        }
         keep_alive_on_close(window, cx);
         crate::perf::frame("startup: first frame", window);
         window.on_next_frame(|_, cx| {

@@ -27,6 +27,7 @@ use crate::error::meaningful_lines;
 use crate::host::Target;
 use crate::local_network;
 use crate::process::{self, Output};
+use crate::tunnel::Tunnel;
 use crate::{RemoteError, classify};
 
 /// Unix socket paths are limited to 104 bytes (including the NUL) on macOS. ssh binds
@@ -47,18 +48,24 @@ const KEYSCAN_TIMEOUT: Duration = Duration::from_secs(20);
 /// program expands too, and an absolute program's own folder is put in front of `PATH` so a
 /// node script installed next to its `node` (nvm, Homebrew) finds it.
 ///
-/// With [`RELAY_PORT_ENV`] set, the program only starts when that loopback port answers: the
-/// forward to this computer's model relay is gone when the shared connection was made again
-/// just before (pi's own `ssh` then became the new master, without the forward). curl or bash
-/// check it; a host with neither starts the program anyway.
+/// With [`RELAY_PORT_ENV`] set, the program only starts when this computer's model relay proves
+/// that it answers on the forwarded port: the forward is gone when the shared connection was made
+/// again just before (pi's own `ssh` then became the new master, without the forward), and on a
+/// shared host someone else may listen on its port by then. It is asked the challenge in the
+/// managed folder's `relay-proof` ([`crate::link`]), whose answer only the relay knows. curl or bash ask, without
+/// the challenge among their arguments, where others could see it; a host with neither starts the
+/// program anyway.
 pub(crate) const LAUNCH_SCRIPT: &str = concat!(
     r#"d=$1; shift; while :; do case $1 in PISTACHIO_ENV:*=*) export "${1#PISTACHIO_ENV:}"; shift ;; *) break ;; esac; done; "#,
-    r#"case ${PISTACHIO_RELAY_PORT-} in "") ;; *) r=0; if command -v curl >/dev/null 2>&1; then curl -s -o /dev/null --noproxy '*' -m 5 "http://127.0.0.1:$PISTACHIO_RELAY_PORT/"; [ $? -eq 7 ] && r=1; elif command -v bash >/dev/null 2>&1; then bash -c ': </dev/tcp/127.0.0.1/$0' "$PISTACHIO_RELAY_PORT" 2>/dev/null || r=1; fi; [ $r = 0 ] || { echo "This computer's models can't be reached from the host: the connection was made again. Reconnect to use them." >&2; exit 1; } ;; esac; "#,
+    r#"case ${PISTACHIO_RELAY_PORT-} in "") ;; *) q=; c=; w=; g=; read -r q c w 2>/dev/null <"${PI_CODING_AGENT_DIR-}/relay-proof"; "#,
+    r#"if command -v curl >/dev/null 2>&1; then g=$(printf 'url = "http://127.0.0.1:%s/_pistachio/prove/%s"' "$q" "$c" | curl -q -s --noproxy '*' -m 5 -K - 2>/dev/null); "#,
+    r#"elif command -v bash >/dev/null 2>&1; then g=$(printf '%s %s' "$q" "$c" | bash -c 'read -r q c; exec 3<>"/dev/tcp/127.0.0.1/$q" || exit; printf "GET /_pistachio/prove/%s HTTP/1.0\r\n\r\n" "$c" >&3; l=; while IFS= read -r -t 5 l <&3; do :; done; printf %s "$l"' 2>/dev/null); "#,
+    r#"else g=$w; fi; [ -n "$w" ] && [ "$g" = "$w" ] || { echo "This computer's models can't be reached from the host: the connection was made again. Reconnect to use them." >&2; exit 1; } ;; esac; "#,
     r#"case $d in "") ;; "~") cd || exit 1 ;; "~/"*) cd -- "$HOME/${d#??}" || exit 1 ;; *) cd -- "$d" || exit 1 ;; esac; case $1 in "~/"*) p=$HOME/${1#??}; shift; set -- "$p" "$@" ;; esac; case $1 in /*) PATH=${1%/*}:$PATH; export PATH ;; esac; exec "$@""#
 );
 
-/// Set for a program on the host to check that the model relay's forwarded port answers
-/// first (see [`LAUNCH_SCRIPT`]).
+/// Set for a program on the host to check first that the model relay answers on its forwarded
+/// port (see [`LAUNCH_SCRIPT`]).
 pub const RELAY_PORT_ENV: &str = "PISTACHIO_RELAY_PORT";
 
 /// Where pistachio installs its own copy of pi on a host (relative to `$HOME`).
@@ -134,13 +141,16 @@ mkdir -p -- "$d" || exit 1
 cd -- "$d" && pwd -P"#;
 
 /// A connection to one remote host. Cheap to clone; holds no live resources itself (the shared
-/// master connection lives in a background `ssh` process).
+/// master connection lives in a background `ssh` process), but for the tunnel there is instead
+/// where OpenSSH cannot share connections (Windows).
 #[derive(Debug, Clone)]
 pub struct Ssh {
     target: Target,
     control_dir: PathBuf,
     /// Shared by clones (see [`Ssh::close`]).
     switch: Arc<Switch>,
+    /// Whether commands share one connection (OpenSSH `ControlMaster`).
+    sharing: bool,
 }
 
 /// Whether the user turned a connection off.
@@ -150,6 +160,8 @@ struct Switch {
     /// Held while the master connection is started or stopped, so that turning a connection
     /// off ends one that was still being made, and turning it on again keeps it.
     changing: Mutex<()>,
+    /// The connection where none can be shared.
+    tunnel: Mutex<Option<Tunnel>>,
 }
 
 /// What [`Ssh::probe`] found on the host.
@@ -194,7 +206,24 @@ impl Ssh {
             target,
             control_dir: dir,
             switch: Arc::default(),
+            sharing: cfg!(unix),
         }
+    }
+
+    /// As on Windows, whose OpenSSH has no connection sharing (it needs Unix sockets): each
+    /// command opens its own connection, and a tunnel stands for the shared one.
+    #[must_use]
+    pub fn without_sharing(mut self) -> Self {
+        self.sharing = false;
+        self
+    }
+
+    pub(crate) fn shares(&self) -> bool {
+        self.sharing
+    }
+
+    pub(crate) fn tunnel_slot(&self) -> &Mutex<Option<Tunnel>> {
+        &self.switch.tunnel
     }
 
     pub fn target(&self) -> &Target {
@@ -233,9 +262,7 @@ impl Ssh {
         control_path.push(escape_percent(&self.control_dir));
         control_path.push("/%C");
         let mut args: Vec<OsString> = Vec::new();
-        // Windows' OpenSSH has no connection sharing (it needs Unix sockets), so each command
-        // there opens its own connection.
-        let sharing = if cfg!(unix) {
+        let sharing = if self.sharing {
             vec![
                 OsString::from("ControlMaster=auto"),
                 control_path,
@@ -317,17 +344,38 @@ impl Ssh {
             return Ok(());
         }
         self.ensure_control_dir()?;
-        let mut command = self.ssh_command();
-        command.arg("-T");
+        let options = if trust_recorded_key {
+            self.pinned_key_args()?
+        } else {
+            Vec::new()
+        };
+        self.start_shared(&options, &[], CONNECT_TIMEOUT)?;
         if trust_recorded_key {
-            command.args(self.pinned_key_args()?);
+            self.save_recorded_key()?;
         }
-        command.args(self.base_args()).args(["--", "true"]);
-        let output = process::run(command, None, CONNECT_TIMEOUT)?;
+        Ok(())
+    }
+
+    /// Starts the shared connection, or the tunnel there is instead. `options` go before the
+    /// usual ones.
+    pub(crate) fn start_shared(
+        &self,
+        options: &[OsString],
+        env: &[(OsString, OsString)],
+        timeout: Duration,
+    ) -> Result<(), RemoteError> {
+        if !self.sharing {
+            return self.open_tunnel(options, env, timeout);
+        }
+        let mut command = self.ssh_command();
+        command
+            .arg("-T")
+            .args(options)
+            .args(self.base_args())
+            .args(["--", "true"])
+            .envs(env.iter().map(|(key, value)| (key, value)));
+        let output = process::run(command, None, timeout)?;
         if output.status.success() {
-            if trust_recorded_key {
-                self.save_recorded_key()?;
-            }
             Ok(())
         } else {
             Err(ssh_failure(&output))
@@ -410,8 +458,12 @@ impl Ssh {
         Ok(())
     }
 
-    /// Whether a master connection is running (`ssh -O check`, local only).
+    /// Whether a master connection is running (`ssh -O check`, local only), or the tunnel there
+    /// is instead.
     pub fn is_connected(&self) -> bool {
+        if !self.sharing {
+            return self.tunnel_pid().is_some();
+        }
         let mut command = self.ssh_command();
         command.args(["-O", "check"]).args(self.base_args());
         process::run(command, None, CHECK_TIMEOUT).is_ok_and(|output| output.status.success())
@@ -420,6 +472,10 @@ impl Ssh {
     /// Stops the master connection (`ssh -O exit`), which also ends every session running
     /// over it. Errors are ignored.
     pub fn disconnect(&self) {
+        if !self.sharing {
+            self.close_tunnel();
+            return;
+        }
         let mut command = self.ssh_command();
         command.args(["-O", "exit"]).args(self.base_args());
         if let Err(error) = process::run(command, None, CHECK_TIMEOUT) {
@@ -1199,33 +1255,76 @@ mod tests {
         assert_eq!(stdout, "[it's $HOME `x`]\n[a=b]\n[PISTACHIO_ENV:X=y]\n");
     }
 
+    #[cfg(unix)]
     #[test]
-    fn command_waits_for_the_relay_port() {
+    fn command_checks_who_answers_on_the_relay_port() {
+        use crate::link::PROOF_FILE;
+
         let home = tempfile::tempdir().unwrap();
-        let argv = strings(&["/bin/echo", "started"]);
-        let env = |port: u16| [(RELAY_PORT_ENV.to_owned(), port.to_string())];
-
-        // The forward is there: the program starts.
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let open = listener.local_addr().unwrap().port();
-        thread::spawn(move || {
-            for stream in listener.incoming().flatten() {
-                drop(stream);
-            }
-        });
-        let (stdout, stderr, ok) = run_remote_with_env(home.path(), None, &env(open), &argv);
-        assert!(ok, "{stderr}");
-        assert_eq!(stdout, "started\n");
-
-        // Nothing listens there (the connection was made again without it): it does not.
+        let agent = home.path().join("agent dir");
+        fs::create_dir(&agent).unwrap();
+        // Answers every request with `answer`, or closes the connection.
+        let serve = |answer: &'static str| {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            thread::spawn(move || {
+                for mut stream in listener.incoming().flatten() {
+                    let mut request = String::new();
+                    let mut lines = io::BufReader::new(stream.try_clone().unwrap());
+                    while io::BufRead::read_line(&mut lines, &mut request).unwrap_or(0) > 2 {}
+                    if !answer.is_empty()
+                        && request.starts_with("GET /_pistachio/prove/c0ffee HTTP/1.")
+                    {
+                        let _ = io::Write::write_all(
+                            &mut stream,
+                            format!("HTTP/1.0 200 OK\r\nconnection: close\r\n\r\n{answer}")
+                                .as_bytes(),
+                        );
+                    }
+                }
+            });
+            port
+        };
         let closed = {
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             listener.local_addr().unwrap().port()
         };
-        let (stdout, stderr, ok) = run_remote_with_env(home.path(), None, &env(closed), &argv);
-        assert!(!ok);
-        assert_eq!(stdout, "");
-        assert!(stderr.contains("Reconnect"), "{stderr}");
+        let launch = |port: u16, path: Option<&Path>| {
+            fs::write(agent.join(PROOF_FILE), format!("{port} c0ffee a1b2c3\n")).unwrap();
+            let mut env = vec![
+                (RELAY_PORT_ENV.to_owned(), port.to_string()),
+                (
+                    "PI_CODING_AGENT_DIR".to_owned(),
+                    agent.to_str().unwrap().to_owned(),
+                ),
+            ];
+            if let Some(path) = path {
+                env.push(("PATH".to_owned(), path.to_str().unwrap().to_owned()));
+            }
+            run_remote_with_env(home.path(), None, &env, &strings(&["/bin/echo", "started"]))
+        };
+        // A host with bash and no curl.
+        let only_bash = home.path().join("only-bash");
+        fs::create_dir(&only_bash).unwrap();
+        std::os::unix::fs::symlink("/bin/bash", only_bash.join("bash")).unwrap();
+
+        let (relay, other, silent) = (serve("a1b2c3"), serve("a1b2c4"), serve(""));
+        for path in [None, Some(only_bash.as_path())] {
+            let (stdout, stderr, ok) = launch(relay, path);
+            assert!(ok, "{path:?}: {stderr}");
+            assert_eq!(stdout, "started\n");
+            // Someone else listens there, or nobody (the connection was made again without it).
+            for port in [other, silent, closed] {
+                let (stdout, stderr, ok) = launch(port, path);
+                assert!(!ok, "{path:?}");
+                assert_eq!(stdout, "");
+                assert!(stderr.contains("Reconnect"), "{stderr}");
+            }
+        }
+        // Nothing to check it with.
+        let env = [(RELAY_PORT_ENV.to_owned(), relay.to_string())];
+        let argv = strings(&["/bin/echo", "started"]);
+        assert!(!run_remote_with_env(home.path(), None, &env, &argv).2);
     }
 
     #[cfg(unix)] // Unix shells, file modes or connection sharing

@@ -2,39 +2,51 @@
 //! back over the SSH connection.
 //!
 //! - A hidden pi here (`pi --mode rpc --no-session …`) loads `relay.ts`, which listens on a Unix
-//!   socket in the private connection folder. It resolves credentials with pi's own code
-//!   (API keys, `$ENV` and `!command` keys, logins and their refresh, provider headers), so
-//!   they never leave this computer and behave exactly as in a local session.
-//! - Each host gets a reverse port forward to that socket on its shared SSH connection
-//!   ([`remote::Ssh::forward_to_socket`]), bound to the host's loopback.
+//!   socket in the private connection folder (on Windows: a loopback port). It resolves
+//!   credentials with pi's own code (API keys, `$ENV` and `!command` keys, logins and their
+//!   refresh, provider headers), so they never leave this computer and behave exactly as in a
+//!   local session.
+//! - Each host gets a reverse port forward to it on its connection
+//!   ([`remote::Ssh::forward_to`]), bound to the host's loopback.
 //! - pi on the host runs with `PI_CODING_AGENT_DIR` set to a folder Pistachio manages there
 //!   ([`remote::MANAGED_AGENT_DIR`]); its `models.json` lists this computer's models with every
-//!   `baseUrl` pointing at the forward and a placeholder key: a token only valid for that host
-//!   (an HMAC of the host with a key that lives as long as this app). The relay refuses
-//!   requests without a valid token and only forwards to the endpoints of this computer's
-//!   models.
-//!
-//! Logins whose requests need more than a key swap (ChatGPT/Codex, GitHub Copilot, Gemini
-//! CLI) and cloud credentials (Vertex, Bedrock) are not relayed yet; see #25.
+//!   `baseUrl` pointing at the forward and a placeholder key: a token only valid for this
+//!   connection to that host (an HMAC with a key that lives as long as this app). The relay
+//!   refuses requests without a valid token and only forwards to the endpoints of this
+//!   computer's models.
+//! - Requests that take a key are relayed as they are, with the real key. Those that need more
+//!   (ChatGPT/Codex, GitHub Copilot, Vertex, Bedrock) use pi's own protocol, `pi-messages`: the
+//!   host's pi sends the conversation, and the pi here sends that to the provider.
+//! - Before pi starts on the host, the relay proves that it is the one answering there: the
+//!   forward may be gone, and on a shared host someone else could listen on its port.
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use serde_json::{Map, Value, json};
 
+mod process;
+
 /// The relay extension pi loads.
 pub const EXTENSION_SOURCE: &str = include_str!("relay.ts");
-#[cfg(unix)]
 const SOCKET_ENV: &str = "PISTACHIO_RELAY_SOCKET";
-#[cfg(unix)]
+const PORT_FILE_ENV: &str = "PISTACHIO_RELAY_PORT_FILE";
 const KEY_ENV: &str = "PISTACHIO_RELAY_KEY";
+const CONTROL_KEY_ENV: &str = "PISTACHIO_RELAY_CONTROL_KEY";
+
+/// The API for requests the pi here sends itself.
+const MESSAGES_API: &str = "pi-messages";
+
+/// The first pi on a host that gets models over [`MESSAGES_API`].
+const MESSAGES_PI: [u32; 2] = [1, 5];
 
 /// APIs whose requests need more than a key (cloud signing or account credentials).
-const UNSUPPORTED_APIS: &[&str] = &[
+const MORE_THAN_A_KEY: &[&str] = &[
     "openai-codex-responses",
     "bedrock-converse-stream",
     "google-vertex",
-    "google-gemini-cli",
 ];
 
 /// Model fields copied to the host. Not `headers`: their values may be credentials (the relay
@@ -63,7 +75,12 @@ pub struct Launch {
     pub env: crate::config::ChildEnv,
     /// Where `relay.ts` and its log are written.
     pub dir: PathBuf,
+    /// Listen on a loopback port instead of a Unix socket.
+    pub tcp: bool,
 }
+
+/// Whether the relay listens on a port: where the connection can't forward to a socket.
+pub const TCP: bool = !cfg!(unix);
 
 /// Environment variables for pi on a host.
 pub type RemoteEnv = Vec<(String, String)>;
@@ -73,12 +90,46 @@ pub type RemoteEnv = Vec<(String, String)>;
 pub struct Link {
     /// The forwarded port on the host.
     pub port: u16,
-    /// The shared connection the forward lives on.
+    /// What it is forwarded to here.
+    pub relay: remote::Endpoint,
+    /// The connection the forward lives on.
     pub master_pid: Option<u32>,
     /// Environment for pi on the host.
     pub env: RemoteEnv,
     /// This computer's pi settings when the host's were written.
     pub stamp: Stamp,
+    /// The models the host was given.
+    pub models: Served,
+}
+
+/// The ids of the models a host was given, by provider.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Served(Arc<HashMap<String, HashSet<String>>>);
+
+impl Served {
+    fn new(remote_models: &Value) -> Self {
+        let providers = remote_models["providers"].as_object();
+        let ids = |config: &Value| {
+            let models = config["models"].as_array().into_iter().flatten();
+            models
+                .filter_map(|model| model["id"].as_str().map(str::to_owned))
+                .collect()
+        };
+        Self(Arc::new(
+            providers
+                .into_iter()
+                .flatten()
+                .map(|(provider, config)| (provider.clone(), ids(config)))
+                .collect(),
+        ))
+    }
+
+    /// Whether pi on the host can use a model it lists. It adds the models it knows itself to the
+    /// providers it was given, also those this computer does not have; other providers are the
+    /// host's own.
+    pub fn usable(&self, provider: &str, id: &str) -> bool {
+        self.0.get(provider).is_none_or(|ids| ids.contains(id))
+    }
 }
 
 /// When this computer's `models.json`, `auth.json` and `settings.json` last changed: a host's
@@ -108,40 +159,51 @@ pub fn link(
     launch: &Launch,
 ) -> Result<Link, String> {
     let stamp = local_stamp();
-    let models = imp::models(launch)?;
+    let (relay, models) = process::models(launch)?;
     let master_pid = ssh.master_pid();
     if master_pid.is_none() {
         return Err("the connection to the host is closed".to_owned());
     }
-    // Same connection (so its forward is there) and same settings here: nothing to write.
-    if let Some(link) = previous
-        && link.master_pid == master_pid
+    // Same connection (so its forward is there) to the same relay.
+    let previous_port = previous.map_or(0, |link| link.port);
+    let kept = previous.filter(|link| link.master_pid == master_pid && link.relay == relay);
+    if let Some(link) = kept
         && link.stamp == stamp
     {
         return Ok(link.clone());
     }
-    let port = match previous {
-        Some(link) if link.master_pid == master_pid => link.port,
-        _ => {
-            let socket = imp::socket_path();
-            let wanted = previous.map_or(0, |link| link.port);
-            ssh.forward_to_socket(wanted, &socket)
-                .or_else(|error| {
-                    if wanted == 0 {
-                        Err(error)
-                    } else {
-                        ssh.forward_to_socket(0, &socket)
-                    }
-                })
-                .map_err(|error| format!("the host does not allow port forwarding: {error}"))?
-        }
+    let port = match kept {
+        Some(link) => link.port,
+        None => ssh
+            .forward_to(previous_port, &relay)
+            .or_else(|error| {
+                if previous_port == 0 {
+                    Err(error)
+                } else {
+                    ssh.forward_to(0, &relay)
+                }
+            })
+            .map_err(|error| format!("the host does not allow port forwarding: {error}"))?,
     };
-    let remote_models = remote_models(&models, port, &token(host));
+    if kept.is_none() {
+        process::forwarded(ssh, &relay);
+    }
+    // A forward may take a connection of its own.
+    let master_pid = ssh.master_pid();
+    tokens::issue(host, master_pid);
+    // Before the host knows the token: what it has then works.
+    process::allow_tokens()?;
+    let remote_models = remote_models(
+        &models,
+        port,
+        &token(host),
+        speaks_messages(probe.pi_version.as_deref()),
+    );
     if remote_models["providers"]
         .as_object()
         .is_none_or(Map::is_empty)
     {
-        return Err("none of this computer's models can be used on a host yet".to_owned());
+        return Err("none of this computer's models can be used on the host".to_owned());
     }
     let host_settings = ssh
         .read_file(&format!("{}/settings.json", probe.agent_dir))
@@ -160,10 +222,11 @@ pub fn link(
     let models_text = serde_json::to_vec_pretty(&remote_models).map_err(|e| e.to_string())?;
     let settings_text = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
     let agent_dir = ssh
-        .write_managed_agent(&probe.agent_dir, &settings_text, models_text)
+        .write_managed_agent(&probe.agent_dir, &settings_text, models_text, &proof(port))
         .map_err(|error| error.to_string())?;
     Ok(Link {
         port,
+        relay,
         master_pid,
         env: vec![
             ("PI_CODING_AGENT_DIR".to_owned(), agent_dir),
@@ -175,35 +238,75 @@ pub fn link(
             (remote::RELAY_PORT_ENV.to_owned(), port.to_string()),
         ],
         stamp,
+        models: Served::new(&remote_models),
     })
 }
 
 /// Stops the relay (when the app quits).
 pub fn stop() {
-    imp::stop();
+    process::stop();
 }
 
-/// The placeholder key pi on `host` sends: only the relay of this app can check it, and it
-/// is worth nothing anywhere else.
+/// Ends the relay's pi as if it crashed.
+#[cfg(all(test, unix))]
+pub fn kill_for_tests() {
+    process::kill_for_tests();
+}
+
+/// The placeholder key pi on `host` sends: only the relay of this app can check it, it is worth
+/// nothing anywhere else, and the relay only accepts that of the host's current connection
+/// (empty before there is one).
 pub fn token(host: &remote::HostId) -> String {
-    use sha2::{Digest, Sha256};
-    let nonce = hex(&Sha256::digest(host.0.as_bytes())[..8]);
-    let mac = hmac_sha256(imp::key(), nonce.as_bytes());
+    let Some(nonce) = tokens::nonce(host) else {
+        return String::new();
+    };
+    let mac = hmac_sha256(process::key(), nonce.as_bytes());
     format!("pistachio-{nonce}-{}", hex(&mac))
 }
 
+/// What pi's launch on a host checks: the forwarded port, a challenge, and the answer only this
+/// app's relay can give to it.
+fn proof(port: u16) -> remote::RelayProof {
+    let challenge = hex(&random::<16>());
+    let answer = hex(&hmac_sha256(
+        process::key(),
+        format!("prove {challenge}").as_bytes(),
+    ));
+    remote::RelayProof {
+        port,
+        challenge,
+        answer,
+    }
+}
+
+/// Whether the pi with this `--version` on a host can be given models over [`MESSAGES_API`].
+fn speaks_messages(version: Option<&str>) -> bool {
+    let Some(version) = version.and_then(|text| text.split_whitespace().last()) else {
+        return false;
+    };
+    let mut parts = version
+        .trim_start_matches('v')
+        .split('.')
+        .map(|part| part.parse::<u32>().ok());
+    match (parts.next().flatten(), parts.next().flatten()) {
+        (Some(major), Some(minor)) => [major, minor] >= MESSAGES_PI,
+        _ => false,
+    }
+}
+
 /// The `models.json` for a host: this computer's models that the relay can serve, grouped by
-/// provider, each with its `baseUrl` on the forwarded `port` and `token` as its key.
-pub fn remote_models(models: &[Value], port: u16, token: &str) -> Value {
+/// provider, each with its `baseUrl` on the forwarded `port` and `token` as its key. `messages`:
+/// the host's pi speaks [`MESSAGES_API`].
+pub fn remote_models(models: &[Value], port: u16, token: &str, messages: bool) -> Value {
     let mut providers = Map::new();
     for model in models {
-        let Some((provider, base)) = relayed_base(model, port) else {
+        let Some(route) = route(model, port, messages) else {
             continue;
         };
-        let oauth = model["pistachioOAuth"].as_bool().unwrap_or(false);
+        let (provider, base) = (route.provider, route.base);
         let entry = providers.entry(provider.to_owned()).or_insert_with(|| {
             // pi recognises an Anthropic login by its key, and then sends what a login needs.
-            let key = if oauth {
+            let key = if route.oauth && !route.messages {
                 format!("sk-ant-oat01-{token}")
             } else {
                 token.to_owned()
@@ -217,6 +320,11 @@ pub fn remote_models(models: &[Value], port: u16, token: &str) -> Value {
             }
         }
         copy.insert("baseUrl".to_owned(), Value::String(base));
+        if route.messages {
+            copy.insert("api".to_owned(), MESSAGES_API.into());
+            // About the provider's own requests, which the pi here makes.
+            copy.remove("compat");
+        }
         if let Some(list) = entry["models"].as_array_mut() {
             list.push(Value::Object(copy));
         }
@@ -224,9 +332,19 @@ pub fn remote_models(models: &[Value], port: u16, token: &str) -> Value {
     json!({ "providers": providers })
 }
 
+/// How a host's pi reaches a model through the relay.
+struct Route<'a> {
+    provider: &'a str,
+    base: String,
+    oauth: bool,
+    /// Over [`MESSAGES_API`], not the provider's own.
+    messages: bool,
+}
+
 /// The relay URL for `model`'s endpoint and its provider, or `None` if the relay can't serve
-/// it. The path keeps the original host name, which pi also uses to recognise some providers.
-fn relayed_base(model: &Value, port: u16) -> Option<(&str, String)> {
+/// it. The path of a request that is relayed as it is keeps the original host name, which pi also
+/// uses to recognise some providers.
+fn route(model: &Value, port: u16, messages: bool) -> Option<Route<'_>> {
     let provider = model["provider"].as_str()?;
     let api = model["api"].as_str().unwrap_or_default();
     let oauth = model["pistachioOAuth"].as_bool().unwrap_or(false);
@@ -234,9 +352,18 @@ fn relayed_base(model: &Value, port: u16) -> Option<(&str, String)> {
         && provider
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
-    let login_ok = !oauth || (provider == "anthropic" && api == "anthropic-messages");
-    if !valid_id || UNSUPPORTED_APIS.contains(&api) || !login_ok {
+    if !valid_id {
         return None;
+    }
+    let login_ok = !oauth || (provider == "anthropic" && api == "anthropic-messages");
+    if MORE_THAN_A_KEY.contains(&api) || !login_ok {
+        let served = messages && model["pistachioMessages"].as_bool().unwrap_or(false);
+        return served.then(|| Route {
+            provider,
+            base: format!("http://127.0.0.1:{port}/m/{provider}"),
+            oauth,
+            messages: true,
+        });
     }
     let (scheme, rest) = model["baseUrl"].as_str()?.split_once("://")?;
     let scheme = scheme.to_ascii_lowercase();
@@ -250,10 +377,12 @@ fn relayed_base(model: &Value, port: u16) -> Option<(&str, String)> {
         return None;
     }
     let path = if path.is_empty() { "/" } else { path };
-    Some((
+    Some(Route {
         provider,
-        format!("http://127.0.0.1:{port}/p/{provider}/{scheme}/{authority}{path}"),
-    ))
+        base: format!("http://127.0.0.1:{port}/p/{provider}/{scheme}/{authority}{path}"),
+        oauth,
+        messages: false,
+    })
 }
 
 /// The host's `settings.json` for the managed folder: the host's own (read from its agent
@@ -399,198 +528,52 @@ fn install_extension(dir: &Path) -> std::io::Result<PathBuf> {
     Ok(path)
 }
 
-#[cfg(unix)]
-mod imp {
-    use std::io::{Read as _, Write as _};
-    use std::os::unix::net::UnixStream;
-    use std::path::PathBuf;
-    use std::process::{Child, ChildStdin, Command, Stdio};
-    use std::sync::{Mutex, OnceLock, PoisonError};
-    use std::time::{Duration, Instant};
-
-    use serde_json::Value;
-
-    use super::{KEY_ENV, Launch, SOCKET_ENV, hex, install_extension};
-
-    const START_TIMEOUT: Duration = Duration::from_secs(30);
-
-    struct Running {
-        child: Child,
-        /// pi exits when its input closes, so the relay ends with the app even if it crashes.
-        _stdin: Option<ChildStdin>,
-        socket: PathBuf,
-    }
-
-    static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
-    static KEY: OnceLock<[u8; 32]> = OnceLock::new();
-
-    pub fn key() -> &'static [u8; 32] {
-        KEY.get_or_init(|| {
-            let mut key = [0_u8; 32];
-            std::fs::File::open("/dev/urandom")
-                .and_then(|mut random| random.read_exact(&mut key))
-                .expect("/dev/urandom");
-            key
-        })
-    }
-
-    /// In the private folder of the shared SSH connections.
-    pub fn socket_path() -> PathBuf {
-        remote::Ssh::default_control_dir().join(format!("relay-{}.sock", std::process::id()))
-    }
-
-    pub fn models(launch: &Launch) -> Result<Vec<Value>, String> {
-        let mut running = RUNNING.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(relay) = running.as_mut()
-            && matches!(relay.child.try_wait(), Ok(None))
-            && let Ok(models) = fetch_models(&relay.socket)
-        {
-            return Ok(models);
-        }
-        if let Some(mut old) = running.take() {
-            let _ = old.child.kill();
-            let _ = old.child.wait();
-        }
-        let (relay, models) = start(launch)?;
-        *running = Some(relay);
-        Ok(models)
-    }
-
-    fn start(launch: &Launch) -> Result<(Running, Vec<Value>), String> {
-        let socket = socket_path();
-        let _ = std::fs::remove_file(&socket);
-        let fail =
-            |error: std::io::Error| format!("could not start pi for the model relay: {error}");
-        let extension = install_extension(&launch.dir).map_err(fail)?;
-        let log_path = launch.dir.join("relay.log");
-        let log = std::fs::File::create(&log_path).map_err(fail)?;
-        let mut child = Command::new(&launch.program)
-            .args([
-                "--mode",
-                "rpc",
-                "--no-session",
-                "--no-extensions",
-                "--no-skills",
-                "--no-prompt-templates",
-                "--no-context-files",
-                "--no-tools",
-                "--extension",
-            ])
-            .arg(&extension)
-            .current_dir(&launch.dir)
-            .envs(launch.env.vars().iter().map(|(name, value)| (name, value)))
-            .env(SOCKET_ENV, &socket)
-            .env(KEY_ENV, hex(key()))
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(log)
-            .spawn()
-            .map_err(fail)?;
-        let stdin = child.stdin.take();
-        let started = Instant::now();
-        loop {
-            if let Ok(models) = fetch_models(&socket) {
-                log::info!(
-                    "model relay started (pid {}) in {:?}",
-                    child.id(),
-                    started.elapsed()
-                );
-                let relay = Running {
-                    child,
-                    _stdin: stdin,
-                    socket,
-                };
-                return Ok((relay, models));
-            }
-            let exited = child.try_wait().ok().flatten();
-            if exited.is_some() || started.elapsed() > START_TIMEOUT {
-                let _ = child.kill();
-                let _ = child.wait();
-                let log = std::fs::read_to_string(&log_path).unwrap_or_default();
-                let tail: Vec<&str> = log.lines().rev().take(5).collect();
-                let tail: Vec<&str> = tail.into_iter().rev().collect();
-                return Err(format!(
-                    "pi for the model relay did not start{}",
-                    if tail.is_empty() {
-                        String::new()
-                    } else {
-                        format!(": {}", tail.join("\n"))
-                    }
-                ));
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
-    }
-
-    /// This computer's available models, from the relay (which reloads pi's settings first).
-    fn fetch_models(socket: &std::path::Path) -> Result<Vec<Value>, String> {
-        let fail = |error: std::io::Error| error.to_string();
-        let mut stream = UnixStream::connect(socket).map_err(fail)?;
-        stream
-            .set_read_timeout(Some(Duration::from_secs(20)))
-            .map_err(fail)?;
-        write!(
-            stream,
-            "GET /_pistachio/models HTTP/1.0\r\nHost: relay\r\nx-pistachio-relay-key: {}\r\n\r\n",
-            hex(key())
-        )
-        .map_err(fail)?;
-        let mut response = Vec::new();
-        stream.read_to_end(&mut response).map_err(fail)?;
-        let split = response
-            .windows(4)
-            .position(|window| window == b"\r\n\r\n")
-            .ok_or("no response from the model relay")?;
-        let status = String::from_utf8_lossy(&response[..split]);
-        if !status.starts_with("HTTP/1.1 200") && !status.starts_with("HTTP/1.0 200") {
-            return Err(format!(
-                "the model relay answered {}",
-                status.lines().next().unwrap_or_default()
-            ));
-        }
-        let body: Value =
-            serde_json::from_slice(&response[split + 4..]).map_err(|error| error.to_string())?;
-        Ok(body["models"].as_array().cloned().unwrap_or_default())
-    }
-
-    pub fn stop() {
-        let mut running = RUNNING.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(mut relay) = running.take() {
-            let _ = relay.child.kill();
-            let _ = relay.child.wait();
-            let _ = std::fs::remove_file(&relay.socket);
-        }
-    }
+/// Bytes from the system's random source.
+fn random<const N: usize>() -> [u8; N] {
+    let mut bytes = [0_u8; N];
+    getrandom::fill(&mut bytes).expect("the system's random source");
+    bytes
 }
 
-#[cfg(not(unix))]
-mod imp {
-    use std::path::PathBuf;
+/// The nonces in the hosts' tokens: one for each host's current connection.
+mod tokens {
+    use std::collections::HashMap;
+    use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 
-    use serde_json::Value;
+    use super::{hex, random};
 
-    use super::Launch;
-
-    pub fn key() -> &'static [u8; 32] {
-        &[0; 32]
+    struct Token {
+        nonce: String,
+        /// The connection it is for.
+        master_pid: Option<u32>,
     }
 
-    pub fn socket_path() -> PathBuf {
-        PathBuf::new()
+    static TOKENS: LazyLock<Mutex<HashMap<remote::HostId, Token>>> = LazyLock::new(Mutex::default);
+
+    fn tokens() -> MutexGuard<'static, HashMap<remote::HostId, Token>> {
+        TOKENS.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    pub fn models(launch: &Launch) -> Result<Vec<Value>, String> {
-        // Unix sockets are what the relay listens on; not on this system yet.
-        let _ = (
-            &launch.program,
-            &launch.env,
-            &launch.dir,
-            super::install_extension,
-        );
-        Err("using this computer's models on a host is not supported on this system yet".into())
+    /// Gives the host a token for its connection `master_pid`, unless it has one; that of an
+    /// earlier connection is worth nothing any more.
+    pub fn issue(host: &remote::HostId, master_pid: Option<u32>) {
+        let mut tokens = tokens();
+        if tokens
+            .get(host)
+            .is_none_or(|token| token.master_pid != master_pid)
+        {
+            let nonce = hex(&random::<8>());
+            tokens.insert(host.clone(), Token { nonce, master_pid });
+        }
     }
 
-    pub fn stop() {}
+    pub fn nonce(host: &remote::HostId) -> Option<String> {
+        tokens().get(host).map(|token| token.nonce.clone())
+    }
+
+    pub fn all() -> Vec<String> {
+        tokens().values().map(|token| token.nonce.clone()).collect()
+    }
 }
 
 #[cfg(test)]
@@ -608,11 +591,81 @@ mod tests {
     }
 
     #[test]
-    fn tokens_differ_per_host() {
-        let a = token(&remote::HostId("a".into()));
-        assert_eq!(a, token(&remote::HostId("a".into())));
-        assert_ne!(a, token(&remote::HostId("b".into())));
+    fn tokens_differ_per_host_and_connection() {
+        let (host, other) = (remote::HostId("a".into()), remote::HostId("b".into()));
+        assert_eq!(token(&host), "");
+        tokens::issue(&host, Some(1));
+        tokens::issue(&other, Some(1));
+        let a = token(&host);
         assert!(a.starts_with("pistachio-") && a.len() == "pistachio-".len() + 16 + 1 + 64);
+        assert_ne!(a, token(&other));
+        // Sessions that run keep theirs when the host's settings are written again.
+        tokens::issue(&host, Some(1));
+        assert_eq!(a, token(&host));
+        tokens::issue(&host, Some(2));
+        assert_ne!(a, token(&host));
+        // The relay is told the new one only.
+        let nonce = |token: &str| token["pistachio-".len()..][..16].to_owned();
+        assert!(tokens::all().contains(&nonce(&token(&host))));
+        assert!(!tokens::all().contains(&nonce(&a)));
+    }
+
+    #[test]
+    fn proofs_are_different_each_time() {
+        let (a, b) = (proof(1), proof(1));
+        assert_ne!(a.challenge, b.challenge);
+        assert_ne!(a.answer, b.answer);
+        assert_eq!((a.challenge.len(), a.answer.len()), (32, 64));
+    }
+
+    #[test]
+    fn only_a_pi_that_speaks_its_protocol_gets_those_models() {
+        for version in ["1.5.0", "1.5.2", "v1.6.0", "2.0.0-beta.1", "pi 1.10.0"] {
+            assert!(speaks_messages(Some(version)), "{version}");
+        }
+        for version in ["1.4.9", "0.87.1", "", "pi", "1"] {
+            assert!(!speaks_messages(Some(version)), "{version}");
+        }
+        assert!(!speaks_messages(None));
+    }
+
+    #[test]
+    fn remote_models_for_more_than_a_key_go_through_the_pi_here() {
+        let more = |api: &str, provider: &str, oauth: bool| {
+            json!({ "id": "m", "provider": provider, "api": api, "baseUrl": "https://x.example",
+                    "reasoning": true, "thinkingLevelMap": { "high": "max" },
+                    "compat": { "supportsStore": false },
+                    "pistachioOAuth": oauth, "pistachioMessages": true })
+        };
+        let models = [
+            more("openai-codex-responses", "openai-codex", true),
+            more("openai-completions", "github-copilot", true),
+            more("anthropic-messages", "github-copilot", true),
+            more("bedrock-converse-stream", "amazon-bedrock", false),
+            more("google-vertex", "google-vertex", false),
+            // pi here can't: too old.
+            json!({ "id": "old", "provider": "old", "api": "google-vertex",
+                    "baseUrl": "https://x.example", "pistachioMessages": false }),
+        ];
+        let config = remote_models(&models, 4321, "pistachio-t", true);
+        let listed = |provider: &str, count: usize| {
+            let base = format!("http://127.0.0.1:4321/m/{provider}");
+            let model = json!({ "id": "m", "api": "pi-messages", "baseUrl": base,
+                                "reasoning": true, "thinkingLevelMap": { "high": "max" } });
+            json!({ "baseUrl": base, "apiKey": "pistachio-t", "models": vec![model; count] })
+        };
+        assert_eq!(
+            config,
+            json!({ "providers": {
+                "openai-codex": listed("openai-codex", 1),
+                "github-copilot": listed("github-copilot", 2),
+                "amazon-bedrock": listed("amazon-bedrock", 1),
+                "google-vertex": listed("google-vertex", 1),
+            }})
+        );
+        // pi on the host can't.
+        let config = remote_models(&models, 4321, "pistachio-t", false);
+        assert_eq!(config, json!({ "providers": {} }));
     }
 
     #[test]
@@ -625,7 +678,7 @@ mod tests {
                     "baseUrl": "https://api.anthropic.com", "pistachioOAuth": true }),
             json!({ "id": "mistral", "provider": "mistral", "api": "mistral-conversations",
                     "baseUrl": "https://api.mistral.ai" }),
-            // Not relayed yet (#25).
+            // These take more than a key, and the pi here is too old to send them itself.
             json!({ "id": "gpt", "provider": "openai-codex", "api": "openai-codex-responses",
                     "baseUrl": "https://chatgpt.com/backend-api", "pistachioOAuth": true }),
             json!({ "id": "gpt-4.1", "provider": "github-copilot", "api": "openai-completions",
@@ -635,7 +688,7 @@ mod tests {
             json!({ "id": "x", "provider": "creds", "api": "openai-completions",
                     "baseUrl": "https://user:pass@example.com/v1" }),
         ];
-        let config = remote_models(&models, 4321, "pistachio-t");
+        let config = remote_models(&models, 4321, "pistachio-t", true);
         assert_eq!(
             config,
             json!({ "providers": {
@@ -666,6 +719,19 @@ mod tests {
                 },
             }})
         );
+    }
+
+    #[test]
+    fn models_only_the_hosts_pi_knows_are_not_usable() {
+        let served = Served::new(&json!({ "providers": {
+            "openai-codex": { "models": [{ "id": "gpt-6" }] },
+            "spark": { "models": [{ "id": "qwen" }] },
+        }}));
+        assert!(served.usable("openai-codex", "gpt-6"));
+        assert!(!served.usable("openai-codex", "gpt-7"));
+        assert!(!served.usable("spark", "gpt-6"));
+        // From an extension on the host, say.
+        assert!(served.usable("hosts-own", "any"));
     }
 
     #[test]

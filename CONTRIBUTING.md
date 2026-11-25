@@ -69,6 +69,7 @@ script/bundle-macos.sh [debug|release]   # wrap the binary in Pistachio.app (mac
 script/shot.sh <folder> out.png terminal,diff   # relaunch the debug app and screenshot it
 script/measure-memory.sh                 # memory of a running instance and its pi children
 script/perf.sh [release|debug] [runs] [baseline.json]   # time startup, navigation and quitting
+script/check-linux-displays.sh <app> <folder>  # that the app opens on X11 and on Wayland (Linux)
 script/make-icon.sh                      # regenerate the .icns / PNG from icon.svg
 script/set-version.sh 0.5.0              # bump the version (Cargo.toml, Cargo.lock, README install links)
 script/update-searxng.sh                 # move the pins of the SearXNG the app can download

@@ -60,27 +60,18 @@ impl Ssh {
             return Ok(());
         }
         self.ensure_control_dir()?;
-        let mut command = Command::new(Ssh::program());
-        command
-            .arg("-T")
-            // ssh keeps the first value it sees, so these override `BatchMode=yes` below.
-            .args(["-o", "BatchMode=no", "-o", "NumberOfPasswordPrompts=3"]);
+        // ssh keeps the first value it sees, so these override the usual `BatchMode=yes`.
+        let mut options = ["-o", "BatchMode=no", "-o", "NumberOfPasswordPrompts=3"]
+            .map(OsString::from)
+            .to_vec();
         if trust_recorded_key {
-            command.args(self.pinned_key_args()?);
+            options.extend(self.pinned_key_args()?);
         }
-        command
-            .args(self.base_args())
-            .args(["--", "true"])
-            .envs(askpass_env.iter().map(|(key, value)| (key, value)));
-        let output = process::run(command, None, CONNECT_TIMEOUT)?;
-        if output.status.success() {
-            if trust_recorded_key {
-                self.save_recorded_key()?;
-            }
-            Ok(())
-        } else {
-            Err(crate::classify(&output.stderr_lossy()))
+        self.start_shared(&options, askpass_env, CONNECT_TIMEOUT)?;
+        if trust_recorded_key {
+            self.save_recorded_key()?;
         }
+        Ok(())
     }
 
     /// The program and arguments for a terminal on the host: an interactive login shell in

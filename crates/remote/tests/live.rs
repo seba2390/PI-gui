@@ -5,7 +5,7 @@ use std::io::Read;
 use std::process::{Command, Stdio};
 use std::time::Instant;
 
-use remote::{RemoteError, Ssh, Target, discover_hosts, resolve};
+use remote::{Endpoint, RemoteError, Ssh, Target, discover_hosts, resolve};
 
 fn test_host() -> Option<Ssh> {
     let alias = std::env::var("PISTACHIO_SSH_TEST_HOST").ok()?;
@@ -40,6 +40,71 @@ fn live_host_round_trip() {
     if let Err(panic) = result {
         std::panic::resume_unwind(panic);
     }
+}
+
+/// The connection as it is on Windows: a tunnel instead of a shared one.
+#[test]
+#[ignore = "needs PISTACHIO_SSH_TEST_HOST and network access"]
+fn live_tunnel() {
+    let Some(ssh) = test_host().map(Ssh::without_sharing) else {
+        eprintln!("PISTACHIO_SSH_TEST_HOST not set; skipping");
+        return;
+    };
+    assert!(!ssh.is_connected());
+    assert_eq!(ssh.master_pid(), None);
+    ssh.connect(false).unwrap();
+    let connected = ssh.master_pid();
+    assert!(ssh.is_connected() && connected.is_some());
+    assert_eq!(ssh.exec("echo hello").unwrap(), "hello\n");
+
+    // A server here that says which one it is.
+    let serve = |name: &'static str| {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for mut stream in listener.incoming().flatten() {
+                let _ = std::io::Write::write_all(&mut stream, name.as_bytes());
+            }
+        });
+        Endpoint::Port(port)
+    };
+    let (one, two) = (serve("one"), serve("two"));
+    let ask = |port: u16| {
+        ssh.exec(&format!(
+            "bash -c 'cat </dev/tcp/127.0.0.1/{port}' 2>/dev/null || echo closed"
+        ))
+        .unwrap()
+    };
+    let port = ssh.forward_to(0, &one).unwrap();
+    assert_eq!(ask(port), "one");
+    let first = ssh.master_pid();
+    assert_ne!(first, connected);
+
+    // The same port again for another server; a port that is taken there is refused, and what
+    // was there stays.
+    let again = ssh
+        .forward_to(port, &two)
+        .or_else(|_| ssh.forward_to(0, &two))
+        .unwrap();
+    assert_eq!(ask(again), "two");
+    let refused = ssh.forward_to(22, &one).unwrap_err();
+    eprintln!("a privileged port: {refused}");
+    assert!(refused.to_string().contains("refused"), "{refused}");
+    assert_eq!(ask(again), "two");
+
+    // Closing a forward that is not (or no longer) there changes nothing.
+    let tunnel = ssh.master_pid();
+    ssh.close_forward(&one);
+    assert_eq!(ssh.master_pid(), tunnel);
+    ssh.close_forward(&two);
+    assert!(ssh.is_connected());
+    assert_ne!(ssh.master_pid(), tunnel);
+    assert_eq!(ask(again), "closed\n");
+
+    ssh.close();
+    ssh.disconnect_closed();
+    assert!(!ssh.is_connected());
+    assert!(ssh.forward_to(0, &one).is_err(), "turned off");
 }
 
 #[allow(clippy::unwrap_used)] // test helper
