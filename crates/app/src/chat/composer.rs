@@ -46,7 +46,7 @@ use super::session::{Lifecycle, PiSession, WebMode};
 use super::text_viewer;
 use crate::config::{AppConfig, RecentFolders};
 use crate::theme::palette;
-use crate::ui::{AppIcon, FadingText, QuietButton as _, spinner};
+use crate::ui::{AppIcon, FadingText, QuietButton as _, described_item, spinner};
 use gpui_kit::component::WindowExt as _;
 
 actions!(
@@ -1557,9 +1557,10 @@ impl Composer {
                     let (handle, model) = (handle.clone(), model.clone());
                     let checked = current.as_deref() == Some(model.qualified_id().as_str());
                     menu = menu.item(
-                        crate::demo::menu_item(
-                            format!("{}  ·  {}", model.display_name(), model.provider),
+                        described_item(
                             format!("model:{}", model.id),
+                            model.display_name().to_owned(),
+                            model.provider.clone(),
                         )
                         .checked(checked)
                         .on_click(move |_, _, cx| {

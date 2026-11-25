@@ -21,7 +21,7 @@ use remote::HostId;
 
 use crate::pi_place::PiPlace;
 
-use crate::ui::QuietButton as _;
+use crate::ui::{QuietButton as _, described_item};
 
 #[derive(Debug, Clone)]
 pub enum ModelsDialogEvent {
@@ -451,7 +451,7 @@ impl ModelsDialog {
             .small()
             .label(label)
             .dropdown_caret(true)
-            .dropdown_menu(move |mut menu, _, _| {
+            .dropdown_menu_with_anchor(Anchor::TopRight, move |mut menu, _, _| {
                 for provider in &providers {
                     let weak = weak.clone();
                     let id = provider.id.clone();
@@ -460,15 +460,19 @@ impl ModelsDialog {
                         .clone()
                         .unwrap_or_else(|| "built-in".into());
                     menu = menu.item(
-                        PopupMenuItem::new(format!("{}  ·  {detail}", provider.label()))
-                            .checked(current == ProviderChoice::Existing(id.clone()))
-                            .on_click(move |_, _, cx| {
-                                let _ = weak.update(cx, |this, cx| {
-                                    this.choice = ProviderChoice::Existing(id.clone());
-                                    this.fetched = Fetched::None;
-                                    cx.notify();
-                                });
-                            }),
+                        described_item(
+                            format!("provider:{id}"),
+                            provider.label().to_owned(),
+                            detail,
+                        )
+                        .checked(current == ProviderChoice::Existing(id.clone()))
+                        .on_click(move |_, _, cx| {
+                            let _ = weak.update(cx, |this, cx| {
+                                this.choice = ProviderChoice::Existing(id.clone());
+                                this.fetched = Fetched::None;
+                                cx.notify();
+                            });
+                        }),
                     );
                 }
                 if !providers.is_empty() {
@@ -501,7 +505,7 @@ impl ModelsDialog {
                 for (api, description) in pi_config::APIS {
                     let weak = weak.clone();
                     menu = menu.item(
-                        PopupMenuItem::new(format!("{api}  ·  {description}"))
+                        described_item(format!("api:{api}"), *api, *description)
                             .checked(*api == current)
                             .on_click(move |_, _, cx| {
                                 let _ = weak.update(cx, |this, cx| {
@@ -641,7 +645,6 @@ impl ModelsDialog {
                     .child(field("Model ID (as the server names it)", &self.model_id))
                     .child(
                         Button::new("fetch-models")
-                            .small()
                             .icon(IconName::RefreshCw)
                             .label("List server models")
                             .tooltip(

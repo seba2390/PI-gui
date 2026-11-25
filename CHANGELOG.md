@@ -6,6 +6,11 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Long names in the model menu, and long texts in the provider and API menus of "Add model", fade
+  out at the menu's edge. Before, they were drawn past it.
+
 ## [0.5.2] - 2026-11-25
 
 ### Added
