@@ -6,42 +6,91 @@ use serde_json::{Value, json};
 
 use crate::ConfigError;
 
-/// A server program that runs on one's own computer, and where it listens by default.
+/// A server program for models, and the port it listens on unless told otherwise. It may run on
+/// this device or on another one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LocalServer {
+pub struct KnownServer {
     pub label: &'static str,
-    pub address: &'static str,
+    pub port: u16,
     pub kind: Kind,
     /// How to start it.
     pub start: &'static str,
+    /// How to have it answer other devices too: by default some only answer their own.
+    pub share: &'static str,
 }
 
-pub const LOCAL_SERVERS: &[LocalServer] = &[
-    LocalServer {
+pub const KNOWN_SERVERS: &[KnownServer] = &[
+    KnownServer {
         label: "Ollama",
-        address: "http://localhost:11434/v1",
+        port: 11434,
         kind: Kind::Ollama,
         start: "Open Ollama, or run “ollama serve”.",
+        share: "Ollama only answers its own device unless it runs with OLLAMA_HOST=0.0.0.0.",
     },
-    LocalServer {
+    KnownServer {
         label: "LM Studio",
-        address: "http://localhost:1234/v1",
+        port: 1234,
         kind: Kind::LmStudio,
         start: "In LM Studio, open Developer and turn the server on.",
+        share: "In LM Studio's Developer settings, turn on “Serve on Local Network”.",
     },
-    LocalServer {
+    KnownServer {
         label: "llama.cpp",
-        address: "http://localhost:8080/v1",
+        port: 8080,
         kind: Kind::LlamaCpp,
         start: "Run “llama-server -m <model.gguf>”.",
+        share: "Start llama-server with “--host 0.0.0.0”.",
     },
-    LocalServer {
+    KnownServer {
         label: "vLLM",
-        address: "http://localhost:8000/v1",
+        port: 8000,
         kind: Kind::Vllm,
         start: "Run “vllm serve <model>”.",
+        share: "Run “vllm serve <model>”; it answers other devices by default.",
     },
 ];
+
+impl KnownServer {
+    /// Where it answers on `host` (a name or an IP address).
+    pub fn base_url(&self, host: &str) -> String {
+        let host = if host.contains(':') && !host.starts_with('[') {
+            format!("[{host}]")
+        } else {
+            host.to_owned()
+        };
+        format!("http://{host}:{}/v1", self.port)
+    }
+}
+
+/// The name of this device in addresses.
+pub const THIS_DEVICE: &str = "localhost";
+
+/// Where to look for a server, from what was typed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Lookup {
+    /// Only a device on one's own network: look on the usual ports of [`KNOWN_SERVERS`].
+    Device(String),
+    /// A server's own address: its base URLs, the likeliest first (see [`base_urls`]).
+    Address(Vec<String>),
+}
+
+/// What an address means: a device to look for servers on, when it has no scheme, port or path
+/// and is on one's own network, else a server's address.
+pub fn lookup(address: &str) -> Result<Lookup, ConfigError> {
+    let urls = base_urls(address)?;
+    let address = address.trim().trim_end_matches('/');
+    let bare = !address.contains("://") && !address.contains('/');
+    let host = host(address);
+    let has_port = match address.strip_prefix('[') {
+        Some(v6) => v6.split_once(']').is_some_and(|(_, rest)| !rest.is_empty()),
+        None => address.contains(':'),
+    };
+    Ok(if bare && !has_port && is_private(host) {
+        Lookup::Device(host.to_owned())
+    } else {
+        Lookup::Address(urls)
+    })
+}
 
 /// The program behind a server.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -815,6 +864,51 @@ mod tests {
             "192.168.1.89:8888"
         );
         assert_eq!(short_address("https://x.com/openai/v1"), "x.com/openai");
+    }
+
+    #[test]
+    fn devices_and_addresses() {
+        let device = |host: &str| Ok(Lookup::Device(host.to_owned()));
+        assert_eq!(lookup("192.168.1.89"), device("192.168.1.89"));
+        assert_eq!(lookup(" spark.local/ "), device("spark.local"));
+        assert_eq!(lookup("spark"), device("spark"));
+        assert_eq!(lookup("[fd00::1]"), device("fd00::1"));
+        assert_eq!(
+            lookup("192.168.1.89:8888"),
+            Ok(Lookup::Address(vec![
+                "http://192.168.1.89:8888".into(),
+                "https://192.168.1.89:8888".into()
+            ]))
+        );
+        assert_eq!(
+            lookup("[fd00::1]:8000"),
+            Ok(Lookup::Address(vec![
+                "http://[fd00::1]:8000".into(),
+                "https://[fd00::1]:8000".into()
+            ]))
+        );
+        assert_eq!(
+            lookup("http://192.168.1.89"),
+            Ok(Lookup::Address(vec!["http://192.168.1.89".into()]))
+        );
+        assert!(matches!(lookup("spark/v1"), Ok(Lookup::Address(_))));
+        // A server on the internet is not a device to look around on.
+        assert!(matches!(lookup("api.example.com"), Ok(Lookup::Address(_))));
+        assert!(lookup("not an address").is_err());
+    }
+
+    #[test]
+    fn known_servers_on_a_device() {
+        let ollama = KNOWN_SERVERS[0];
+        assert_eq!(ollama.kind, Kind::Ollama);
+        assert_eq!(ollama.base_url(THIS_DEVICE), "http://localhost:11434/v1");
+        assert_eq!(
+            ollama.base_url("192.168.1.89"),
+            "http://192.168.1.89:11434/v1"
+        );
+        assert_eq!(ollama.base_url("fd00::1"), "http://[fd00::1]:11434/v1");
+        let ports: Vec<u16> = KNOWN_SERVERS.iter().map(|server| server.port).collect();
+        assert_eq!(ports, [11434, 1234, 8080, 8000]);
     }
 
     #[test]

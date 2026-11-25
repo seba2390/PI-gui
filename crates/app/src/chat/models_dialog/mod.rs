@@ -1,15 +1,18 @@
 //! The Models dialog: connects pi to models, and changes or removes what is connected.
 //!
-//! It starts with where the models run: a server found on this computer, a provider pi knows
-//! (which needs no more than a key), or a server of one's own. A server is asked what it offers
-//! ([`probe`]), and models are ticked in its list ([`server_screen`]). `models.json` can also be
-//! edited as text.
+//! It starts with two choices: a model hosted on one's own devices ([`hosted_screen`]: on this
+//! device or another one, where known servers are looked for and any server can be connected by its
+//! address), or one of a provider pi knows, which needs no more than a key ([`key_screen`]). A
+//! server is asked what it offers ([`probe`]), and models are ticked in its list
+//! ([`server_screen`]). What is connected can be opened from the first screen, and `models.json`
+//! can also be edited as text.
 //!
 //! The file is the one the session's pi reads: in pi's agent folder on this computer (also for
 //! a remote session, whose pi uses this computer's models; see [`crate::relay`]), or on the
 //! SSH host when pi there uses the host's own models. pi only reads it when it starts, so
 //! after saving the window restarts pi on the same session and selects the new model.
 
+mod hosted_screen;
 mod key_screen;
 mod probe;
 mod server_screen;
@@ -25,16 +28,16 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use pi_config::providers::BuiltIn;
-use pi_config::server::LocalServer;
 use pi_config::{ModelsFile, ProviderInfo};
 use remote::HostId;
 
 pub use probe::answers;
 pub use start_screen::describe;
 
+use self::hosted_screen::{Device, Scan};
 use self::key_screen::KeyScreen;
 use self::server_screen::ServerScreen;
-use self::start_screen::Local;
+use self::start_screen::Back;
 use crate::pi_place::PiPlace;
 use crate::ui::{FadingText, QuietButton as _};
 
@@ -103,6 +106,10 @@ impl Place {
 
 enum Screen {
     Start,
+    /// Locally hosted: on which device.
+    Hosted,
+    /// API providers.
+    Providers,
     Key(KeyScreen),
     Server(Box<ServerScreen>),
     Json,
@@ -121,10 +128,18 @@ pub struct ModelsDialog {
     /// What to show once the file is loaded.
     open: Open,
     screen: Screen,
-    local: Vec<(LocalServer, Local)>,
-    /// The local server whose way to start it shows.
-    local_hint: Option<&'static str>,
+    /// Where the screen with one server or provider goes back to.
+    back_to: Back,
+    /// Where a locally hosted server runs, once chosen.
+    device: Option<Device>,
+    /// The known servers on this device, once it was chosen.
+    this_device: Option<Scan>,
+    /// The known servers on the other device last asked for.
+    other_device: Option<Scan>,
+    /// The address of another device or server.
     address: Entity<InputState>,
+    /// The port of another server on this device.
+    port: Entity<InputState>,
     address_error: Option<SharedString>,
     editor: Entity<EditorState>,
     json_error: Option<SharedString>,
@@ -154,13 +169,27 @@ impl ModelsDialog {
             pi,
         });
         let address = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("192.168.1.20:8000 or https://example.com/v1")
+            InputState::new(window, cx)
+                .placeholder("192.168.1.89, 192.168.1.89:8888 or https://example.com/v1")
         });
+        let port = cx.new(|cx| InputState::new(window, cx).placeholder("Port, like 8000"));
         let enter = cx.subscribe_in(
             &address,
             window,
             |this, _, event: &InputEvent, window, cx| match event {
                 InputEvent::PressEnter { .. } => this.connect_to_address(window, cx),
+                InputEvent::Change => {
+                    this.address_error = None;
+                    cx.notify();
+                }
+                _ => {}
+            },
+        );
+        let enter_port = cx.subscribe_in(
+            &port,
+            window,
+            |this, _, event: &InputEvent, window, cx| match event {
+                InputEvent::PressEnter { .. } => this.connect_to_port(window, cx),
                 InputEvent::Change => {
                     this.address_error = None;
                     cx.notify();
@@ -180,12 +209,12 @@ impl ModelsDialog {
                 Screen::Start
             },
             open,
-            local: pi_config::server::LOCAL_SERVERS
-                .iter()
-                .map(|server| (*server, Local::Checking))
-                .collect(),
-            local_hint: None,
+            back_to: Back::Start,
+            device: None,
+            this_device: None,
+            other_device: None,
             address,
+            port,
             address_error: None,
             editor: cx.new(|cx| EditorState::new(window, cx).language("json")),
             json_error: None,
@@ -193,13 +222,11 @@ impl ModelsDialog {
             asked: 0,
             task: None,
             _tasks: Vec::new(),
-            _subscriptions: vec![enter],
+            _subscriptions: vec![enter, enter_port],
             place,
         };
+        // Servers are only looked for once a device is chosen: none is assumed to run anywhere.
         this.load(window, cx);
-        if !matches!(this.open, Open::Json) {
-            this.find_local(cx);
-        }
         this
     }
 
@@ -248,8 +275,13 @@ impl ModelsDialog {
         self.loaded = Some(Ok(file));
         match std::mem::take(&mut self.open) {
             Open::Start | Open::Json => {}
-            Open::Provider(id) => self.open_provider(&id, window, cx),
+            Open::Provider(id) => {
+                self.back_to = Back::Start;
+                self.open_provider(&id, window, cx);
+            }
             Open::Server(address) => {
+                self.screen = Screen::Hosted;
+                self.device = Some(Device::Other);
                 self.address
                     .update(cx, |input, cx| input.set_value(address, window, cx));
                 self.connect_to_address(window, cx);
@@ -258,9 +290,13 @@ impl ModelsDialog {
     }
 
     fn back(&mut self, cx: &mut Context<Self>) {
-        self.screen = Screen::Start;
+        let screen = match (&self.screen, self.back_to) {
+            (Screen::Key(_) | Screen::Server(_), Back::Hosted) => Screen::Hosted,
+            (Screen::Key(_) | Screen::Server(_), Back::Providers) => Screen::Providers,
+            _ => Screen::Start,
+        };
         self.stop_asking();
-        cx.notify();
+        self.show(screen, cx);
     }
 
     fn stop_asking(&mut self) {
@@ -334,7 +370,7 @@ impl ModelsDialog {
     /// What went wrong on the screen that shows.
     fn set_error(&mut self, error: Option<SharedString>) {
         match &mut self.screen {
-            Screen::Start => self.address_error = error,
+            Screen::Start | Screen::Hosted | Screen::Providers => self.address_error = error,
             Screen::Key(key) => key.error = error,
             Screen::Server(server) => server.error = error,
             Screen::Json => self.json_error = error,
@@ -468,6 +504,8 @@ impl Render for ModelsDialog {
                 .child(error.clone())
                 .into_any_element(),
             (Some(Ok(_)), Screen::Start) => self.render_start(cx),
+            (Some(Ok(_)), Screen::Hosted) => self.render_hosted(cx),
+            (Some(Ok(_)), Screen::Providers) => self.render_providers(cx),
             (Some(Ok(_)), Screen::Key(key)) => self.render_key(key, cx),
             (Some(Ok(_)), Screen::Server(server)) => self.render_server(server, cx),
             (Some(Ok(_)), Screen::Json) => self.render_json(cx),
@@ -510,19 +548,20 @@ fn bottom(error: Option<&SharedString>, cx: &App) -> Div {
     )
 }
 
-/// Something to choose on the first screen: what it is, more about it, and how it is at the end.
+/// Something to choose: what it is, more about it, and how it is at the end.
 fn card(
     id: String,
     icon: impl Into<Icon>,
     title: impl Into<SharedString>,
     detail: SharedString,
     end: Option<AnyElement>,
+    chosen: bool,
     cx: &App,
 ) -> Button {
     let muted = cx.theme().muted_foreground;
     let title = title.into();
     Button::new(SharedString::from(id))
-        .choice_card(false, cx)
+        .choice_card(chosen, cx)
         .h(px(40.))
         .accessibility_label(format!("{title}, {detail}"))
         .child(

@@ -73,7 +73,12 @@ fn settle(dialog: &Entity<ModelsDialog>, cx: &mut VisualTestContext) {
     draw(cx);
 }
 
+/// Connects to a server on another device by its address.
 fn connect(dialog: &Entity<ModelsDialog>, address: &str, cx: &mut VisualTestContext) {
+    if cx.debug_bounds("start:hosted").is_some() {
+        click("start:hosted", cx);
+        click("device:other", cx);
+    }
     cx.update(|window, cx| {
         let focus = dialog.read(cx).address.focus_handle(cx);
         focus.focus(window, cx);
@@ -248,6 +253,7 @@ fn removing_asks_first(cx: &mut TestAppContext) {
 fn a_provider_needs_only_a_key(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let (dialog, cx) = open(dir.path(), "", cx);
+    click("start:provider", cx);
     click("built-in:openrouter", cx);
     press("enter", cx);
     assert!(is_open(cx));
@@ -287,7 +293,66 @@ fn enter_is_a_newline_in_the_json(cx: &mut TestAppContext) {
     let text = cx.update(|_, cx| dialog.read(cx).editor.read(cx).value().to_string());
     assert_eq!(text, "a\nb");
     click("models-back", cx);
-    assert!(cx.debug_bounds("connect").is_some());
+    assert!(cx.debug_bounds("start:hosted").is_some());
+}
+
+/// The first screen has two choices; nothing is looked for until a device is chosen, and a server
+/// on another port of this device is connected by the port alone.
+#[gpui_kit::test]
+fn locally_hosted_on_this_device(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let address = serve(ollama);
+    let port = address.rsplit(':').next().unwrap().to_owned();
+    let (dialog, cx) = open(dir.path(), "", cx);
+    assert!(cx.debug_bounds("start:provider").is_some());
+    assert!(cx.debug_bounds("connect").is_none());
+    click("start:hosted", cx);
+    cx.update(|_, cx| assert!(dialog.read(cx).this_device.is_none()));
+    assert!(cx.debug_bounds("local:Ollama").is_none());
+    click("device:this", cx);
+    cx.update(|_, cx| {
+        assert_eq!(
+            dialog.read(cx).this_device.as_ref().unwrap().host,
+            "localhost"
+        );
+    });
+    assert!(cx.debug_bounds("local:Ollama").is_some());
+    cx.update(|window, cx| {
+        let focus = dialog.read(cx).port.focus_handle(cx);
+        focus.focus(window, cx);
+    });
+    draw(cx);
+    cx.simulate_input(&port);
+    press("enter", cx);
+    settle(&dialog, cx);
+    click("save-server", cx);
+    let provider = &saved(dir.path()).providers()[0];
+    assert_eq!(
+        provider.base_url.as_deref(),
+        Some(format!("http://localhost:{port}/v1").as_str())
+    );
+    // Back goes to where the server was chosen.
+    click("models-back", cx);
+    assert!(cx.debug_bounds("device:this").is_some());
+}
+
+/// An address without a port is a device to look around on; with one, a server.
+#[gpui_kit::test]
+fn another_device_by_its_address(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (dialog, cx) = open(dir.path(), "", cx);
+    connect(&dialog, "127.0.0.2", cx);
+    cx.update(|_, cx| {
+        let dialog = dialog.read(cx);
+        assert!(matches!(dialog.screen, Screen::Hosted));
+        assert_eq!(dialog.other_device.as_ref().unwrap().host, "127.0.0.2");
+    });
+    assert!(cx.debug_bounds("other:Ollama").is_some());
+    click("models-back", cx);
+    click("start:provider", cx);
+    click("built-in:openai", cx);
+    click("models-back", cx);
+    assert!(cx.debug_bounds("built-in:openai").is_some());
 }
 
 #[test]

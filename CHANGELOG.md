@@ -28,6 +28,9 @@ All notable changes to PI-gui are listed here. The format follows
   models are then ticked in a list, several at once, with their context and abilities filled in as
   far as the server says. Connected servers and models can be changed and removed the same way, and
   what else is in `models.json` stays.
+- The Models dialog starts with two choices: a locally hosted model, on this device or another one
+  (Ollama, LM Studio and other servers are looked for on the device that is chosen, never assumed
+  to run on this computer), or a model of an API provider. What is connected is listed below them.
 - The model menu scrolls when it has many models.
 
 ### Fixed

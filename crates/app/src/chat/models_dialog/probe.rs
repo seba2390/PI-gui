@@ -1,15 +1,17 @@
-//! Asking model servers: which run here, what one offers, whether a model or a key works.
+//! Asking model servers: which run on a device, what one offers, whether a model or a key works.
 //! Everything blocks; call it on the background executor.
 
 use std::time::{Duration, Instant};
 
 use pi_config::providers::BuiltIn;
-use pi_config::server::{self, Kind, LocalServer, Offer};
+use pi_config::server::{self, Kind, KnownServer, Offer};
 
 use crate::pi_place::{NoReply, PiPlace, Reply};
 
-/// How long a server on this computer may take to answer.
+/// How long a server on this device may take to answer.
 const LOCAL: Duration = Duration::from_millis(1500);
+/// How long one on another device may take: it may be asleep, or far away on a VPN.
+const NEARBY: Duration = Duration::from_secs(4);
 const LIST: Duration = Duration::from_secs(10);
 /// A server may have to load the model first.
 const TRIAL: Duration = Duration::from_secs(90);
@@ -119,19 +121,27 @@ fn describe(no_reply: &NoReply, base_url: &str) -> String {
     }
 }
 
-/// How many models the server that usually listens at this address has, and which program it
-/// is. `None` when it is not running.
-pub fn find(place: &PiPlace, local: &LocalServer) -> Option<(Kind, usize)> {
-    let url = format!("{}/models", local.address);
-    let reply = place.request(&url, &[], None, LOCAL).ok()?;
+/// What answers where `server` usually listens on `host`: which program it is, and how many models
+/// for conversations it has (`None` when it wants a key first). `None` when nothing answers.
+pub fn find(place: &PiPlace, server: &KnownServer, host: &str) -> Option<(Kind, Option<usize>)> {
+    let url = format!("{}/models", server.base_url(host));
+    let timeout = if host == server::THIS_DEVICE {
+        LOCAL
+    } else {
+        NEARBY
+    };
+    let reply = place.request(&url, &[], None, timeout).ok()?;
+    if matches!(reply.status, 401 | 403) {
+        return Some((server.kind, None));
+    }
     let offer = server::parse_offer(&reply.body).ok()?;
     let kind = match offer.kind {
         // Any program may listen there; only Ollama and LM Studio have a port of their own.
-        Kind::Other if matches!(local.kind, Kind::Ollama | Kind::LmStudio) => local.kind,
+        Kind::Other if matches!(server.kind, Kind::Ollama | Kind::LmStudio) => server.kind,
         kind => kind,
     };
     let models = offer.models.iter().filter(|model| !model.not_chat).count();
-    Some((kind, models))
+    Some((kind, Some(models)))
 }
 
 /// Whether anything answers at `base_url`, whatever it says.
