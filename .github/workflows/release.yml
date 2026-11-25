@@ -114,7 +114,19 @@ jobs:
           sudo apt-get install -y ./dist/*.deb
           dpkg -L pistachio
           test -x /usr/bin/pistachio
+      - name: Check that it opens on X11 and Wayland
+        run: |
+          sudo apt-get install -y --no-install-recommends \
+            xvfb x11-utils x11-apps imagemagick sway grim mesa-vulkan-drivers dbus
+          dbus-run-session -- script/check-linux-displays.sh /usr/bin/pistachio displays
           sudo apt-get remove -y pistachio
+      - uses: actions/upload-artifact@v7
+        # Not for a tag: every artifact of that run is published.
+        if: always() && !startsWith(github.ref, 'refs/tags/')
+        with:
+          name: check-displays-${{ matrix.arch }}
+          path: displays
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v7
         with:
           name: linux-${{ matrix.arch }}

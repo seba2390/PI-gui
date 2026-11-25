@@ -33,6 +33,8 @@ term = { path = "crates/term" }
 # each `tree-sitter-<lang>` one more grammar. Only these are compiled in; each adds to the
 # binary, so add languages deliberately.
 gpui-kit = { version = "=0.11.0", default-features = false, features = [
+    # Linux: X11 sessions. Wayland is always built in, and used where there is one.
+    "x11",
     "component",
     "assets",
     # Microphone capture and the speech widgets; the recognizer is our own (src/stt).

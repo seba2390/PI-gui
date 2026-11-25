@@ -231,7 +231,7 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   diff and colored as a whole, so multi-line strings and comments come out right.
 - Bottom panel: an integrated terminal in the working folder; drag its top edge to resize it
   (the height is remembered).
-- macOS and Linux, plus an experimental Windows build. GPU-rendered with [GPUI](https://gpui.rs) via
+- macOS and Linux (Wayland and X11), plus an experimental Windows build. GPU-rendered with [GPUI](https://gpui.rs) via
   [gpui-kit](https://gpui-kit.com).
 
 ## Documents

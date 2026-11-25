@@ -13,6 +13,8 @@ All notable changes to PI-gui are listed here. The format follows
   (#25)
 - Windows: SSH sessions can use this computer's models, and a connected host stays connected. Not
   yet tested on a real Windows computer. (#31)
+- Linux: X11 desktops. Both downloads (x86_64 and ARM64) now work on X11 as well as on Wayland,
+  which is used where there is one.
 
 ### Changed
 
