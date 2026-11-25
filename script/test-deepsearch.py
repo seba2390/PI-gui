@@ -62,6 +62,7 @@ class Case:
         self.calls = 0
         self.asked = []
         self.forced = 0
+        self.cut = 0
 
     def links(self):
         return [f"http://127.0.0.1:{port}/page/{n}" for n, port in enumerate(self.ports)]
@@ -249,6 +250,23 @@ class EscInResearch(Case):
         assert result.aborted
 
 
+class Rambles(Case):
+    """Ignores `tool_choice` and writes a long report each time: it is cut off, until the last."""
+
+    def reply(self, n, body):
+        if n == 0:
+            return self.tools(self.search())
+        if body["messages"][-1]["role"] == "tool" or n % 2:
+            return self.report([0, 1], "\n\nThe shops are nice to visit on most days." * 400)
+        return self.tools(self.search(f"more {n}"), self.fetch(n % 4))
+
+    def expect(self, result):
+        assert result.finals == [True], result.finals
+        assert result.cut == 2, result.cut
+        assert result.steps.count("Continuing research") == 2, result.steps
+        assert "Writing it again" not in result.steps, result.steps
+
+
 class NoResearch(Case):
     """A reply without any research is only that."""
 
@@ -274,8 +292,8 @@ class Gone(Case):
 CASES = {
     "stops": Stops, "no-tool-choice": NoToolChoice, "refuses": Refuses, "revise": Revise,
     "wrong": Wrong, "stub": Stub, "silent": Silent, "garbled": Garbled,
-    "esc-in-check": EscInCheck, "esc-in-research": EscInResearch, "no-research": NoResearch,
-    "gone": Gone,
+    "esc-in-check": EscInCheck, "esc-in-research": EscInResearch, "rambles": Rambles,
+    "no-research": NoResearch, "gone": Gone,
 }
 
 
@@ -351,9 +369,12 @@ def handler(case, stopping):
                         chunk({"tool_calls": [call]})
                     chunk({}, "tool_calls")
                 else:
-                    for at in range(0, len(answer), 40):
-                        chunk({"content": answer[at:at + 40]})
-                    chunk({}, "stop")
+                    # About four characters to a token.
+                    limit = body.get("max_tokens", 65536) * 4
+                    case.cut += len(answer) > limit
+                    for at in range(0, min(len(answer), limit), 400):
+                        chunk({"content": answer[at:at + 400]})
+                    chunk({}, "length" if len(answer) > limit else "stop")
                 self.wfile.write(b"data: [DONE]\n\n")
             except OSError:
                 pass
@@ -452,7 +473,7 @@ def run(case):
             shutil.rmtree(folder, ignore_errors=True)
     result.seconds = time.time() - start
     result.stopped_in = time.time() - stopped if stopped else 0
-    result.forced = case.forced
+    result.forced, result.cut = case.forced, case.cut
     # Nothing is asked without limits, or thinks more than the chat.
     for kind, tokens, effort in case.asked:
         assert tokens == case.check["max_tokens"] and effort == "minimal", (kind, tokens, effort)

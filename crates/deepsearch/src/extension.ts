@@ -526,16 +526,24 @@ export default function (pi: any) {
   });
 
   // While its research is short, a weak model writes one report after the other that is only sent
-  // back. Where the API can, it is made to call a tool instead, until nothing new turns up.
+  // back. Where the API can, it is made to call a tool instead, until nothing new turns up. Some
+  // servers ignore that while streaming, so what it may write is limited too: a search needs little.
+  const STEP_TOKENS = 1200;
   pi.on("before_provider_request", async (event: any, ctx: any) => {
     if (!run) return;
     run.forced = false;
     const { payload } = event;
     const able = ctx.model?.api === "openai-completions" && Array.isArray(payload?.tools) && payload.tools.length > 0;
     const left = used.web_search < run.limits.max_searches && used.web_fetch < run.limits.max_fetches;
-    if (!able || !left || !run.force || !run.planned || run.covered || run.done || run.barren > 7 || !isShort(run)) return;
+    // The last report it gets to write is taken as it is.
+    const last = run.rounds >= run.limits.max_rounds;
+    if (!able || !left || last || !run.force || !run.planned || run.covered || run.done || run.barren > 7 || !isShort(run)) return;
     run.forced = true;
-    return { ...payload, tool_choice: "required" };
+    // Thinking counts as writing.
+    const thinks = ctx.model?.reasoning && !["off", "minimal"].includes(ctx.thinkingLevel);
+    const field = payload.max_completion_tokens ? "max_completion_tokens" : "max_tokens";
+    const limit = thinks ? {} : { [field]: Math.min(payload[field] ?? STEP_TOKENS, STEP_TOKENS) };
+    return { ...payload, ...limit, tool_choice: "required" };
   });
 
   // The sub-questions a message has to be answered by.
@@ -852,7 +860,7 @@ Answer with only a JSON array of strings, e.g. ["What does X cost in shops today
   };
 
   // Whether the model has to go on with its research, and what it is told then.
-  const tooEarly = async (run: Run, report: string, ctx: any, signal?: AbortSignal) => {
+  const tooEarly = async (run: Run, report: string, cut: boolean, ctx: any, signal?: AbortSignal) => {
     const { limits } = run;
     if (run.covered || run.rounds >= limits.max_rounds) return;
     const searchesLeft = used.web_search < limits.max_searches;
@@ -870,9 +878,10 @@ Answer with only a JSON array of strings, e.g. ["What does X cost in shops today
     const least = floor(run);
     const short = isShort(run);
     let open: string[] = [];
-    if (report && (!short || run.rounds === 0) && limits.max_claims > 0) open = await stillOpen(run, report, ctx, signal);
+    if (report && !cut && (!short || run.rounds === 0) && limits.max_claims > 0) open = await stillOpen(run, report, ctx, signal);
     if (report && !short && !open.length) {
-      run.covered = true;
+      // One that was cut off is written again, and looked at then.
+      run.covered = !cut;
       return;
     }
     if (short && !open.length) open = run.questions ?? [];
@@ -921,9 +930,10 @@ Answer with only a JSON array of strings, e.g. ["What does X cost in shops today
     if (event.outcome !== "completed") return;
 
     const earlier = Math.max(0, ...current.drafts);
+    const cut = event.message.stopReason === "length";
     if (report) current.drafts.push(report.length);
     try {
-      const early = await tooEarly(current, report, ctx, signal);
+      const early = await tooEarly(current, report, cut, ctx, signal);
       if (signal?.aborted) return { entries: [...event.entries, unchecked(current, "it was stopped.")] };
       if (early) return { entries: [...event.entries, early], continue: true };
       if (!report) {
@@ -931,7 +941,6 @@ Answer with only a JSON array of strings, e.g. ["What does X cost in shops today
       }
 
       // A few words in place of the report, such as only what changed.
-      const cut = event.message.stopReason === "length";
       if (cut || report.length < earlier * 0.4) {
         if (current.rewrites < 2) {
           current.rewrites += 1;
