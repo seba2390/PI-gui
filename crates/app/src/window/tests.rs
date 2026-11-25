@@ -132,6 +132,7 @@ fn summary(folder: &Path, file: &Path) -> SessionSummary {
         cwd: folder.to_path_buf(),
         name: None,
         first_prompt: Some("hi".into()),
+        side_chat_of: None,
         modified: std::time::SystemTime::UNIX_EPOCH,
     }
 }

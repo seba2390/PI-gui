@@ -115,11 +115,23 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
     in front. Questions from extensions (confirm, select, input) in a background chat wait
     until you open that chat, marked with an amber dot, so they are never answered for the
     wrong chat; its toasts name the chat.
+- **Side chats**: the "Side chat" tab on the chat column's right edge (also `/side` and ⌘⇧N)
+  opens a second conversation in a column to the right, holding everything the conversation
+  has at that moment, also while its agent works: finished messages and tool results, the reply
+  being written (up to where it was, marked as cut off), and tools still running (with their
+  output so far). The original keeps going undisturbed. The side chat is a session of its own
+  (its file is written next to the original's, with pi's `parentSession` pointing at it), with
+  the same model, thinking level, folder and machine; in Code mode both agents work on the same
+  folder. In the sidebar it is listed under its conversation, indented, with a line coming down
+  from it. Its top bar moves it to the main column or closes it (it stays in the sidebar, and
+  keeps working in the background if it is busy). `/side` in a side chat opens a side chat of
+  that one in its place.
 - **Branches**: hovering a prompt offers Copy and Edit; hovering the end of a turn offers
   Copy reply, Retry (newest turn) and Branch from here. Edit, Retry and branching continue in
   a new session (the original stays in the sidebar), like pi's `/fork`. Slash commands:
-  `/fork` (pick a message), `/clone`, `/resume` (pick an earlier session here), `/export
-  [path]` (HTML) and `/share` (a secret GitHub gist via `gh`, like pi's terminal).
+  `/fork` (pick a message), `/clone`, `/side` (a side chat, above), `/resume` (pick an earlier
+  session here), `/export [path]` (HTML) and `/share` (a secret GitHub gist via `gh`, like pi's
+  terminal).
 - **SSH** (Code mode): the device button next to the folder ("This computer", with a status
   light) runs pi on another machine. "Add SSH connection…" lists the hosts in your
   `~/.ssh/config` (following `Include`), or takes a custom host, user, port, key and jump host;
@@ -417,6 +429,7 @@ Composer behaviour mirrors pi's terminal.
 | ⌘⇧Space | Dictate: hold to talk, tap to start / stop |
 | Ctrl+T / Ctrl+O | Expand all thinking / tool output |
 | ⌘N / ⌘B / ⌘⌥B | New chat or session / toggle sidebar / toggle right panel |
+| ⌘⇧N | Side chat of the conversation you are in |
 | ⌘1 / ⌘2 | Chat mode / Code mode |
 | ⌘F | Find in the conversation |
 | Enter / Shift+Enter, ⌘G / ⌘⇧G | Next / previous match (in the find bar) |

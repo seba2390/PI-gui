@@ -6,6 +6,16 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Side chats: the "Side chat" tab on the chat's right edge (or `/side`, or ⌘⇧N) opens a second
+  conversation next to the one you are in, with everything it holds at that moment: messages,
+  thinking, tool calls and their results, also while the agent is still working. A reply still
+  being written comes along up to where it was, marked as cut off, and a tool still running
+  comes along with its output so far. The original keeps working undisturbed. The side chat
+  keeps the model and thinking level, works in Chat and Code (on the same folder) and over SSH,
+  and is listed in the sidebar under the conversation it came from. (#43)
+
 ### Fixed
 
 - Long names in the model menu, and long texts in the provider and API menus of "Add model", fade

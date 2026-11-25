@@ -42,6 +42,7 @@ use crate::ui_state::{LastSession, UiState};
 use remote::HostId;
 
 mod drafts;
+mod side;
 #[cfg(test)]
 mod tests;
 mod update_prompt;
@@ -224,6 +225,10 @@ pub struct MainWindow {
     drag: WindowDrag,
     focus_handle: FocusHandle,
     chat_subscription: Subscription,
+    /// The side chat next to the visible one (see [`side`]).
+    side: Option<side::SideChat>,
+    /// A side chat's file being written.
+    side_opening: Option<Task<()>>,
     /// Demo mode: the cursor overlay and the storyboard being played.
     demo: Option<(Entity<crate::demo::DemoCursor>, Task<()>)>,
     /// `PISTACHIO_BENCH`: the navigation benchmark being run.
@@ -423,6 +428,8 @@ impl MainWindow {
             drag: WindowDrag::default(),
             focus_handle,
             chat_subscription,
+            side: None,
+            side_opening: None,
             demo,
             bench: None,
             _subscriptions: subscriptions,
@@ -471,6 +478,17 @@ impl MainWindow {
                 "files" => self.show_files(&ShowFiles, window, cx),
                 "no-sidebar" => self.toggle_sidebar(&ToggleSidebar, window, cx),
                 "chat" => self.switch_to_mode(Mode::Chat, window, cx),
+                // Once the restored conversation has loaded.
+                "side-chat" => cx
+                    .spawn_in(window, async move |this, cx| {
+                        cx.background_executor()
+                            .timer(std::time::Duration::from_secs(2))
+                            .await;
+                        let _ = this.update_in(cx, |this, window, cx| {
+                            this.open_side_chat(&crate::actions::OpenSideChat, window, cx);
+                        });
+                    })
+                    .detach(),
                 "add-host" => self.open_add_host(window, cx),
                 "manage-hosts" => self.open_manage_hosts(window, cx),
                 "skills" => self.toggle_skills(window, cx),
@@ -1155,7 +1173,9 @@ impl MainWindow {
     /// unseen.
     fn update_activity(&mut self, cx: &mut Context<Self>) {
         let mut activity = HashMap::new();
-        let chats = std::iter::once(&self.chat).chain(self.background.iter().map(|(chat, _)| chat));
+        let chats = std::iter::once(&self.chat)
+            .chain(self.side_chat())
+            .chain(self.background.iter().map(|(chat, _)| chat));
         for chat in chats {
             let Some(key) = session_key(chat, cx) else {
                 continue;
@@ -1237,6 +1257,12 @@ impl MainWindow {
         if same(&self.chat, cx) {
             return self.chat.clone();
         }
+        // The side chat is shown already: go there.
+        if let Some(side) = self.side_chat().filter(|side| same(side, cx)).cloned() {
+            self.close_pages(cx);
+            focus_chat(&side, window, cx);
+            return side;
+        }
         let existing = self
             .background
             .iter()
@@ -1294,6 +1320,7 @@ impl MainWindow {
                         cwd: folder,
                         name: None,
                         first_prompt: None,
+                        side_chat_of: None,
                         modified: std::time::SystemTime::UNIX_EPOCH,
                     });
                 drop(self.open_session(Some(host), &summary, window, cx));
@@ -2257,6 +2284,9 @@ impl MainWindow {
                 None => self.new_chat_in(summary.cwd.clone(), window, cx),
             }
         }
+        if self.side_chat().is_some_and(|side| matches(side, cx)) {
+            self.set_side(None, window, cx);
+        }
         self.background.retain(|(chat, _)| !matches(chat, cx));
         self.drafts.forget(host.as_ref(), &summary.path);
         self.renames.remove(&(host.clone(), summary.path.clone()));
@@ -2349,6 +2379,7 @@ impl MainWindow {
     fn open_pi(&self, key: &(Option<HostId>, PathBuf), cx: &App) -> Option<Entity<PiSession>> {
         use crate::chat::session::Lifecycle;
         std::iter::once(&self.chat)
+            .chain(self.side_chat())
             .chain(self.background.iter().map(|(chat, _)| chat))
             .find(|chat| {
                 session_key(chat, cx).as_ref() == Some(key)
@@ -3300,9 +3331,11 @@ impl Render for MainWindow {
                         }))
                         .child(
                             div()
+                                .relative()
                                 .flex_1()
                                 .min_h_0()
-                                .child(self.chat.clone().cached(full())),
+                                .child(self.chat.clone().cached(full()))
+                                .children(self.render_side_tab(cx)),
                         )
                         .when_some(terminal, |this, terminal| {
                             this.child(
@@ -3319,6 +3352,7 @@ impl Render for MainWindow {
                 )
             });
 
+        let side_column = self.render_side_column(cx);
         div()
             .key_context(WINDOW_CONTEXT)
             .on_key_down(cx.listener(Self::update_prompt_key))
@@ -3326,6 +3360,7 @@ impl Render for MainWindow {
             .on_action(cx.listener(Self::new_chat))
             .on_action(cx.listener(Self::toggle_sidebar))
             .on_action(cx.listener(Self::toggle_right_panel))
+            .on_action(cx.listener(Self::open_side_chat))
             .on_action(cx.listener(Self::toggle_terminal))
             .on_action(cx.listener(Self::show_diff))
             .on_action(cx.listener(Self::show_files))
@@ -3369,6 +3404,13 @@ impl Render for MainWindow {
                             // for its header buttons and the message box's controls.
                             .size_range(MIN_CHAT_WIDTH..Pixels::MAX)
                             .child(chat_column),
+                    )
+                    .child(
+                        resizable_panel()
+                            .visible(side_column.is_some())
+                            .size(px(520.))
+                            .size_range(MIN_CHAT_WIDTH..Pixels::MAX)
+                            .children(side_column),
                     )
                     .child(
                         resizable_panel()

@@ -4,7 +4,7 @@
 crates/
   pi-rpc/       typed protocol (serde mirror of pi's rpc-types), strict JSONL framing, client, process
   transcript/   pure reducer: pi events / stored messages → renderable transcript (no UI, no I/O)
-  pi-sessions/  read-only index of pi's session files for the sidebar
+  pi-sessions/  index of pi's session files for the sidebar; writes the file a side chat starts from
   pi-config/    editing pi's config: models.json, SKILL.md front matter, the trust store
   workspace/    git status/diff (git CLI) + gitignore-aware file listing + fs watcher
   remote/       SSH: ~/.ssh/config discovery, saved hosts, shared connections, remote probes,
