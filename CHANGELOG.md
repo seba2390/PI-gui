@@ -10,6 +10,11 @@ All notable changes to PI-gui are listed here. The format follows
 
 - The buttons that download models and document parsers have the download symbol.
 
+### Fixed
+
+- The update prompt's progress bar fills as the new version downloads, also when Homebrew downloads
+  it. Before, a Homebrew update showed a full, pulsing bar the whole time.
+
 ## [0.5.0] - 2026-11-25
 
 ### Added

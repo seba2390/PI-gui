@@ -361,6 +361,7 @@ the new version: `brew upgrade --cask pistachio` for a Homebrew install on macOS
 new app replaces the old one), the .deb or .rpm on Linux (the system asks for your password) or
 the binary the tarball installed, and `pistachio.exe` on Windows. The download is checked against
 GitHub's checksum; if anything fails, the old version stays and the prompt says what happened.
+A progress bar shows how much is downloaded, also when Homebrew downloads it.
 **Download instead** opens the download in your browser, and a version can be skipped. Nothing is
 downloaded or installed without a yes, and the automatic check can be turned off in Settings.
 

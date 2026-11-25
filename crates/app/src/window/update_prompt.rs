@@ -212,7 +212,7 @@ impl MainWindow {
         if matches!(state, UpdateState::Working(_)) {
             return;
         }
-        *state = UpdateState::Working(Step::Working("Starting…"));
+        *state = UpdateState::Working(Step::Preparing("Starting…"));
         cx.notify();
         let (release, install) = (release.clone(), install.clone());
         let (steps, progress) = async_channel::unbounded::<Step>();
@@ -569,63 +569,96 @@ fn header(
         )
 }
 
-/// A progress bar (or a pulsing one while there is no measure) and what is happening.
-fn render_progress(step: &Step, accent: Hsla, track: Hsla, muted: Hsla) -> AnyElement {
-    let (label, fraction) = match step {
+/// How the bar of [`render_progress`] is drawn.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Bar {
+    /// Nothing measured yet: a piece moving along it.
+    Moving,
+    /// The share that is done.
+    Filled(f32),
+    /// Downloaded, not finished: full and pulsing.
+    Pulsing,
+}
+
+fn progress_bar(step: &Step) -> Bar {
+    match step {
         Step::Downloading { received, total } if *total > 0 => {
             #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)] // display only
-            let fraction = (*received as f64 / *total as f64).clamp(0., 1.) as f32;
-            (
-                format!(
-                    "Downloading… {} of {}",
-                    crate::model_store::size_label(*received),
-                    crate::model_store::size_label(*total)
-                ),
-                Some(fraction),
-            )
+            Bar::Filled((*received as f64 / *total as f64).clamp(0., 1.) as f32)
         }
-        Step::Downloading { received, .. } => (
-            format!("Downloading… {}", crate::model_store::size_label(*received)),
-            None,
+        Step::Preparing(_) | Step::Downloading { .. } => Bar::Moving,
+        Step::Installing(_) => Bar::Pulsing,
+    }
+}
+
+/// A progress bar and what is happening.
+fn render_progress(step: &Step, accent: Hsla, track: Hsla, muted: Hsla) -> AnyElement {
+    let label = match step {
+        Step::Downloading { received, total } if *total > 0 => format!(
+            "Downloading… {} of {}",
+            crate::model_store::size_label(*received),
+            crate::model_store::size_label(*total)
         ),
-        Step::Working(text) => ((*text).to_owned(), None),
+        Step::Downloading { received, .. } => {
+            format!("Downloading… {}", crate::model_store::size_label(*received))
+        }
+        Step::Preparing(text) | Step::Installing(text) => (*text).to_owned(),
+    };
+    let fill = div().h_full().rounded_full().bg(accent);
+    let fill = match progress_bar(step) {
+        Bar::Filled(fraction) => fill.w(relative(fraction)).into_any_element(),
+        Bar::Moving => {
+            const WIDTH: f32 = 0.3;
+            fill.absolute()
+                .top_0()
+                .w(relative(WIDTH))
+                .with_animation(
+                    "update-moving",
+                    Animation::new(Duration::from_millis(1400))
+                        .repeat()
+                        .with_easing(ease_in_out),
+                    |this, delta| this.left(relative(delta * (1. + WIDTH) - WIDTH)),
+                )
+                .into_any_element()
+        }
+        Bar::Pulsing => fill
+            .w_full()
+            .with_animation(
+                "update-pulse",
+                Animation::new(Duration::from_millis(1100))
+                    .repeat()
+                    .with_easing(pulsating_between(0.25, 0.9)),
+                |this, delta| this.opacity(delta),
+            )
+            .into_any_element(),
     };
     let bar = div()
+        .relative()
         .w_full()
         .h(px(6.))
         .rounded_full()
         .bg(track)
-        .overflow_hidden();
-    let bar = match fraction {
-        Some(fraction) => bar
-            .child(
-                div()
-                    .h_full()
-                    .rounded_full()
-                    .bg(accent)
-                    .w(relative(fraction)),
-            )
-            .into_any_element(),
-        None => bar
-            .child(
-                div()
-                    .h_full()
-                    .w_full()
-                    .rounded_full()
-                    .bg(accent)
-                    .with_animation(
-                        "update-pulse",
-                        Animation::new(Duration::from_millis(1100))
-                            .repeat()
-                            .with_easing(pulsating_between(0.25, 0.9)),
-                        |this, delta| this.opacity(delta),
-                    ),
-            )
-            .into_any_element(),
-    };
+        .overflow_hidden()
+        .child(fill);
     v_flex()
         .gap_2()
         .child(bar)
         .child(div().text_xs().text_color(muted).child(label))
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Bar, Step, progress_bar};
+
+    #[test]
+    fn the_bar_fills_as_the_download_goes_on() {
+        let at = |received, total| progress_bar(&Step::Downloading { received, total });
+        assert_eq!(progress_bar(&Step::Preparing("")), Bar::Moving);
+        assert_eq!(at(0, 200), Bar::Filled(0.));
+        assert_eq!(at(50, 200), Bar::Filled(0.25));
+        assert_eq!(at(300, 200), Bar::Filled(1.));
+        assert_eq!(at(50, 0), Bar::Moving, "an unknown size");
+        assert_eq!(progress_bar(&Step::Installing("")), Bar::Pulsing);
+    }
 }
