@@ -17,7 +17,7 @@ use crate::ui::{AppIcon, FadingText, QuietButton as _, buttons, light};
 pub struct Connected {
     providers: Vec<ProviderInfo>,
     error: Option<SharedString>,
-    /// How many models pi has of each provider, as far as the visible session knows.
+    /// How many models pi has of each provider, as far as that is known.
     available: HashMap<String, usize>,
     /// Whether the server of a provider answers, once that is known.
     online: HashMap<String, bool>,
@@ -30,11 +30,21 @@ impl Connected {
     /// `models` are the provider of each model the visible session has.
     pub fn load<'a>(models: impl Iterator<Item = &'a str>, cx: &App) -> Self {
         let mut this = Self::default();
-        for provider in models {
-            *this.available.entry(provider.to_owned()).or_insert(0) += 1;
-        }
+        this.set_available(models);
         this.reload(cx);
         this
+    }
+
+    /// `models` are the provider of each model pi has.
+    pub fn set_available<'a>(&mut self, models: impl Iterator<Item = &'a str>) {
+        self.available.clear();
+        for provider in models {
+            *self.available.entry(provider.to_owned()).or_insert(0) += 1;
+        }
+    }
+
+    pub fn providers(&self) -> &[ProviderInfo] {
+        &self.providers
     }
 
     pub fn reload(&mut self, cx: &App) {

@@ -6,6 +6,23 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-11-25
+
+### Changed
+
+- Adding a locally hosted model also shows llama.cpp, MLX, vLLM, Jan and Docker Model Runner, with how
+  to start them, next to Ollama and LM Studio. SGLang, Lemonade and KoboldCpp are found when they
+  run.
+- Downloading a speech-to-text model, a model for conversation names or a document parser asks first
+  and shows what exactly is downloaded, like SearXNG does. All their buttons say how much it is.
+- Settings → pi & models says "Startup model" instead of "Startup model (this computer)".
+
+### Fixed
+
+- The startup model can be any model pi has on this computer. Without an open session only the
+  current one could be chosen, and with a session on an SSH host that has models of its own, those
+  of the host.
+
 ## [0.5.3] - 2026-11-25
 
 ### Added
@@ -595,7 +612,8 @@ chats, skills and model management. Changes since the last private build:
 - A corrupt `hosts.json` is kept as a backup.
 - A remembered terminal height can no longer squeeze out the chat.
 
-[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.5.3...HEAD
+[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.5.4...HEAD
+[0.5.4]: https://github.com/seba2390/pistachio/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/seba2390/pistachio/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/seba2390/pistachio/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/seba2390/pistachio/compare/v0.5.0...v0.5.1

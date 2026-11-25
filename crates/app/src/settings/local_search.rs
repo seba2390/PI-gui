@@ -13,14 +13,14 @@ use gpui_kit::*;
 use searxng::{Installed, Probe, catalog};
 
 use super::view::{go_back_to_previous_service, keep_service, update_web, web_config};
-use crate::model_store::size_label;
 use crate::search_server::{Running, SearchServer, search_server};
 use crate::theme::palette;
 use crate::ui::dialog::{on_submit, open_form_dialog};
+use crate::ui::download::{Details, Part, download_label};
 use crate::ui::{AppIcon, QuietButton as _, light};
 
 /// What an installation takes on disk, about.
-const DISK_SIZE: &str = "190 MB";
+const DISK_SIZE: u64 = 190_000_000;
 
 /// The setting below the service when SearXNG is chosen.
 pub(super) fn item() -> SettingItem {
@@ -344,6 +344,7 @@ pub fn open_setup(window: &mut Window, cx: &mut App) {
             text
         }
     };
+    let details = setup_details(&problem);
     open_form_dialog(None, window, cx, move |dialog, _, cx| {
         dialog
             .title("Download SearXNG?")
@@ -352,7 +353,7 @@ pub fn open_setup(window: &mut Window, cx: &mut App) {
                 go_back_to_previous_service(cx);
                 true
             })
-            .child(setup_body(&problem, cx))
+            .child(details.render(cx))
             .footer(
                 h_flex()
                     .w_full()
@@ -375,7 +376,7 @@ pub fn open_setup(window: &mut Window, cx: &mut App) {
                         Button::new("searxng-setup-run")
                             .form_action(cx)
                             .icon(AppIcon::Download)
-                            .label("Download and run")
+                            .label(format!("{} and run", download_label(details.size)))
                             .on_click(|_, window, cx| {
                                 window.close_dialog(cx);
                                 use_local(cx);
@@ -396,95 +397,46 @@ fn cancel_button(id: &'static str, cx: &App) -> Button {
         })
 }
 
-fn setup_body(problem: &str, cx: &App) -> Div {
-    let theme = cx.theme();
-    let muted = theme.muted_foreground;
+fn setup_details(problem: &str) -> Details {
     let platform = catalog::platform();
     let size = |of: fn(&catalog::Platform) -> u64| platform.as_ref().map_or(0, of);
-    let part = |icon: Icon, name: String, note: &'static str, size: u64| {
-        h_flex()
-            .w_full()
-            .gap_3()
-            .px_3()
-            .py_2()
-            .child(icon.small().text_color(palette(cx).accent_icon))
-            .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .child(div().text_sm().child(name))
-                    .child(div().text_xs().text_color(muted).child(note)),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(size_label(size)),
-            )
-    };
-    v_flex()
-        .gap_3()
-        .child(div().text_sm().text_color(muted).child(format!(
+    Details {
+        intro: format!(
             "{problem}Pistachio can download SearXNG and run it on this computer: a private search \
              engine that needs no account, no key and no Docker."
-        )))
-        .child(
-            v_flex()
-                .rounded_lg()
-                .border_1()
-                .border_color(theme.border)
-                .child(
-                    div()
-                        .px_3()
-                        .pt_2()
-                        .text_xs()
-                        .text_color(muted)
-                        .child("Missing on this computer"),
-                )
-                .child(part(
-                    AppIcon::Globe.into(),
-                    "SearXNG".into(),
-                    "The search engine",
-                    catalog::SEARXNG_SIZE,
-                ))
-                .child(part(
-                    AppIcon::CodeXml.into(),
-                    format!("Python {}", catalog::PYTHON_VERSION),
-                    "A private copy; your own Python is not touched",
-                    size(|platform| platform.python.python_size),
-                ))
-                .child(part(
-                    AppIcon::Package.into(),
-                    format!("{} Python packages", catalog::package_count()),
-                    "What SearXNG is built on",
-                    size(|platform| platform.packages_size),
-                ))
-                .child(part(
-                    AppIcon::Wrench.into(),
-                    format!("uv {}", catalog::UV_VERSION),
-                    "Installs the rest, and is deleted afterwards",
-                    size(|platform| platform.python.uv_size),
-                ))
-                .child(
-                    h_flex()
-                        .w_full()
-                        .px_3()
-                        .py_2()
-                        .border_t_1()
-                        .border_color(theme.border)
-                        .text_sm()
-                        .child(div().flex_1().child("Download"))
-                        .child(format!(
-                            "{} · {DISK_SIZE} on disk",
-                            size_label(size(catalog::Platform::download_size))
-                        )),
-                ),
-        )
-        .child(div().text_xs().text_color(muted).child(
-            "It goes into Pistachio's own folder, only this computer can reach it, and you can \
-             remove it at any time. License: AGPL-3.0.",
-        ))
+        ),
+        parts: vec![
+            Part {
+                icon: AppIcon::Globe.into(),
+                name: "SearXNG".into(),
+                note: "The search engine".into(),
+                size: catalog::SEARXNG_SIZE,
+            },
+            Part {
+                icon: AppIcon::CodeXml.into(),
+                name: format!("Python {}", catalog::PYTHON_VERSION),
+                note: "A private copy; your own Python is not touched".into(),
+                size: size(|platform| platform.python.python_size),
+            },
+            Part {
+                icon: AppIcon::Package.into(),
+                name: format!("{} Python packages", catalog::package_count()),
+                note: "What SearXNG is built on".into(),
+                size: size(|platform| platform.packages_size),
+            },
+            Part {
+                icon: AppIcon::Wrench.into(),
+                name: format!("uv {}", catalog::UV_VERSION),
+                note: "Installs the rest, and is deleted afterwards".into(),
+                size: size(|platform| platform.python.uv_size),
+            },
+        ],
+        size: size(catalog::Platform::download_size),
+        disk_size: DISK_SIZE,
+        note: "It goes into Pistachio's own folder, only this computer can reach it, and you can \
+               remove it at any time. License: AGPL-3.0."
+            .into(),
+    }
 }
 
 /// Asks for the address of a SearXNG and searches with that one.
@@ -600,7 +552,14 @@ fn remove(cx: &mut App) {
 mod tests {
     use searxng::Probe;
 
-    use super::{Light, address_state};
+    use super::{Light, address_state, setup_details};
+
+    #[test]
+    fn the_details_are_all_that_is_downloaded() {
+        if super::catalog::platform().is_some() {
+            setup_details("").assert_adds_up();
+        }
+    }
 
     #[test]
     fn the_light_says_whether_an_address_can_be_used() {

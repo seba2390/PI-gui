@@ -8,12 +8,14 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::catalog::{self, DEFAULT_MODEL, MODELS, Model};
+use super::catalog::{self, DEFAULT_MODEL, MODELS, Model, ModelFile};
 use super::models::models;
+use crate::model_store::Downloadable as _;
 use crate::settings::AppSettings;
 use crate::theme::palette;
 use crate::ui::AppIcon;
 use crate::ui::dialog::open_form_dialog;
+use crate::ui::download::{self, Details, Part, download_button, download_label};
 
 /// Asks whether to download a model, showing each one's size, speed and languages.
 pub fn open_download_dialog(window: &mut Window, cx: &mut App) {
@@ -72,7 +74,7 @@ impl Render for DownloadDialog {
                     .child(
                         Button::new("speech-download-start")
                             .icon(AppIcon::Download)
-                            .label(format!("Download {}", selected.size_label()))
+                            .label(download_label(selected.size()))
                             .primary()
                             .on_click(move |_, window, cx| {
                                 start_download(selected, cx);
@@ -80,6 +82,62 @@ impl Render for DownloadDialog {
                             }),
                     ),
             )
+    }
+}
+
+/// Asks whether to download `model`, showing what that is.
+pub fn ask_to_download(model: &'static Model, window: &mut Window, cx: &mut App) {
+    download::ask_to_download(
+        model.name,
+        details(model),
+        move |cx| start_download(model, cx),
+        window,
+        cx,
+    );
+}
+
+fn details(model: &Model) -> Details {
+    Details {
+        intro: format!(
+            "{} by {} turns what you say into text on this computer. {} · {}.",
+            model.name,
+            model.maker,
+            model.languages,
+            model.speed.label()
+        ),
+        parts: model.files.iter().map(part).collect(),
+        size: model.size(),
+        // The files are used as they are.
+        disk_size: model.size(),
+        note: format!(
+            "It comes from Hugging Face ({}) and goes into Pistachio's own folder. What you say is \
+             never sent anywhere, and you can remove it at any time. License: {}.",
+            model.repo, model.license
+        ),
+    }
+}
+
+/// What a file of a model is for.
+fn part(file: &ModelFile) -> Part {
+    let has = |word| file.name.contains(word);
+    let (icon, name, what): (Icon, _, _) = if has("encoder") {
+        (IconName::Mic.into(), "Encoder", "Listens to what you say")
+    } else if has("decoder") {
+        (AppIcon::Brain.into(), "Decoder", "Finds the words")
+    } else if has("joiner") {
+        (AppIcon::Link.into(), "Joiner", "Combines the other two")
+    } else {
+        (
+            AppIcon::Library.into(),
+            "Vocabulary",
+            "The pieces of words it writes with",
+        )
+    };
+    Part {
+        icon,
+        name: name.into(),
+        note: format!("{what} · {}", file.name),
+        size: file.size,
     }
 }
 
@@ -305,13 +363,9 @@ pub fn settings_model_rows(cx: &App) -> AnyElement {
                     )
                     .into_any_element()
             } else {
-                Button::new(SharedString::from(format!("speech-get-{}", model.id)))
-                    .icon(AppIcon::Download)
-                    .label(format!("Download {}", model.size_label()))
-                    .outline()
-                    .xsmall()
+                download_button(format!("speech-get-{}", model.id), model.name, model.size())
                     .disabled(downloading.is_some())
-                    .on_click(move |_, _, cx| start_download(model, cx))
+                    .on_click(move |_, window, cx| ask_to_download(model, window, cx))
                     .into_any_element()
             };
             h_flex()
@@ -346,4 +400,16 @@ pub fn notify_download(
         SpeechModelsEvent::Cancelled => return,
     };
     window.push_notification(notification, cx);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MODELS, details};
+
+    #[test]
+    fn the_details_are_all_that_is_downloaded() {
+        for model in MODELS {
+            details(model).assert_adds_up();
+        }
+    }
 }

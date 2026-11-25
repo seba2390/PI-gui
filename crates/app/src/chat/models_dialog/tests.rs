@@ -316,7 +316,10 @@ fn locally_hosted_on_this_device(cx: &mut TestAppContext) {
             "localhost"
         );
     });
-    assert!(cx.debug_bounds("local:Ollama").is_some());
+    for server in ["Ollama", "LM Studio", "llama.cpp or MLX", "vLLM", "Jan"] {
+        let card: &'static str = format!("local:{server}").leak();
+        assert!(cx.debug_bounds(card).is_some(), "{server}");
+    }
     cx.update(|window, cx| {
         let focus = dialog.read(cx).port.focus_handle(cx);
         focus.focus(window, cx);

@@ -69,6 +69,9 @@ fn connect_to(place: &PiPlace, base_url: &str, key: Option<&str>) -> Connection 
                         "anthropic-messages" => attempt.base_url.trim_end_matches("/v1").to_owned(),
                         _ => attempt.base_url,
                     };
+                    if offer.kind == Kind::Other && offer.api == "openai-completions" {
+                        offer.kind = server::kind_on_port(&base_url);
+                    }
                     for question in server::questions(&base_url, &offer) {
                         let headers = server::headers(offer.api, key);
                         if let Ok(answer) =
@@ -136,8 +139,7 @@ pub fn find(place: &PiPlace, server: &KnownServer, host: &str) -> Option<(Kind, 
     }
     let offer = server::parse_offer(&reply.body).ok()?;
     let kind = match offer.kind {
-        // Any program may listen there; only Ollama and LM Studio have a port of their own.
-        Kind::Other if matches!(server.kind, Kind::Ollama | Kind::LmStudio) => server.kind,
+        Kind::Other => server.kind,
         kind => kind,
     };
     let models = offer.models.iter().filter(|model| !model.not_chat).count();
