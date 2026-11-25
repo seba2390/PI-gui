@@ -283,6 +283,11 @@ or takes too long, the built-in reader is used and the result says so.
   Zoom with the buttons, ⌘+ / ⌘- / ⌘0 (fill the width) or a pinch; scroll with ↑ / ↓, Space, Page Up
   / Down, Home / End, and ← / → for pages. Another button opens the file in your usual app, to
   print, search or copy from it. Files protected with a password are not shown.
+- **Text viewer:** attached text files (`.txt`, `.tex`, `.csv`, source code and any others that are
+  plain text) open in the app too, with line numbers and the colors of the Code setting. Text can be
+  selected, copied and searched (⌘F), and not changed; a button wraps long lines, which prose has
+  from the start, and another shows the file in its folder. Of a file of more than 2 MB the start is
+  shown, and above 512 KB there are no colors.
 - **Web search:** PDFs found on the web are read with the same parser; the model gets the passages
   that match, with tables kept whole.
 - **Code:** an attached PDF stays an `@path`. When pi reads a PDF, a small embedded extension returns

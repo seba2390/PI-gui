@@ -12,6 +12,8 @@ All notable changes to PI-gui are listed here. The format follows
   picture of what you attach. It opens at once and draws only the pages you look at. Links work, on
   the web and within the file (with a way back). Pages are light or dark, with photos left as they
   are. The keys scroll and zoom, and so do the trackpad and the buttons.
+- Text files that are attached open in a viewer in the app as well, from the page above a message or
+  the picture on a card: with line numbers and syntax colors, to select, copy and search (⌘F).
 - Chats read many more files, without a download: Word, PowerPoint and Excel (also `.xls` and
   `.xlsb`), OpenDocument (`.odt`, `.odp`, `.ods`) and EPUB, with headings, lists and tables; plain
   text that is not UTF-8 (UTF-16, Windows-1252, Shift JIS and others); and BMP, TIFF and SVG

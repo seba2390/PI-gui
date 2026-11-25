@@ -23,6 +23,7 @@ pub enum AppIcon {
     RotateCcw,
     Sparkles,
     SquarePen,
+    TextWrap,
     Trash,
     Wrench,
 }
@@ -49,6 +50,7 @@ impl AppIcon {
             Self::RotateCcw => "icons/rotate-ccw.svg",
             Self::Sparkles => "icons/sparkles.svg",
             Self::SquarePen => "icons/square-pen.svg",
+            Self::TextWrap => "icons/text-wrap.svg",
             Self::Trash => "icons/trash.svg",
             Self::Wrench => "icons/wrench.svg",
         }

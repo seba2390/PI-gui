@@ -22,6 +22,8 @@ mod rows;
 pub mod session;
 #[cfg(all(test, unix))]
 mod session_tests;
+pub mod text_viewer;
+mod viewer_dialog;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;

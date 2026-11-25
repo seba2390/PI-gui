@@ -11,20 +11,16 @@ use documents::viewer::{Link, PageRequest, Size as PageSize, Target, Viewer};
 use gpui_kit::component::button::Button;
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, IconName, Sizable as _, WindowExt as _, h_flex, v_flex,
-};
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, IconName, Sizable as _, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use super::viewer_dialog;
 use crate::config::AppConfig;
 use crate::theme::palette;
-use crate::ui::dialog::leave_enter;
 use crate::ui::{QuietButton as _, spinner};
 use crate::ui_state::UiState;
 
-const MAX_WIDTH: f32 = 1180.;
-const TOOLBAR: f32 = 44.;
 /// Around the visible pages, so many more are drawn.
 const AHEAD: usize = 1;
 /// And so many are kept.
@@ -36,28 +32,7 @@ const LINE: f32 = 60.;
 pub fn open(path: PathBuf, window: &mut Window, cx: &mut App) {
     let viewer = cx.new(|cx| PdfViewer::new(path, cx));
     let focus = viewer.read(cx).focus.clone();
-    window.open_dialog(cx, move |dialog, window, cx| {
-        let area = dialog_size(window, cx);
-        dialog
-            .w(area.width)
-            .centered()
-            .p_0()
-            .close_button(false)
-            .on_ok(leave_enter)
-            .child(viewer.clone())
-    });
-    // After the dialog has taken focus, for the keys.
-    window.defer(cx, move |window, cx| focus.focus(window, cx));
-}
-
-/// The dialog's size, and the size of what is in it without its border.
-fn dialog_size(window: &Window, cx: &App) -> Size<Pixels> {
-    let margin = cx.theme().spacing_tokens().lg * 2.;
-    let window = window.viewport_size();
-    size(
-        (window.width - margin).min(px(MAX_WIDTH)),
-        window.height - margin,
-    )
+    viewer_dialog::open(viewer, focus, window, cx);
 }
 
 enum State {
@@ -145,14 +120,6 @@ impl PdfViewer {
             _opening: opening,
             _release: release,
         }
-    }
-
-    fn name(&self) -> SharedString {
-        self.path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default()
-            .into()
     }
 
     /// Whether pages are dark: as was last chosen, or like the app.
@@ -480,70 +447,42 @@ impl PdfViewer {
 
     /// Instead of pages.
     fn render_message(&self, cx: &mut Context<Self>) -> AnyElement {
-        let muted = cx.theme().muted_foreground;
-        v_flex()
-            .flex_1()
-            .items_center()
-            .justify_center()
-            .gap_3()
-            .px_4()
-            .map(|this| match &self.state {
-                State::Failed(error) => this
-                    .child(div().text_sm().text_color(muted).child(error.clone()))
-                    .child(
-                        Button::new("open-elsewhere")
-                            .form_other(cx)
-                            .label("Open in another app")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                cx.open_with_system(&this.path);
-                            })),
-                    ),
-                _ => {
-                    // Until the helper answers, which is hardly seen.
-                    let ring = palette(cx).accent_icon;
-                    this.child(spinner::ring(px(22.), ring, muted.opacity(0.2), cx))
-                }
-            })
-            .into_any_element()
+        match &self.state {
+            State::Failed(error) => viewer_dialog::message(
+                error.clone(),
+                Button::new("open-elsewhere")
+                    .form_other(cx)
+                    .label("Open in another app")
+                    .on_click(cx.listener(|this, _, _, cx| cx.open_with_system(&this.path))),
+                cx,
+            )
+            .into_any_element(),
+            _ => {
+                // Until the helper answers, which is hardly seen.
+                let (ring, track) = (palette(cx).accent_icon, cx.theme().muted_foreground);
+                let ring = spinner::ring(px(22.), ring, track.opacity(0.2), cx);
+                viewer_dialog::message(SharedString::default(), ring, cx).into_any_element()
+            }
+        }
     }
 
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let theme = cx.theme();
-        let muted = theme.muted_foreground;
+        use viewer_dialog::button;
+
+        let muted = cx.theme().muted_foreground;
         let dark = Self::is_dark(cx);
-        let button = |id: &'static str, icon: IconName, label: &'static str, cx: &App| {
-            Button::new(id)
-                .quiet(cx)
-                .small()
-                .icon(icon)
-                .accessibility_label(label)
-                .tooltip(label)
-        };
         let open = self.layout.as_ref().map(|layout| {
             let page = layout.page_at(self.top() + self.scroll.bounds().size.height.as_f32() / 3.);
             (page + 1, layout.count(), layout.scale())
         });
-        h_flex()
-            .flex_none()
-            .h(px(TOOLBAR))
-            .px_3()
-            .gap_1()
-            .border_b_1()
-            .border_color(theme.border)
+        viewer_dialog::toolbar(cx)
             .when(!self.back.is_empty(), |this| {
                 this.child(
                     button("pdf-back", IconName::ArrowLeft, "Back to the link", cx)
                         .on_click(cx.listener(|this, _, _, cx| this.go_back(cx))),
                 )
             })
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_sm()
-                    .truncate()
-                    .child(self.name()),
-            )
+            .child(viewer_dialog::name(&self.path))
             .when_some(open, |this, (page, count, scale)| {
                 this.child(
                     div()
@@ -592,18 +531,17 @@ impl PdfViewer {
                 )
                 .on_click(cx.listener(|this, _, _, cx| cx.open_with_system(&this.path))),
             )
-            .child(
-                button("pdf-close", IconName::Close, "Close", cx)
-                    .on_click(|_, window, cx| window.close_dialog(cx)),
-            )
+            .child(viewer_dialog::close(cx))
     }
 }
 
 impl Render for PdfViewer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Without the dialog's border.
-        let area = dialog_size(window, cx) - size(px(2.), px(2.));
-        let view = size(area.width, (area.height - px(TOOLBAR)).max(px(1.)));
+        let area = viewer_dialog::area(window, cx);
+        let view = size(
+            area.width,
+            (area.height - px(viewer_dialog::TOOLBAR)).max(px(1.)),
+        );
         let pages = self.render_pages(view, window, cx);
         v_flex()
             .track_focus(&self.focus)
@@ -624,11 +562,11 @@ mod tests {
     use documents::viewer::{Link, Target};
     use gpui_kit::component::{Root, WindowExt as _};
     use gpui_kit::{
-        AppContext as _, Context, Entity, IntoElement, Modifiers, ParentElement as _, Render,
-        Styled as _, TestAppContext, VisualTestContext, Window, div,
+        AppContext as _, Context, Entity, IntoElement, Modifiers, Render, TestAppContext,
+        VisualTestContext, Window, div,
     };
 
-    use super::{PdfViewer, State, dialog_size};
+    use super::{PdfViewer, State, viewer_dialog};
     use crate::config::AppConfig;
     use crate::ui_state::UiState;
 
@@ -677,13 +615,8 @@ mod tests {
         });
         let viewer = cx.update(|window, cx| {
             let viewer = cx.new(|cx| PdfViewer::new(dir.join("paper.pdf"), cx));
-            let shown = viewer.clone();
-            window.open_dialog(cx, move |dialog, window, cx| {
-                dialog
-                    .w(dialog_size(window, cx).width)
-                    .p_0()
-                    .child(shown.clone())
-            });
+            let focus = viewer.read(cx).focus.clone();
+            viewer_dialog::open(viewer.clone(), focus, window, cx);
             viewer
         });
         settle(&viewer, cx);

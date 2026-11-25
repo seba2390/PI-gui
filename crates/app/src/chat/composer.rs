@@ -43,6 +43,7 @@ use super::images;
 use super::mention::{self, History};
 use super::pdf_viewer;
 use super::session::{Lifecycle, PiSession, WebMode};
+use super::text_viewer;
 use crate::config::{AppConfig, RecentFolders};
 use crate::theme::palette;
 use crate::ui::{AppIcon, FadingText, QuietButton as _, spinner};
@@ -1733,7 +1734,7 @@ impl Composer {
         Room::new(limit, self.session.read(cx).context_usage())
     }
 
-    /// Shows an attached picture or PDF file in its viewer.
+    /// Shows an attached picture, PDF or text file in its viewer.
     fn show_attachment(&self, order: u64, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(loading) = self.loading.iter().find(|l| l.order == order) {
             pdf_viewer::open(loading.path.clone(), window, cx);
@@ -1754,6 +1755,7 @@ impl Composer {
             .filter(|path| path.is_file())
             .or_else(remembered);
         match path {
+            Some(path) if attachment.is_plain() => text_viewer::open(path, window, cx),
             Some(path) => pdf_viewer::open(path, window, cx),
             None => {
                 let name = &attachment.name;
@@ -2437,8 +2439,18 @@ impl Attachment {
             why,
             left_out: matches!(self.inline, Some(InlineText::Skipped(_))),
             reading: false,
-            can_show: self.image.is_some() || is_pdf(Path::new(self.name.as_ref())),
+            can_show: self.image.is_some()
+                || self.is_plain()
+                || is_pdf(Path::new(self.name.as_ref())),
         }
+    }
+
+    /// Whether it is plain text.
+    fn is_plain(&self) -> bool {
+        let read = matches!(self.inline, Some(InlineText::Document(_)));
+        documents::Kind::of(Path::new(self.name.as_ref())).is_none()
+            && self.image.is_none()
+            && (read || matches!(self.preview, Preview::Text(_)))
     }
 
     fn kind(&self) -> &'static str {
@@ -2446,7 +2458,7 @@ impl Attachment {
             "Image"
         } else if let Some(kind) = documents::Kind::of(Path::new(self.name.as_ref())) {
             kind.label()
-        } else if matches!(self.preview, Preview::Text(_)) {
+        } else if self.is_plain() {
             "Text"
         } else {
             "File"
@@ -3555,17 +3567,21 @@ mod draft_tests {
                 .iter()
                 .map(|a| a.card(&mut room).can_show)
                 .collect();
-            assert_eq!(shown, [true, false, true]);
+            assert_eq!(shown, [true, true, true]);
             assert!(matches!(&attachments[1].preview, Preview::Text(text) if text == "two\nlines"));
         });
-        // Clicking the picture of the PDF, with nothing else left, shows it.
-        act(&composer, cx, |composer, _, cx| {
-            composer.attachments.truncate(1);
-            cx.notify();
-        });
-        let picture = cx.debug_bounds("attachment-picture").unwrap();
-        cx.simulate_click(picture.center(), Modifiers::none());
-        assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+        // Clicking the picture of the text or the PDF, with nothing else after it, shows it.
+        for left in [2, 1] {
+            act(&composer, cx, |composer, window, cx| {
+                window.close_all_dialogs(cx);
+                composer.attachments.truncate(left);
+                cx.notify();
+            });
+            assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
+            let picture = cx.debug_bounds("attachment-picture").unwrap();
+            cx.simulate_click(picture.center(), Modifiers::none());
+            assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+        }
     }
 
     /// The text of attached files goes along with a message, and comes back as files with it.

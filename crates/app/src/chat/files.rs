@@ -1,5 +1,5 @@
 //! Files attached to a prompt, whose text went along with it: small pages above the prompt, like
-//! its pictures. Clicking a PDF shows it here, and another document opens it.
+//! its pictures. Clicking a PDF or a text shows it here, and another document opens it.
 
 use documents::{Kind, attached};
 use gpui_kit::component::tooltip::Tooltip;
@@ -8,7 +8,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use pi_sessions::prompt::AttachedFile;
 
-use super::pdf_viewer;
+use super::{pdf_viewer, text_viewer};
 use crate::config::AppConfig;
 use crate::theme::palette;
 
@@ -63,8 +63,7 @@ fn page(id: SharedString, file: &AttachedFile, dir: &std::path::Path, cx: &App) 
                     pdf_viewer::open(path, window, cx);
                 }
                 Some(path) if Kind::of(&path).is_some() => cx.open_with_system(&path),
-                // Opening another kind of file could run it.
-                Some(path) => cx.reveal_path(&path),
+                Some(path) => text_viewer::open(path, window, cx),
                 None => {
                     window.push_notification(
                         format!("{name} is not where it was attached from."),
@@ -131,9 +130,18 @@ mod tests {
 
     #[gpui_kit::test]
     fn a_pdf_is_shown_here(cx: &mut TestAppContext) {
+        assert!(opens_a_viewer("report.pdf", "%PDF-1.4", cx));
+    }
+
+    #[gpui_kit::test]
+    fn a_text_is_shown_here(cx: &mut TestAppContext) {
+        assert!(opens_a_viewer("paper.tex", "text", cx));
+    }
+
+    fn opens_a_viewer(name: &'static str, contents: &str, cx: &mut TestAppContext) -> bool {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("report.pdf");
-        std::fs::write(&path, "%PDF-1.4").unwrap();
+        let path = dir.path().join(name);
+        std::fs::write(&path, contents).unwrap();
         let documents_dir = dir.path().join("documents");
         let id = documents::attached::remember(&documents_dir, &path);
         cx.update(|cx| {
@@ -145,12 +153,12 @@ mod tests {
             cx.set_global(config);
         });
         let (_, cx) = cx.add_window_view(|window, cx| {
-            let name = "report.pdf".into();
+            let name = name.into();
             let message = cx.new(|_| Message(vec![AttachedFile { name, id }]));
             Root::new(message, window, cx)
         });
         let page = cx.debug_bounds("attached-file").unwrap();
         cx.simulate_click(page.center(), Modifiers::none());
-        assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+        cx.update(|window, cx| window.has_active_dialog(cx))
     }
 }
