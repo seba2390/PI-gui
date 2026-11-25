@@ -42,6 +42,27 @@ pub const EXTENSION_SOURCE: &str = include_str!("extension.ts");
 /// The environment variable that tells the extension which executable reads documents.
 pub const BIN_ENV: &str = "PISTACHIO_DOCUMENTS_BIN";
 
+/// Writes a shell script that can be run. Another process writes it: one that was just started
+/// here could still hold the file open, and Linux does not run a file that is being written.
+#[cfg(test)]
+#[cfg(unix)]
+pub(crate) fn write_program(path: &Path, script: &str) {
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+
+    let mut writer = Command::new("/bin/sh")
+        .args(["-c", "cat > \"$0\" && chmod 755 \"$0\""])
+        .arg(path)
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let text = format!("#!/bin/sh\n{script}\n");
+    let mut stdin = writer.stdin.take().unwrap();
+    stdin.write_all(text.as_bytes()).unwrap();
+    drop(stdin);
+    assert!(writer.wait().unwrap().success());
+}
+
 /// Writes the extension into `dir` (only when it changed) and returns its path.
 pub fn install_extension(dir: &Path) -> io::Result<PathBuf> {
     fs::create_dir_all(dir)?;

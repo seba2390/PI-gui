@@ -21,6 +21,16 @@ All notable changes to PI-gui are listed here. The format follows
   the work: what was planned, searched, read and checked, and drafts as rows that open. If it is
   stopped, the latest complete draft is the answer, marked as not checked.
 - Deep search reads PDF files.
+- Settings → Document parsing chooses what reads PDF files. The built-in reader stays the default;
+  PyMuPDF4LLM, Docling and MinerU can be downloaded for better tables, columns, formulas and scans.
+  Each shows what it is good at, its size and its license before, is checked against checksums, runs
+  without network, and can be removed. If it is missing, fails or takes too long, the built-in
+  reader is used and the result says so.
+- PDF files can be attached to chats. The chip says “Reading…” until it is done, and a long document
+  is shortened to its outline and what matches the message. With Docling, Word, PowerPoint and Excel
+  files can be attached too.
+- pi reads PDF files as Markdown in Code sessions on this computer.
+- PDF files that chats find on the web are read by the chosen parser.
 - Long research no longer fills up the context: older pages are cut down to their key passages, and
   nothing is shown to the model twice. The “Working…” line says what it is doing.
 - SearXNG can run on this computer, with one click and without Docker (macOS and Linux). Choosing

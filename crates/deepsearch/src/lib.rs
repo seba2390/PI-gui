@@ -6,7 +6,7 @@
 //! `/websearch` command, adds the mode's instructions and limits, keeps deep search at its
 //! research until its effort's floor is reached, has the report checked, and runs this crate's
 //! helper ([`cli`]: the app's own executable started with [`cli::FLAG`]) for the actual work: searching ([`search`]), fetching only public pages
-//! ([`http`]), extracting the readable text ([`extract`]) and keeping the passages that matter
+//! ([`http`]), extracting the readable text ([`extract`], [`pdf`]) and keeping the passages that matter
 //! ([`rank`]), and checking a report's links and claims ([`check`]). Settings live in [`config`].
 
 pub mod check;

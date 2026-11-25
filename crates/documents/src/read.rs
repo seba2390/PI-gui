@@ -142,7 +142,7 @@ pub fn read_bytes(
         )
     });
     let failed = |error: &str| match &note {
-        Some(note) => format!("{error}. {note}"),
+        Some(note) => format!("{error}. {}", note.trim_end_matches('.')),
         None => error.to_owned(),
     };
     let pages = builtin::read(bytes).map_err(|error| failed(&error))?;

@@ -283,13 +283,10 @@ fn bytes(text: &str) -> Option<u64> {
 #[cfg(test)]
 #[cfg(unix)]
 pub(crate) fn fake(dir: &Path, parser: Parser, python: &str) {
-    use std::os::unix::fs::PermissionsExt as _;
-
     let layout = Layout::installed(dir, parser);
     let path = layout.python();
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(&path, format!("#!/bin/sh\n{python}\n")).unwrap();
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    crate::write_program(&path, python);
     let revision = parser.download().map_or("other".into(), |d| d.revision());
     fs::write(layout.marker(), revision).unwrap();
 }

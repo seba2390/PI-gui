@@ -273,12 +273,15 @@ impl Download {
     }
 
     /// What it takes on disk, about. Packages are compressed when they are downloaded; by how
-    /// much was measured on a Mac.
+    /// much was measured on a Mac. On Linux, Docling has about 3 GB of NVIDIA's libraries more,
+    /// which compress less.
     pub fn disk_size(&self) -> u64 {
+        const NVIDIA: u64 = 500_000_000;
+        let size = self.packages_size();
         let packages = match self.parser {
-            Parser::Pymupdf4llm => self.packages_size() * 22 / 10,
-            Parser::Docling => self.packages_size() * 33 / 10,
-            Parser::Builtin | Parser::Mineru => self.packages_size() * 35 / 10,
+            Parser::Pymupdf4llm => size * 22 / 10,
+            Parser::Docling => size.min(NVIDIA) * 36 / 10 + size.saturating_sub(NVIDIA) * 2,
+            Parser::Builtin | Parser::Mineru => size * 32 / 10,
         };
         PYTHON_DISK + packages + self.models_size()
     }

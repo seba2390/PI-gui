@@ -92,8 +92,6 @@ fn reply(out: &str) -> Result<Reply, String> {
 #[cfg(test)]
 #[cfg(unix)]
 mod tests {
-    use std::fs;
-    use std::os::unix::fs::PermissionsExt as _;
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
@@ -104,8 +102,7 @@ mod tests {
 
     fn helper(dir: &Path, script: &str) -> PathBuf {
         let path = dir.join("app");
-        fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        crate::write_program(&path, script);
         path
     }
 

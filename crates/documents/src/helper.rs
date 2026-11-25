@@ -18,7 +18,7 @@ const MAX_OUTPUT: u64 = 32 * 1024 * 1024;
 const LOG_LINES: usize = 20;
 /// Why a parser with models did not get its turn ([`turn`]).
 pub(crate) const BUSY: &str = "it is busy with other documents";
-/// What a run leaves behind when it is killed is deleted after this long.
+/// What a run leaves behind when it is killed is deleted after this long at the latest.
 const LEFT_OVER: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Ends the parser and what it started when its standard input ends, which is when the app's
@@ -63,9 +63,18 @@ impl Run {
         sweep(&runs);
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
         let dir = runs.join(format!("{}-{n}", std::process::id()));
-        fs::create_dir_all(&dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
+        private_dir(&dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
         Ok(Self { dir })
     }
+}
+
+/// Only the user's: it holds a copy of their document.
+fn private_dir(dir: &Path) -> std::io::Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(dir)
 }
 
 impl Drop for Run {
@@ -88,10 +97,24 @@ fn sweep(runs: &Path) {
             .and_then(|meta| meta.modified())
             .ok()
             .and_then(|modified| SystemTime::now().duration_since(modified).ok());
-        if age.is_some_and(|age| age > LEFT_OVER) {
+        let name = entry.file_name();
+        if age.is_some_and(|age| age > LEFT_OVER) || is_over(&name.to_string_lossy()) {
             let _ = fs::remove_dir_all(entry.path());
         }
     }
+}
+
+/// Whether the process that made the run called `name` has ended.
+fn is_over(name: &str) -> bool {
+    #[cfg(unix)]
+    if let Some(id) = name.split('-').next().and_then(|id| id.parse().ok())
+        && let Some(id) = rustix::process::Pid::from_raw(id)
+    {
+        let gone = rustix::process::test_kill_process(id);
+        return gone.is_err_and(|error| error == rustix::io::Errno::SRCH);
+    }
+    let _ = name;
+    false
 }
 
 /// Reads `file` with the `parser` installed at `layout`, as Markdown. Blocks, for at most
@@ -406,10 +429,18 @@ mod tests {
     #[test]
     fn what_killed_runs_left_is_deleted_later() {
         let dir = tempfile::tempdir().unwrap();
-        let old = runs_dir(dir.path()).join("1-0");
-        fs::create_dir_all(&old).unwrap();
+        // Of a process that runs (this one's parent), and of one that does not.
+        let parent = rustix::process::getppid().unwrap().as_raw_nonzero();
+        let old = runs_dir(dir.path()).join(format!("{parent}-0"));
+        let ended = Command::new("/bin/sh").arg("-c").arg("exit").spawn();
+        let mut ended = ended.unwrap();
+        ended.wait().unwrap();
+        let over = runs_dir(dir.path()).join(format!("{}-0", ended.id()));
+        for left in [&old, &over] {
+            fs::create_dir_all(left).unwrap();
+        }
         let run = Run::new(dir.path()).unwrap();
-        assert!(old.exists() && run.dir.exists());
+        assert!(old.exists() && run.dir.exists() && !over.exists());
         let long_ago = SystemTime::now() - 2 * LEFT_OVER;
         fs::File::open(&old)
             .unwrap()

@@ -34,8 +34,8 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
     or run anything on your computer. Chats run pi in a dedicated empty folder
     (`~/.pi/agent/pistachio/chat`) with only deep search's two web tools (`--tools
     web_search,web_fetch --no-mcp`), which stay off until you turn web search on. Text
-    attachments are pasted into the prompt instead of being referenced by path, and `!`
-    shell commands are disabled.
+    attachments are pasted into the prompt instead of being referenced by path (PDF files as
+    Markdown, see [Documents](#documents)), and `!` shell commands are disabled.
   - **Web search** (Chat): the globe button next to the paperclip chooses how the model uses
     the web, per chat (remembered in the session; `/websearch off|search|deep` works too):
     - **Search**: a quick lookup when needed (a few searches and pages), then a concise answer
@@ -223,6 +223,50 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
 - macOS and Linux, plus an experimental Windows build. GPU-rendered with [GPUI](https://gpui.rs) via
   [gpui-kit](https://gpui-kit.com).
 
+## Documents
+
+PDF files are read as Markdown: the ones you attach to a chat, the ones chats find on the web, and
+the ones pi reads in Code sessions on this computer. Settings → Document parsing chooses what reads
+them. The built-in reader is the default and needs no download; the others are downloaded on request
+and can be removed again (macOS and Linux):
+
+| Parser | Good at | Download (on disk) | License |
+|---|---|---|---|
+| Built-in ([pdf-extract](https://crates.io/crates/pdf-extract)) | plain text, page by page | none | MIT |
+| [PyMuPDF4LLM](https://github.com/pymupdf/pymupdf) | fast; headings, columns and tables of PDFs made on a computer | 143 MB (320 MB) | AGPL-3.0 |
+| [Docling](https://github.com/docling-project/docling) | complex layouts, tables, scans; also Word, PowerPoint and Excel files | 788 MB (1.8 GB); Linux 3.7 GB (8.5 GB) | MIT |
+| [MinerU](https://github.com/opendatalab/MinerU) | academic papers: formulas, dense columns, long tables, scans | 1.0 GB (1.3 GB) | MinerU Open Source License (Apache-2.0 with added terms) |
+
+Sizes are of a Mac; Linux differs little, except that Docling comes with NVIDIA's libraries there
+(that is how PyTorch is published for Linux). MinerU runs its small models ("basic"), not the
+language model that needs a strong GPU. Macs with an Intel processor only have PyMuPDF4LLM (an older
+version), because the others are not published for them any more; parsers need macOS 14 or newer,
+and Windows has only the built-in reader. Settings says what is not available.
+
+They do not come with Pistachio. The licenses fit because each is an optional program that you
+download and that runs as a separate process; nothing of it is part of Pistachio. Downloading asks
+first and shows the size and license. uv, a private Python, the packages and the models come from
+GitHub, PyPI and Hugging Face, each pinned and checked against its checksum, and go to
+`~/.pi/agent/pistachio/documents/`; your own Python is not touched. A new installation must read a
+small test document before it replaces an old one. Parsers run one process per document, without
+network, and for at most 10 minutes (2 for a PDF from the web). If the chosen one is missing, fails
+or takes too long, the built-in reader is used and the result says so.
+
+- **Chats:** an attached PDF shows “Reading…” until it is done; it can be removed meanwhile, and the
+  message is not sent before. A document of more than 256 KB of text is shortened to its outline,
+  its start and the parts that match your message, and the message says so. With Docling, Word,
+  PowerPoint and Excel files (`.docx`, `.pptx`, `.xlsx`) can be attached the same way. Files on this
+  computer attached to a session on an SSH host are read too.
+- **Web search:** PDFs found on the web are read with the same parser; the model gets the passages
+  that match, with tables kept whole.
+- **Code:** an attached PDF stays an `@path`. When pi reads a PDF, a small embedded extension returns
+  its Markdown; `offset` and `limit` are lines of that. Other files are pi's own business, and so are
+  all files in sessions on an SSH host.
+- `config.json` in that folder has the parser and the limits: `timeout_secs`, `web_timeout_secs` and
+  `max_file_bytes` (100 MB). The text of the last documents is kept in `cache` there (24 at most),
+  because long ones are read in parts.
+- Try it without the GUI: `pistachio --documents-tool parse paper.pdf` prints the Markdown.
+
 ## Speech to text
 
 The microphone button at the right of the message box dictates instead of typing, and so does
@@ -302,6 +346,8 @@ mouse.
 - **Conversation names:** automatic names for new conversations (off by default), whether the
   conversation's own model or a small model on this computer makes them, and the local models
   (download, use, remove).
+- **Document parsing:** what reads PDF files, and the parsers that can be downloaded (size, license,
+  download, use, update, remove).
 
 The app's own settings live in `~/.pi/agent/pistachio/settings.json`.
 
