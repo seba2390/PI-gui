@@ -16,6 +16,8 @@ use crate::install::Layout;
 /// More Markdown than this is refused.
 const MAX_OUTPUT: u64 = 32 * 1024 * 1024;
 const LOG_LINES: usize = 20;
+/// Why a parser with models did not get its turn ([`turn`]).
+pub(crate) const BUSY: &str = "it is busy with other documents";
 /// What a run leaves behind when it is killed is deleted after this long.
 const LEFT_OVER: Duration = Duration::from_secs(24 * 60 * 60);
 
@@ -78,6 +80,9 @@ fn sweep(runs: &Path) {
         return;
     };
     for entry in entries.flatten() {
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
         let age = entry
             .metadata()
             .and_then(|meta| meta.modified())
@@ -99,9 +104,40 @@ pub(crate) fn parse(
     timeout: Duration,
     cancel: &AtomicBool,
 ) -> Result<String, String> {
+    let _turn = if parser.has_models() {
+        Some(turn(dir, timeout, cancel)?)
+    } else {
+        None
+    };
     let run = Run::new(dir)?;
     let command = command(layout, parser, file, &run.dir)?;
     execute(command, &output(&run.dir), timeout, cancel)
+}
+
+/// Waits until no other parser with models runs, in any process: several would fill the memory.
+/// The turn ends when the file is dropped.
+fn turn(dir: &Path, timeout: Duration, cancel: &AtomicBool) -> Result<fs::File, String> {
+    let path = runs_dir(dir).join("lock");
+    let failed = |e: &dyn std::fmt::Display| format!("opening {}: {e}", path.display());
+    fs::create_dir_all(runs_dir(dir)).map_err(|e| failed(&e))?;
+    let file = fs::File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .map_err(|e| failed(&e))?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(file),
+            Err(fs::TryLockError::Error(error)) => return Err(failed(&error)),
+            Err(fs::TryLockError::WouldBlock) => {}
+        }
+        if Instant::now() >= deadline || cancel.load(Ordering::Relaxed) {
+            return Err(BUSY.into());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 fn output(run: &Path) -> PathBuf {
@@ -347,6 +383,24 @@ mod tests {
         assert_eq!(env("PISTACHIO_MODELS").unwrap(), layout.models());
         assert!(env("HOME").unwrap().to_string_lossy().ends_with("/home"));
         assert!(super::command(&layout, Parser::Builtin, file, dir.path()).is_err());
+    }
+
+    #[test]
+    fn parsers_with_models_take_turns() {
+        let dir = tempfile::tempdir().unwrap();
+        let go = AtomicBool::new(false);
+        let short = Duration::from_millis(150);
+        let first = turn(dir.path(), short, &go).unwrap();
+        assert_eq!(turn(dir.path(), short, &go).unwrap_err(), BUSY);
+        std::thread::scope(|scope| {
+            let second = scope.spawn(|| turn(dir.path(), LONG, &go).is_ok());
+            std::thread::sleep(short);
+            drop(first);
+            assert!(second.join().unwrap());
+        });
+        // The lock is not taken for what a killed run left.
+        sweep(&runs_dir(dir.path()));
+        assert!(runs_dir(dir.path()).join("lock").exists());
     }
 
     #[test]

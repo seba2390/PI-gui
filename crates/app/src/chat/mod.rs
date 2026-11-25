@@ -4,6 +4,7 @@ mod commands;
 pub mod composer;
 mod context_panel;
 pub mod dialogs;
+mod document;
 mod file_links;
 mod file_picker;
 mod find;

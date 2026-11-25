@@ -107,6 +107,11 @@ impl Parser {
 
     /// Whether it reads scans (pages that are pictures).
     pub fn reads_scans(self) -> bool {
+        self.has_models()
+    }
+
+    /// Whether it loads models, so that only one of it should run.
+    pub(crate) fn has_models(self) -> bool {
         matches!(self, Self::Docling | Self::Mineru)
     }
 

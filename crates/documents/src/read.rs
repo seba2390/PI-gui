@@ -197,7 +197,10 @@ fn parse(
         Ok(markdown) => Entry::Markdown(markdown.clone()),
         Err(error) => Entry::Failed(error.clone()),
     };
-    cache::store(dir, bytes, &revision, &entry);
+    // Not having had a turn says nothing about the document.
+    if entry != Entry::Failed(helper::BUSY.into()) {
+        cache::store(dir, bytes, &revision, &entry);
+    }
     result
 }
 
@@ -264,7 +267,8 @@ mod tests {
         let runs = format!("{}.runs", python.display());
         assert_eq!(fs::read_to_string(runs).unwrap(), "run\nrun\n");
         // Its files are gone.
-        assert_eq!(fs::read_dir(dir.join("tmp")).unwrap().count(), 0);
+        let left = fs::read_dir(dir.join("tmp")).unwrap().flatten();
+        assert_eq!(left.map(|e| e.file_name()).collect::<Vec<_>>(), ["lock"]);
     }
 
     #[test]

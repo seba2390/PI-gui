@@ -1,5 +1,6 @@
 //! The Settings page, shown in the chat column: General, pi & models, Web search, SSH
-//! connections, Speech to text and Conversation names. Every change is saved right away.
+//! connections, Speech to text, Conversation names and Document parsing. Every change is saved
+//! right away.
 
 use std::path::{Path, PathBuf};
 
@@ -21,6 +22,7 @@ use searxng::{Installed, Probe};
 use super::{AppSettings, StartMode, TextSize, ThemeChoice, local_search};
 use crate::code_colors::CodeColors;
 use crate::config::AppConfig;
+use crate::document_parsers::{DocumentParsers, document_parsers};
 use crate::remote_ui::SavedHostAction;
 use crate::search_server::{Running, SearchServerEvent, search_server};
 use crate::ui::spinner::IndicatorStyle;
@@ -116,10 +118,13 @@ impl SettingsView {
         };
         let brave_key = key_input(brave, "From BRAVE_API_KEY if empty", window, cx);
         let tavily_key = key_input(tavily, "From TAVILY_API_KEY if empty", window, cx);
+        let parsers = document_parsers(cx);
+        parsers.update(cx, DocumentParsers::refresh);
         let subscriptions = vec![
-            // Speech to text and conversation names: download progress and installed models.
+            // Speech to text, conversation names and document parsers: download progress and installed models.
             cx.observe(&crate::stt::models::models(cx), |_, _, cx| cx.notify()),
             cx.observe(&crate::naming::models(cx), |_, _, cx| cx.notify()),
+            cx.observe(&parsers, |_, _, cx| cx.notify()),
             cx.subscribe(&brave_key, |_, input, event: &InputEvent, cx| {
                 if let InputEvent::Change = event {
                     let key = input.read(cx).value().trim().to_owned();
@@ -832,6 +837,11 @@ impl SettingsView {
         self.start_page = 5;
     }
 
+    /// Opens on the Document parsing page (before the first render).
+    pub fn start_on_documents(&mut self) {
+        self.start_page = 6;
+    }
+
     fn speech_page(&self) -> SettingPage {
         use crate::stt::{AutoStop, catalog};
         SettingPage::new("Speech to text")
@@ -912,6 +922,7 @@ impl Render for SettingsView {
                     self.ssh_page(&weak),
                     self.speech_page(),
                     naming_page(cx),
+                    super::documents::page(),
                 ]),
         )
     }

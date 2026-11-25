@@ -246,6 +246,7 @@ impl MainWindow {
         let chat = cx.new(|cx| ChatView::idle(cwd.clone(), mode, window, cx));
         let right_panel = cx.new(|cx| RightPanel::new(cwd, window, cx));
         let chat_subscription = cx.subscribe_in(&chat, window, Self::on_chat_event);
+        let document_parsers = crate::document_parsers::document_parsers(cx);
         let subscriptions = vec![
             cx.subscribe_in(&sidebar, window, Self::on_sidebar_event),
             cx.subscribe_in(
@@ -278,6 +279,13 @@ impl MainWindow {
                 window,
                 |_, _, event: &crate::search_server::SearchServerEvent, window, cx| {
                     crate::search_server::notify(event, window, cx);
+                },
+            ),
+            cx.subscribe_in(
+                &document_parsers,
+                window,
+                |_, _, event: &crate::document_parsers::DocumentParsersEvent, window, cx| {
+                    crate::document_parsers::notify(event, window, cx);
                 },
             ),
             cx.subscribe_in(
@@ -487,6 +495,12 @@ impl MainWindow {
                     self.open_settings(&OpenSettings, window, cx);
                     if let Some(settings) = self.settings.as_ref().map(|s| s.0.clone()) {
                         settings.update(cx, |settings, _| settings.start_on_names());
+                    }
+                }
+                "settings-documents" => {
+                    self.open_settings(&OpenSettings, window, cx);
+                    if let Some(settings) = self.settings.as_ref().map(|s| s.0.clone()) {
+                        settings.update(cx, |settings, _| settings.start_on_documents());
                     }
                 }
                 "speech-download" => crate::stt::ui::open_download_dialog(window, cx),
