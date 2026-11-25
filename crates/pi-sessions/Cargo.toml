@@ -1,6 +1,6 @@
 [package]
 name = "pi-sessions"
-description = "Read-only index of pi's on-disk session files for the session sidebar"
+description = "Index of pi's on-disk session files for the session sidebar, and side chats' copies"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,6 +12,7 @@ repository.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 dirs.workspace = true
+fastrand.workspace = true
 log.workspace = true
 
 [dev-dependencies]

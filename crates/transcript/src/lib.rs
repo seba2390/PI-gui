@@ -9,6 +9,7 @@ mod context;
 pub mod explore;
 mod format;
 mod history;
+mod in_flight;
 mod model;
 mod reducer;
 pub mod research;
@@ -18,6 +19,7 @@ pub mod tool;
 
 pub use context::ContextEstimate;
 pub use format::{format_duration, format_tokens};
+pub use in_flight::InFlight;
 pub use model::{
     AboutReport, AssistantItem, BashItem, BashStatus, Block, BlockKind, CheckItem, ClaimCounts,
     Image, ItemId, ItemKind, LinkCounts, NestedEntry, Notice, NoticeKind, Problem, ProblemKind,

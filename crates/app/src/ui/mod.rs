@@ -8,6 +8,7 @@ mod drag;
 mod fading_text;
 mod hover_switch;
 mod icons;
+pub mod knob;
 pub(crate) mod list;
 mod menu;
 mod message_scroller;

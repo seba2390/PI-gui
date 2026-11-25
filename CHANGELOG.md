@@ -11,6 +11,13 @@ All notable changes to PI-gui are listed here. The format follows
 - Settings → pi & models lists the servers and API keys that are connected, and whether the servers
   answer. Clicking one changes or removes it.
 - Models can be tested with a short message before they are added.
+- Side chats: the "Side chat" tab on the chat's right edge (or `/side`, or ⌘⇧N) opens a second
+  conversation next to the one you are in, with everything it holds at that moment: messages,
+  thinking, tool calls and their results, also while the agent is still working. A reply still
+  being written comes along up to where it was, marked as cut off, and a tool still running
+  comes along with its output so far. The original keeps working undisturbed. The side chat
+  keeps the model and thinking level, works in Chat and Code (on the same folder) and over SSH,
+  and is listed in the sidebar under the conversation it came from. (#43)
 
 ### Changed
 
@@ -24,6 +31,8 @@ All notable changes to PI-gui are listed here. The format follows
 
 ### Fixed
 
+- Slider knobs (deep search's effort, the web search settings) have a thin edge and a soft
+  shadow, so they no longer disappear against the white background of the light theme.
 - Long names in the model menu fade out at the menu's edge, also in the menus for adding models.
   Before, they were drawn past it.
 

@@ -239,6 +239,16 @@ impl PiClient {
         Ok(self.call::<Data>(Command::GetMessages).await?.messages)
     }
 
+    /// [`get_messages`](Self::get_messages) exactly as pi sends them (every field kept), to
+    /// write them into another session file.
+    pub async fn get_messages_raw(&self) -> Result<Vec<serde_json::Value>, RpcError> {
+        #[derive(Deserialize)]
+        struct Data {
+            messages: Vec<serde_json::Value>,
+        }
+        Ok(self.call::<Data>(Command::GetMessages).await?.messages)
+    }
+
     pub async fn get_available_models(&self) -> Result<Vec<Model>, RpcError> {
         #[derive(Deserialize)]
         struct Data {

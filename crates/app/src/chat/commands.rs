@@ -14,7 +14,9 @@ use transcript::{ItemKind, NoticeKind};
 
 use super::dialogs::{PickerItem, open_picker};
 use super::session::{AfterFork, Lifecycle, PiSession};
-use crate::actions::{NewChat, OpenLogin, OpenSettings, ReloadSession, ResumeSession};
+use crate::actions::{
+    NewChat, OpenLogin, OpenSettings, OpenSideChat, ReloadSession, ResumeSession,
+};
 
 pub enum CommandOutcome {
     /// Executed; clear the composer.
@@ -42,6 +44,10 @@ pub const SUPPORTED: &[(&str, &str)] = &[
         "Branch from an earlier message (opens in a new session)",
     ),
     ("clone", "Continue in a copy of this conversation"),
+    (
+        "side",
+        "Open a side chat with everything here so far, next to this one",
+    ),
     ("resume", "Open an earlier session"),
     ("export", "Export the conversation as HTML (optional path)"),
     (
@@ -67,7 +73,7 @@ pub const SUPPORTED: &[(&str, &str)] = &[
 /// Built-ins without arguments: Enter on their row runs them right away, as in pi's terminal.
 /// `/share` (it uploads) and `/quit` are left out, so a half-typed name never runs them.
 const RUN_AT_ONCE: &[&str] = &[
-    "new", "session", "copy", "fork", "clone", "resume", "settings", "reload",
+    "new", "session", "copy", "fork", "clone", "side", "resume", "settings", "reload",
 ];
 
 /// One completion candidate for `/` input.
@@ -300,6 +306,7 @@ const BUILTINS: &[&str] = &[
     "session",
     "copy",
     "clone",
+    "side",
     "quit",
     "exit",
     "settings",
@@ -431,6 +438,7 @@ fn builtin(
         }
         "fork" => pick_fork(session, window, cx),
         "clone" => session.update(cx, |session, cx| session.clone_session(cx)),
+        "side" => window.dispatch_action(Box::new(OpenSideChat), cx),
         "resume" => window.dispatch_action(Box::new(ResumeSession), cx),
         "settings" => window.dispatch_action(Box::new(OpenSettings), cx),
         "reload" => window.dispatch_action(Box::new(ReloadSession), cx),

@@ -112,6 +112,8 @@ pub struct Sidebar {
     trashing: HashSet<PathBuf>,
     /// The open session: its host (`None`: this computer) and file.
     active: Option<(Option<HostId>, PathBuf)>,
+    /// The session open in the side column, if any.
+    side_active: Option<(Option<HostId>, PathBuf)>,
     /// The Skills page is showing (its button is highlighted).
     skills_active: bool,
     /// The Settings page is open (its footer row is highlighted).
@@ -168,6 +170,7 @@ impl Sidebar {
             sessions: Vec::new(),
             trashing: HashSet::new(),
             active: None,
+            side_active: None,
             skills_active: false,
             settings_active: false,
             filter,
@@ -231,6 +234,18 @@ impl Sidebar {
         let active = path.map(|path| (host, path));
         if self.active != active {
             self.active = active;
+            cx.notify();
+        }
+    }
+
+    /// Marks the session open in the side column (`None`: no side chat).
+    pub fn set_side_active(
+        &mut self,
+        side: Option<(Option<HostId>, PathBuf)>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.side_active != side {
+            self.side_active = side;
             cx.notify();
         }
     }
@@ -426,9 +441,10 @@ impl Sidebar {
         if self.skills_active || self.settings_active {
             return false;
         }
-        self.active
-            .as_ref()
-            .is_some_and(|(active_host, active)| active_host.as_ref() == host && active == path)
+        [&self.active, &self.side_active]
+            .into_iter()
+            .flatten()
+            .any(|(active_host, active)| active_host.as_ref() == host && active == path)
     }
 
     /// Whether the first scan of pi's session folder has finished.
@@ -747,9 +763,11 @@ impl Sidebar {
         match self.mode {
             Mode::Chat => {
                 let mut current = "";
-                for session in sessions {
+                for row in pi_sessions::side_chat::nest(sessions) {
+                    let session = row.session;
                     let group = bucket(session.modified, now);
-                    if group != current {
+                    // Side chats stay under their conversation, whatever their age.
+                    if row.depth == 0 && group != current {
                         current = group;
                         list = list.child(
                             div()
@@ -761,7 +779,7 @@ impl Sidebar {
                                 .child(group),
                         );
                     }
-                    list = list.child(rows::session_row(self, session, 0, None, now, cx));
+                    list = list.child(rows::session_row(self, &row, 0, None, now, cx));
                 }
             }
             Mode::Code => {
@@ -781,8 +799,8 @@ impl Sidebar {
                         cx,
                     ));
                     if open {
-                        for session in group.sessions {
-                            list = list.child(rows::session_row(self, session, 1, None, now, cx));
+                        for row in pi_sessions::side_chat::nest(group.sessions) {
+                            list = list.child(rows::session_row(self, &row, 1, None, now, cx));
                         }
                     }
                 }
@@ -856,9 +874,8 @@ impl Sidebar {
                     cx,
                 ));
                 if open {
-                    for session in group.sessions {
-                        list =
-                            list.child(rows::session_row(self, session, 2, Some(&host), now, cx));
+                    for row in pi_sessions::side_chat::nest(group.sessions) {
+                        list = list.child(rows::session_row(self, &row, 2, Some(&host), now, cx));
                     }
                 }
             }

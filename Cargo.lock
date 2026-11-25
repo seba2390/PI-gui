@@ -6946,6 +6946,7 @@ name = "pi-sessions"
 version = "0.5.2"
 dependencies = [
  "dirs 7.0.0",
+ "fastrand",
  "log",
  "pretty_assertions",
  "serde",
