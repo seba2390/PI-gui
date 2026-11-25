@@ -279,7 +279,7 @@ and Windows has only the built-in reader. Settings says what is not available.
 
 They do not come with Pistachio. The licenses fit because each is an optional program that you
 download and that runs as a separate process; nothing of it is part of Pistachio. Downloading asks
-first and shows the size and license. uv, a private Python, the packages and the models come from
+first and shows its parts with their sizes, and the license. uv, a private Python, the packages and the models come from
 GitHub, PyPI and Hugging Face, each pinned and checked against its checksum, and go to
 `~/.pi/agent/pistachio/documents/`; your own Python is not touched. A new installation must read a
 small test document before it replaces an old one. Parsers run one process per document, without
@@ -342,8 +342,8 @@ press offers the choice:
 | Whisper small (OpenAI) | 375 MB | about 99 languages | fast |
 | Moonshine v2 (Moonshine AI) | 141 MB | English only | fastest |
 
-The download runs in the background with a progress bar at the top of the chat, from a pinned
-Hugging Face revision, and every file is checked against its SHA-256 before the model is used.
+In Settings a download asks first and shows the files, what each is for and its size. It runs in
+the background with a progress bar at the top of the chat, from a pinned Hugging Face revision, and every file is checked against its SHA-256 before the model is used.
 While you speak, the text appears greyed out and keeps improving; when you stop talking (after
 the silence set in Settings, 2.5 s by default), press Enter or press stop, it becomes normal
 text in the message box, ready to edit or send. Esc discards it. Pauses and the end of speech
@@ -379,7 +379,7 @@ The name is made by either:
 | SmolLM2 360M (Hugging Face) | 389 MB | English | smallest |
 | Qwen2.5 1.5B (Qwen) | 1.1 GB | many | the best names, a few seconds each |
 
-All three are Apache 2.0 licensed. Models live in `~/.pi/agent/pistachio/naming/`.
+All three are Apache 2.0 licensed. Downloading one asks first and shows its files. Models live in `~/.pi/agent/pistachio/naming/`.
 
 ## Settings and updates
 

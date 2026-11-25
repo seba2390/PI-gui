@@ -547,6 +547,17 @@ impl MainWindow {
                         crate::stt::ui::start_download(model, cx);
                     }
                 }
+                // `download-ask:<id>`: asks whether to download that model or parser.
+                other if other.starts_with("download-ask:") => {
+                    let id = &other["download-ask:".len()..];
+                    if let Some(model) = crate::stt::catalog::model(id) {
+                        crate::stt::ui::ask_to_download(model, window, cx);
+                    } else if let Some(model) = crate::naming::catalog::model(id) {
+                        crate::naming::ui::ask_to_download(model, window, cx);
+                    } else if let Some(parser) = documents::Parser::from_id(id) {
+                        crate::settings::ask_to_download_parser(parser, window, cx);
+                    }
+                }
                 // `view-file:<path>`: the Files tab's viewer on that file (relative to the folder).
                 other if other.starts_with("view-file:") => {
                     let path = PathBuf::from(&other["view-file:".len()..]);

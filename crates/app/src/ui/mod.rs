@@ -4,6 +4,7 @@ pub mod backdrop;
 mod button;
 mod copy_button;
 pub mod dialog;
+pub mod download;
 mod drag;
 mod fading_text;
 mod hover_switch;

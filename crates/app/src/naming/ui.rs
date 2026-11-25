@@ -10,9 +10,57 @@ use gpui_kit::*;
 
 use super::catalog::{self, DEFAULT_MODEL, MODELS, Model};
 use super::{Namer, models};
+use crate::model_store::Downloadable as _;
 use crate::settings::AppSettings;
 use crate::theme::palette;
 use crate::ui::AppIcon;
+use crate::ui::download::{self, Details, Part, download_button};
+
+/// Asks whether to download `model`, showing what that is.
+pub fn ask_to_download(model: &'static Model, window: &mut Window, cx: &mut App) {
+    download::ask_to_download(
+        model.name,
+        details(model),
+        move |cx| start_download(model, cx),
+        window,
+        cx,
+    );
+}
+
+fn details(model: &Model) -> Details {
+    let (weights, tokenizer) = (&model.weights, &model.tokenizer);
+    Details {
+        intro: format!(
+            "{} by {} names new conversations on this computer. {}.",
+            model.name, model.maker, model.languages
+        ),
+        parts: vec![
+            Part {
+                icon: AppIcon::Brain.into(),
+                name: model.name.into(),
+                note: format!("The model · {}", weights.file.name),
+                size: weights.file.size,
+            },
+            Part {
+                icon: AppIcon::Library.into(),
+                name: "Tokenizer".into(),
+                note: format!(
+                    "Splits text into the pieces the model reads · {}",
+                    tokenizer.file.name
+                ),
+                size: tokenizer.file.size,
+            },
+        ],
+        size: model.size(),
+        // The files are used as they are.
+        disk_size: model.size(),
+        note: format!(
+            "It comes from Hugging Face ({} and {}) and goes into Pistachio's own folder. \
+             Nothing is sent anywhere for a name, and you can remove it at any time. License: {}.",
+            weights.repo, tokenizer.repo, model.license
+        ),
+    }
+}
 
 /// Makes `model` the naming model (and local naming the namer) and starts downloading it.
 pub fn start_download(model: &'static Model, cx: &mut App) {
@@ -136,13 +184,9 @@ pub fn settings_model_rows(cx: &App) -> AnyElement {
                     )
                     .into_any_element()
             } else {
-                Button::new(SharedString::from(format!("naming-get-{}", model.id)))
-                    .icon(AppIcon::Download)
-                    .label(format!("Download {}", model.size_label()))
-                    .outline()
-                    .xsmall()
+                download_button(format!("naming-get-{}", model.id), model.name, model.size())
                     .disabled(downloading.is_some())
-                    .on_click(move |_, _, cx| start_download(model, cx))
+                    .on_click(move |_, window, cx| ask_to_download(model, window, cx))
                     .into_any_element()
             };
             h_flex()
@@ -173,4 +217,16 @@ pub fn notify_download(event: &super::NamingModelsEvent, window: &mut Window, cx
         StoreEvent::Cancelled => return,
     };
     window.push_notification(notification, cx);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MODELS, details};
+
+    #[test]
+    fn the_details_are_all_that_is_downloaded() {
+        for model in MODELS {
+            details(model).assert_adds_up();
+        }
+    }
 }

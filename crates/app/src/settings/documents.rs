@@ -5,8 +5,7 @@ use documents::{Installed, Parser, Progress};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::setting::{SettingGroup, SettingItem, SettingPage};
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, WindowExt as _, h_flex,
-    v_flex,
+    ActiveTheme as _, Disableable as _, IconName, Sizable as _, WindowExt as _, h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -16,6 +15,7 @@ use crate::document_parsers::{DocumentParsers, document_parsers, existing};
 use crate::model_store::size_label;
 use crate::theme::palette;
 use crate::ui::dialog::open_form_dialog;
+use crate::ui::download::{self, Details, Part, download_button};
 use crate::ui::{AppIcon, QuietButton as _};
 
 pub(super) fn page() -> SettingPage {
@@ -140,7 +140,7 @@ impl Action {
     fn label(self) -> &'static str {
         match self {
             Self::Use => "Use",
-            Self::Download => "Download…",
+            Self::Download => "Download",
             Self::Update => "Update",
             Self::Cancel => "Cancel",
             Self::Remove => "Remove…",
@@ -221,20 +221,22 @@ fn row(parser: Parser, state: State, busy: bool, cx: &App) -> Div {
     let theme = cx.theme();
     let accent = palette(cx).accent;
     let buttons = state.actions.into_iter().map(|action| {
-        let button = Button::new(SharedString::from(format!(
-            "parser-{}-{}",
-            action.id(),
-            parser.id()
-        )))
-        .label(action.label())
-        .accessibility_label(format!("{} {}", action.label(), parser.label()))
-        .xsmall()
-        // One download at a time.
-        .disabled(busy && matches!(action, Action::Download | Action::Update))
-        .on_click(move |_, window, cx| action.run(parser, window, cx));
+        let id = SharedString::from(format!("parser-{}-{}", action.id(), parser.id()));
+        let button = match (action, parser.download()) {
+            (Action::Download, Ok(download)) => {
+                download_button(id, parser.label(), download.size())
+            }
+            _ => Button::new(id)
+                .label(action.label())
+                .accessibility_label(format!("{} {}", action.label(), parser.label()))
+                .xsmall(),
+        };
+        let button = button
+            // One download at a time.
+            .disabled(busy && matches!(action, Action::Download | Action::Update))
+            .on_click(move |_, window, cx| action.run(parser, window, cx));
         match action {
-            Action::Download => button.icon(AppIcon::Download).outline(),
-            Action::Use | Action::Update => button.outline(),
+            Action::Download | Action::Use | Action::Update => button.outline(),
             Action::Cancel | Action::Remove => button.ghost(),
         }
     });
@@ -317,31 +319,60 @@ fn row(parser: Parser, state: State, busy: bool, cx: &App) -> Div {
 }
 
 /// Asks whether to download `parser`, showing what that is.
-fn ask_to_download(parser: Parser, window: &mut Window, cx: &mut App) {
-    open_form_dialog(None, window, cx, move |dialog, _, cx| {
-        dialog
-            .title(format!("Download {}?", parser.label()))
-            .w(px(540.))
-            .child(download_body(parser, cx))
-            .footer(
-                h_flex()
-                    .w_full()
-                    .justify_end()
-                    .gap_2()
-                    .child(cancel_button("parser-download-cancel", cx))
-                    .child(
-                        Button::new("parser-download-start")
-                            .form_action(cx)
-                            .icon(AppIcon::Download)
-                            .label("Download")
-                            .on_click(move |_, window, cx| {
-                                window.close_dialog(cx);
-                                document_parsers(cx)
-                                    .update(cx, |parsers, cx| parsers.install(parser, cx));
-                            }),
-                    ),
-            )
+pub fn ask_to_download(parser: Parser, window: &mut Window, cx: &mut App) {
+    let Some(details) = details(parser) else {
+        return;
+    };
+    download::ask_to_download(
+        parser.label(),
+        details,
+        move |cx| {
+            document_parsers(cx).update(cx, |parsers, cx| parsers.install(parser, cx));
+        },
+        window,
+        cx,
+    );
+}
+
+fn details(parser: Parser) -> Option<Details> {
+    let download = parser.download().ok()?;
+    let mut parts = vec![Part {
+        icon: AppIcon::Package.into(),
+        name: format!("{} {}", parser.label(), download.version()),
+        note: "The parser and the Python packages it is built on".into(),
+        size: download.packages_size(),
+    }];
+    if download.models_size() > 0 {
+        parts.push(Part {
+            icon: AppIcon::Brain.into(),
+            name: "Models".into(),
+            note: "From Hugging Face; they run on this computer".into(),
+            size: download.models_size(),
+        });
+    }
+    parts.push(Part {
+        icon: AppIcon::CodeXml.into(),
+        name: format!("Python {}", python_env::catalog::PYTHON_VERSION),
+        note: "A private copy; your own Python is not touched".into(),
+        size: download.platform.python_size,
     });
+    parts.push(Part {
+        icon: AppIcon::Wrench.into(),
+        name: format!("uv {}", python_env::catalog::UV_VERSION),
+        note: "Installs the rest, and is deleted afterwards".into(),
+        size: download.platform.uv_size,
+    });
+    Some(Details {
+        intro: parser.strengths().into(),
+        parts,
+        size: download.size(),
+        disk_size: download.disk_size(),
+        note: format!(
+            "It goes into Pistachio's own folder, reads documents without using the network, and \
+             you can remove it at any time. License: {}",
+            parser.license_note()
+        ),
+    })
 }
 
 fn cancel_button(id: &'static str, cx: &App) -> Button {
@@ -350,92 +381,6 @@ fn cancel_button(id: &'static str, cx: &App) -> Button {
         .icon(IconName::Close)
         .label("Cancel")
         .on_click(|_, window, cx| window.close_dialog(cx))
-}
-
-fn download_body(parser: Parser, cx: &App) -> Div {
-    let theme = cx.theme();
-    let muted = theme.muted_foreground;
-    let Ok(download) = parser.download() else {
-        return div();
-    };
-    let part = |icon: Icon, name: String, note: &'static str, size: u64| {
-        h_flex()
-            .w_full()
-            .gap_3()
-            .px_3()
-            .py_2()
-            .child(icon.small().text_color(palette(cx).accent_icon))
-            .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .child(div().text_sm().child(name))
-                    .child(div().text_xs().text_color(muted).child(note)),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(size_label(size)),
-            )
-    };
-    let models = download.models_size();
-    v_flex()
-        .gap_3()
-        .child(div().text_sm().text_color(muted).child(parser.strengths()))
-        .child(
-            v_flex()
-                .rounded_lg()
-                .border_1()
-                .border_color(theme.border)
-                .child(part(
-                    AppIcon::Package.into(),
-                    format!("{} {}", parser.label(), download.version()),
-                    "The parser and the Python packages it is built on",
-                    download.packages_size(),
-                ))
-                .when(models > 0, |this| {
-                    this.child(part(
-                        AppIcon::Brain.into(),
-                        "Models".into(),
-                        "From Hugging Face; they run on this computer",
-                        models,
-                    ))
-                })
-                .child(part(
-                    AppIcon::CodeXml.into(),
-                    format!("Python {}", python_env::catalog::PYTHON_VERSION),
-                    "A private copy; your own Python is not touched",
-                    download.platform.python_size,
-                ))
-                .child(part(
-                    AppIcon::Wrench.into(),
-                    format!("uv {}", python_env::catalog::UV_VERSION),
-                    "Installs the rest, and is deleted afterwards",
-                    download.platform.uv_size,
-                ))
-                .child(
-                    h_flex()
-                        .w_full()
-                        .px_3()
-                        .py_2()
-                        .border_t_1()
-                        .border_color(theme.border)
-                        .text_sm()
-                        .child(div().flex_1().child("Download"))
-                        .child(format!(
-                            "{} · {} on disk",
-                            size_label(download.size()),
-                            size_label(download.disk_size())
-                        )),
-                ),
-        )
-        .child(div().text_xs().text_color(muted).child(format!(
-            "It goes into Pistachio's own folder, reads documents without using the network, and \
-             you can remove it at any time. License: {}",
-            parser.license_note()
-        )))
 }
 
 /// Asks before deleting `parser`.
@@ -492,7 +437,7 @@ mod tests {
     use gpui_kit::{AppContext as _, TestAppContext, VisualTestContext};
     use pretty_assertions::assert_eq;
 
-    use super::{Action, Parser, existing, size_label, state};
+    use super::{Action, Parser, details, existing, size_label, state};
     use crate::config::AppConfig;
     use crate::settings::AppSettings;
     use crate::settings::view::SettingsView;
@@ -601,6 +546,7 @@ mod tests {
                 Ok(download) => {
                     assert_eq!(state.actions, [Action::Download]);
                     assert!(state.facts.contains(&size_label(download.size())));
+                    details(parser).unwrap().assert_adds_up();
                 }
                 Err(reason) => {
                     assert_eq!(state.actions, []);
@@ -612,7 +558,7 @@ mod tests {
         if Parser::Pymupdf4llm.download().is_ok() {
             dialog::click("parser-download-pymupdf4llm", cx);
             assert!(dialog::is_open(cx));
-            dialog::click("parser-download-cancel", cx);
+            dialog::click("download-cancel", cx);
             assert!(!dialog::is_open(cx));
             cx.read(|cx| assert_eq!(existing(cx).unwrap().downloading(), None));
         }

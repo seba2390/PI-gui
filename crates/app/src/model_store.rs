@@ -352,12 +352,14 @@ fn hex(bytes: &[u8]) -> String {
     })
 }
 
-/// `639 MB`, `1.0 GB`.
+/// `94 KB`, `639 MB`, `1.0 GB`.
 #[allow(clippy::cast_precision_loss)] // display only
 pub fn size_label(bytes: u64) -> String {
     let mb = bytes as f64 / 1_000_000.;
     if mb >= 1000. {
         format!("{:.1} GB", mb / 1000.)
+    } else if bytes > 0 && mb < 1. {
+        format!("{:.0} KB", mb * 1000.)
     } else {
         format!("{mb:.0} MB")
     }

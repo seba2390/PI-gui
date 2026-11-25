@@ -11,6 +11,8 @@ All notable changes to PI-gui are listed here. The format follows
 - Adding a locally hosted model also shows llama.cpp, MLX, vLLM, Jan and Docker Model Runner, with how
   to start them, next to Ollama and LM Studio. SGLang, Lemonade and KoboldCpp are found when they
   run.
+- Downloading a speech-to-text model, a model for conversation names or a document parser asks first
+  and shows what exactly is downloaded, like SearXNG does. All their buttons say how much it is.
 - Settings → pi & models says "Startup model" instead of "Startup model (this computer)".
 
 ### Fixed

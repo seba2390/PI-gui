@@ -10,6 +10,7 @@ mod models;
 pub mod view;
 mod web_advanced;
 
+pub use documents::ask_to_download as ask_to_download_parser;
 pub use local_search::{open_setup as open_searxng_setup, use_local as use_local_searxng};
 
 use std::path::{Path, PathBuf};
