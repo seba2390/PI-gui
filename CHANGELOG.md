@@ -6,6 +6,8 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-11-25
+
 ### Added
 
 - Settings → pi & models lists the servers and API keys that are connected, and whether the servers
@@ -593,7 +595,8 @@ chats, skills and model management. Changes since the last private build:
 - A corrupt `hosts.json` is kept as a backup.
 - A remembered terminal height can no longer squeeze out the chat.
 
-[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/seba2390/pistachio/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/seba2390/pistachio/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/seba2390/pistachio/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/seba2390/pistachio/compare/v0.4.9...v0.5.0
