@@ -2146,6 +2146,7 @@ fn spawn_options(
         } else {
             builtin_skill_args(config, &mut options);
             document_args(config, &mut options);
+            sandbox_args(config, &mut options);
         }
         return (options, mode);
     };
@@ -2200,6 +2201,35 @@ fn document_args(config: &AppConfig, options: &mut SpawnOptions) {
         Err(error) => log::warn!(
             "PDF files are not read as Markdown: could not write the extension to {}: {error}",
             config.documents_dir.display()
+        ),
+    }
+}
+
+/// The extension that runs the agent's tools in the sandbox (see [`sandbox`]). Only local Code
+/// sessions have tools on this computer; it is loaded also while the sandbox is off, so turning
+/// it on applies to running sessions.
+fn sandbox_args(config: &AppConfig, options: &mut SpawnOptions) {
+    if !sandbox::SUPPORTED {
+        return;
+    }
+    let Some(exe) = &config.exe else {
+        return;
+    };
+    match sandbox::install_extension(&config.sandbox_dir) {
+        Ok(extension) => {
+            options
+                .extra_args
+                .extend(["--extension".into(), extension.into()]);
+            options
+                .env
+                .push((sandbox::BIN_ENV.into(), exe.clone().into()));
+            options
+                .env
+                .push((sandbox::DIR_ENV.into(), config.sandbox_dir.clone().into()));
+        }
+        Err(error) => log::warn!(
+            "commands are not sandboxed: could not write the extension to {}: {error}",
+            config.sandbox_dir.display()
         ),
     }
 }
@@ -2306,15 +2336,24 @@ mod tests {
         let session = project.join("s.jsonl");
         let (code, mode) = super::spawn_options(&config, &project, Some(&session), None, &[]);
         assert_eq!(mode, super::Mode::Code);
-        assert_eq!(
-            code.extra_args,
-            [
-                "--skill".into(),
-                std::ffi::OsString::from(config.builtin_skills_dir.join("add-skill")),
+        let mut expected: Vec<std::ffi::OsString> = vec![
+            "--skill".into(),
+            std::ffi::OsString::from(config.builtin_skills_dir.join("add-skill")),
+            "--extension".into(),
+            config.documents_dir.join("extension.ts").into(),
+        ];
+        if sandbox::SUPPORTED {
+            expected.extend([
                 "--extension".into(),
-                config.documents_dir.join("extension.ts").into(),
-            ]
-        );
+                config.sandbox_dir.join("extension.ts").into(),
+            ]);
+            assert!(config.sandbox_dir.join("extension.ts").exists());
+            assert!(code.env.contains(&(
+                sandbox::BIN_ENV.into(),
+                std::ffi::OsString::from("/app/pistachio")
+            )));
+        }
+        assert_eq!(code.extra_args, expected);
         assert!(config.documents_dir.join("extension.ts").exists());
         for (key, value) in [
             (

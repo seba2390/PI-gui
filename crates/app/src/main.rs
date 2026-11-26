@@ -50,6 +50,11 @@ fn main() {
     if let Some(code) = documents::cli::run_if_requested() {
         std::process::exit(code);
     }
+    // Started by the sandbox's pi extension (or the Security settings) to run a command in the
+    // sandbox, or to say what it allows.
+    if let Some(code) = sandbox::cli::run_if_requested() {
+        std::process::exit(code);
+    }
     // Started by ssh as its askpass program (a password or passphrase prompt): hand the
     // question to the running app and exit, before any UI starts.
     if let Some(code) = remote::askpass::run_client_if_requested() {

@@ -22,6 +22,7 @@ pi-rpc = { path = "crates/pi-rpc" }
 pi-sessions = { path = "crates/pi-sessions" }
 python-env = { path = "crates/python-env" }
 remote = { path = "crates/remote" }
+sandbox = { path = "crates/sandbox" }
 searxng = { path = "crates/searxng" }
 transcript = { path = "crates/transcript" }
 titles = { path = "crates/titles" }
