@@ -168,8 +168,7 @@ impl Summary {
     pub fn title(&self) -> String {
         self.actions
             .first()
-            .map(|action| action.phrase().0)
-            .unwrap_or_default()
+            .map_or_default(|action| action.phrase().0)
     }
 
     /// The rest of the sentence: "files, checked cargo, rustc".

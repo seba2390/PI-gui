@@ -458,7 +458,14 @@ impl MainWindow {
             if self.welcome
                 && matches!(
                     panel.as_str(),
-                    "terminal" | "diff" | "diff-expand-all" | "files" | "attach" | "context"
+                    "terminal"
+                        | "diff"
+                        | "diff-expand-all"
+                        | "files"
+                        | "attach"
+                        | "context"
+                        | "question"
+                        | "question-plain"
                 )
                 && let Ok(folder) = std::env::current_dir()
             {
@@ -535,6 +542,42 @@ impl MainWindow {
                     self.open_settings(&OpenSettings, window, cx);
                     if let Some(settings) = self.settings.as_ref().map(|s| s.0.clone()) {
                         settings.update(cx, |settings, _| settings.start_on_documents());
+                    }
+                }
+                "settings-security" => {
+                    self.open_settings(&OpenSettings, window, cx);
+                    if let Some(settings) = self.settings.as_ref().map(|s| s.0.clone()) {
+                        settings.update(cx, |settings, _| settings.start_on_security());
+                    }
+                }
+                // The sandbox gate's question, docked above the composer: with a warning (open
+                // at first) or without (one line).
+                "question" | "question-plain" => {
+                    let warning = if panel == "question" {
+                        "\n⚠ main is the remote's default branch"
+                    } else {
+                        ""
+                    };
+                    let request = pi_rpc::protocol::ExtensionUiRequest {
+                        id: "layout-check".into(),
+                        method: pi_rpc::protocol::ExtensionUiMethod::Select {
+                            title: format!(
+                                "Push 1 commit on feature to github.com/acme/fibonacci as ana\n\
+                                 · 1e6145f Initial commit: Fibonacci sequence printer{warning}"
+                            ),
+                            options: ["Allow", "Always for this project", "Don't allow"]
+                                .map(str::to_owned)
+                                .to_vec(),
+                            timeout: None,
+                        },
+                    };
+                    self.chat
+                        .update(cx, |chat, cx| chat.ask(&request, window, cx));
+                }
+                "settings-git" => {
+                    self.open_settings(&OpenSettings, window, cx);
+                    if let Some(settings) = self.settings.as_ref().map(|s| s.0.clone()) {
+                        settings.update(cx, |settings, _| settings.start_on_git());
                     }
                 }
                 "speech-download" => crate::stt::ui::open_download_dialog(window, cx),
@@ -762,24 +805,21 @@ impl MainWindow {
         self.chat.read(cx).session().read(cx).mode()
     }
 
-    /// Where a new conversation in `mode` starts: the chat folder, or for Code the current
-    /// project, else the most recent one, else the launch folder.
-    /// The chat folder, or for Code the current project, else the most recent one. `None`
-    /// when there is no project yet: the user picks one (never silently the launch folder).
-    fn default_folder(&self, mode: Mode, cx: &App) -> Option<PathBuf> {
-        let config = cx.global::<AppConfig>();
-        match mode {
-            Mode::Chat => Some(config.chat_dir.clone()),
-            Mode::Code if self.local_code(cx) => Some(self.cwd(cx)),
-            Mode::Code => self.sidebar.read(cx).latest_code_folder(cx),
-        }
-    }
-
-    /// A new conversation in `mode`'s default folder; asks for a folder when there is none.
+    /// A new conversation in `mode`: a chat in the chat folder. A Code session never takes a
+    /// folder by itself (that could be the home folder, where listing files makes macOS ask
+    /// for Downloads, Documents and the rest): the welcome screen asks which, and when it is
+    /// already shown, the system's folder dialog.
     fn new_in_default_folder(&mut self, mode: Mode, window: &mut Window, cx: &mut Context<Self>) {
-        match self.default_folder(mode, cx) {
-            Some(folder) => self.new_chat_in(folder, window, cx),
-            None => self.choose_folder(None, window, cx),
+        match mode {
+            Mode::Chat => {
+                let folder = cx.global::<AppConfig>().chat_dir.clone();
+                self.new_chat_in(folder, window, cx);
+            }
+            Mode::Code if self.welcome_visible() => self.choose_folder(None, window, cx),
+            Mode::Code => {
+                self.close_pages(cx);
+                self.show_welcome(Mode::Code, window, cx);
+            }
         }
     }
 
@@ -1518,14 +1558,9 @@ impl MainWindow {
                 }
                 ComposerEvent::ChooseHost(None) => {
                     if self.chat.read(cx).session().read(cx).host().is_some() {
+                        // Which folder here is asked, never guessed.
                         let moving = Some(self.chat.entity_id());
-                        match self.default_folder(Mode::Code, cx) {
-                            Some(folder) => {
-                                let draft = self.take_moving_draft(moving, window, cx);
-                                self.show_new(None, folder, draft, window, cx);
-                            }
-                            None => self.choose_folder(moving, window, cx),
-                        }
+                        self.choose_folder(moving, window, cx);
                     }
                 }
                 ComposerEvent::ChooseHost(Some(host)) | ComposerEvent::BrowseRemote(host) => {
@@ -1898,6 +1933,21 @@ impl MainWindow {
     fn open_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
         if self.settings.is_none() {
             self.toggle_settings(window, cx);
+        }
+    }
+
+    /// Settings → Sandboxing & Security (from a session's sandbox badge).
+    fn open_security_settings(
+        &mut self,
+        _: &crate::actions::OpenSecuritySettings,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.settings.is_none() {
+            self.toggle_settings(window, cx);
+            if let Some(settings) = self.settings.as_ref().map(|s| s.0.clone()) {
+                settings.update(cx, |settings, _| settings.start_on_security());
+            }
         }
     }
 
@@ -3227,8 +3277,7 @@ fn welcome_menu(
     let home = cx.global::<AppConfig>().home.clone();
     let recent: Vec<PathBuf> = cx
         .try_global::<crate::config::RecentFolders>()
-        .map(|recent| recent.0.clone())
-        .unwrap_or_default()
+        .map_or_default(|recent| recent.0.clone())
         .into_iter()
         .filter(|folder| folder.is_dir())
         .take(crate::config::RECENT_FOLDERS)
@@ -3429,6 +3478,7 @@ impl Render for MainWindow {
             .on_action(cx.listener(Self::reload_session))
             .on_action(cx.listener(Self::open_login))
             .on_action(cx.listener(Self::open_settings))
+            .on_action(cx.listener(Self::open_security_settings))
             .on_action(cx.listener(|this, _: &CheckForUpdates, window, cx| {
                 this.check_for_updates(true, window, cx);
             }))

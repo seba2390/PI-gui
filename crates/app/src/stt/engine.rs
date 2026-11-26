@@ -358,8 +358,7 @@ fn decode(recognizer: &OfflineRecognizer, config: &SessionConfig, samples: &[f32
     recognizer.decode(&stream);
     stream
         .get_result()
-        .map(|result| clean(&result.text))
-        .unwrap_or_default()
+        .map_or_default(|result| clean(&result.text))
 }
 
 /// Trims and drops what models emit for silence or noise.

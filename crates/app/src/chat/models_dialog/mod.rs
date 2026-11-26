@@ -403,8 +403,7 @@ impl ModelsDialog {
         let place = self
             .place
             .as_ref()
-            .map(|place| place.describe(home.as_deref()))
-            .unwrap_or_default();
+            .map_or_default(|place| place.describe(home.as_deref()));
         v_flex()
             .gap_2()
             .child(Self::render_top(

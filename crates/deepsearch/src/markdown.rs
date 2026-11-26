@@ -22,8 +22,7 @@ pub fn page(text: &str) -> Page {
         .iter()
         .find(|block| top.is_some_and(|top| block.kind == BlockKind::Heading(top)))
         .or_else(|| blocks.iter().find(|b| b.kind == BlockKind::Paragraph))
-        .map(|block| block.text.chars().take(TITLE_CHARS).collect())
-        .unwrap_or_default();
+        .map_or_default(|block| block.text.chars().take(TITLE_CHARS).collect());
     Page {
         title,
         blocks,

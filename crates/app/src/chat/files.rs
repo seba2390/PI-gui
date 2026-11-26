@@ -19,8 +19,7 @@ const HEIGHT: f32 = 80.;
 pub fn pages(prompt: u64, files: &[AttachedFile], cx: &App) -> Vec<AnyElement> {
     let dir = cx
         .try_global::<AppConfig>()
-        .map(|config| config.documents_dir.clone())
-        .unwrap_or_default();
+        .map_or_default(|config| config.documents_dir.clone());
     files
         .iter()
         .enumerate()

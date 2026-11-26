@@ -1,0 +1,18 @@
+[package]
+name = "python-tool"
+description = "The `python` tool of pistachio's chats: Python run in Monty, a sandboxed interpreter with no files, network or environment"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde_json.workspace = true
+# The interpreter and its boundary types; keep both at the same exact version.
+monty = "=1.7.0"
+monty-types = "=1.7.0"
+
+[lints]
+workspace = true

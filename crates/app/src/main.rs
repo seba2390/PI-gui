@@ -25,6 +25,7 @@ mod pi_place;
 mod relay;
 mod remote_ui;
 mod search_server;
+mod security;
 mod settings;
 mod shell_env;
 mod sidebar;
@@ -46,8 +47,17 @@ fn main() {
     if let Some(code) = deepsearch::cli::run_if_requested() {
         std::process::exit(code);
     }
+    // Started by the chats' python tool to run the model's code in Monty.
+    if let Some(code) = python_tool::cli::run_if_requested() {
+        std::process::exit(code);
+    }
     // Started by a chat, or by the pi extension of Code sessions, to read a document.
     if let Some(code) = documents::cli::run_if_requested() {
+        std::process::exit(code);
+    }
+    // Started by the sandbox's pi extension (or the Security settings) to run a command in the
+    // sandbox, or to say what it allows.
+    if let Some(code) = sandbox::cli::run_if_requested() {
         std::process::exit(code);
     }
     // Started by ssh as its askpass program (a password or passphrase prompt): hand the
@@ -79,6 +89,13 @@ fn main() {
     app.run(move |cx| {
         perf::phase("app_run");
         let config = config::AppConfig::detect(child_env);
+        // The proxy that lets sandboxed commands reach the sites the user allowed. It waits
+        // on its sockets and costs nothing until a command connects.
+        if sandbox::SUPPORTED
+            && let Err(error) = sandbox::proxy::start(&config.sandbox_dir)
+        {
+            log::warn!("a limited network for sandboxed commands is unavailable: {error}");
+        }
         init(cx);
         perf::phase("gpui_kit_init");
         cx.set_global(settings::AppSettings::load(

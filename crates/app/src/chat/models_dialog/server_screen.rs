@@ -507,7 +507,7 @@ impl ModelsDialog {
         };
         row.open = !row.open;
         if row.fields.is_none() {
-            let number = |value: Option<u64>| value.map(grouped).unwrap_or_default();
+            let number = |value: Option<u64>| value.map_or_default(grouped);
             let input = |placeholder: &str, value: String, window: &mut Window, cx: &mut App| {
                 let placeholder = placeholder.to_owned();
                 cx.new(|cx| {

@@ -6,6 +6,83 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-11-26
+
+### Added
+
+- Chats compute numbers with Python: a `python` tool runs the model's code in Monty, a sandboxed
+  Python interpreter written in Rust (no files, network or environment; limits on time, memory and
+  recursion), so a sum, logarithm or series is worked out instead of estimated. Settings → General
+  → Chat mode turns it off, also in open chats.
+- A sandbox for the agent's commands in Code sessions on this computer, on by default (macOS and
+  Linux). Commands run under Seatbelt on macOS and bubblewrap on Linux (Landlock where bubblewrap
+  can't run). Of your home folder they see only the project, folders you allow and the folders of
+  common tools; keys and logins (`~/.ssh`, `~/.aws`, pi's `auth.json`, …) never, and API keys in
+  the environment are removed. They can change only the project, temporary folders, tool caches
+  and folders you allow to change, and the network can be turned off. pi's file tools keep to the
+  same rules. pi itself and its model requests run as before, so keys never enter the sandbox.
+  Windows is planned (#47).
+- Settings → Sandboxing & Security: the sandbox's state and settings, the tool folders and allowed
+  folders (each to read, or read and write), the allowed websites (None, the default: each site
+  is asked about; All; or Custom: the websites listed, checked as you type them, and others asked
+  about), and which project files pi loads (its project trust default and saved decisions).
+- The sandbox's gate: what needs your keys is asked about and done outside the sandbox. In Code
+  sessions `git push`, `pull`, `fetch`, `clone`, `ls-remote`, submodules and git-lfs, GitHub's `gh`
+  (pull requests, issues, runs, creating a repository) and signing commits with your GPG or SSH
+  key now work: a question above the message box says exactly what will happen (the commits, the
+  branch, the remote's real address, force pushes and the default branch called out) and offers
+  Allow, Always for this project or Don't allow. Your keys never enter the sandbox. Repositories whose git settings
+  could start a program are refused, and hooks are off. With several GitHub accounts, you pick
+  which one each command acts as (a company repository only as a member of that company), and
+  "Always" remembers it.
+- Websites are asked about: with None (the default), the first time a conversation's commands
+  reach a site (curl, pip, npm, cargo, git over HTTPS, …), a question asks Allow (for that
+  conversation), Always for this project, or Don't allow; connections made at once share one
+  question. Custom lets its listed sites through and asks about the others. Sites allowed always
+  are listed under Internet, each removable. The model is told how this works, so it runs the
+  command and waits instead of looking for a way around.
+- Extensions' questions with a few answers (the gate's and the websites' Allow / Always / Don't
+  allow, and other extensions' choices and confirmations) are a see-through pill of one line above
+  the message box instead of a dialog in the middle of the window: the question, then ✕ (don't
+  allow, Esc), ✓✓ (always) and ✓ Allow. A small button on its top edge shows the details (the
+  commits, addresses and warnings); a question with something that needs care opens with them
+  shown. ←/→ choose, Enter answers.
+- In the sandbox, git always reads its own settings (`~/.gitconfig`, `~/.config/git`), whatever
+  the tool folders are, so commits are made as you instead of failing or under a made-up author.
+  Sandboxed sessions tell the model up front how git and GitHub work there (run the command; you
+  are asked), `gh auth status` is answered by the gate (the accounts and git identity, never a
+  token), and a command that ran into the sandbox gets its note even when a chain hid the failure.
+- The gate runs `gh repo delete` too: asked every time (never "always"), with the repository named
+  in full and a warning that it can't be undone. GitHub needs the `delete_repo` permission for it:
+  only logins that have it are offered, and without one the model is told how you can add it
+  (`gh auth refresh -h github.com -s delete_repo`) before you are asked for nothing.
+- Settings → Sandboxing & Security → Git and GitHub: what the agent may do with your logins
+  without asking, each removable.
+- Dots at the left edge of the conversation, one per prompt, in Chat and Code. Hovering one shows
+  that prompt and the start of its answer; clicking it scrolls there.
+- A shield next to the folder in Code sessions shows whether commands are sandboxed; its menu turns
+  the sandbox off or on for the project. A command the sandbox blocked says so, with a button to
+  allow reading or changing that folder.
+
+### Changed
+
+- A new Code session asks which folder to open (the welcome screen's recent folders, another folder
+  or an SSH host) instead of taking the current or most recent one, which could be the home folder.
+- Settings: section headings are centred, with a thin line between sections, and a section
+  picked in the sidebar has its heading glow for a moment (also with reduced motion). Descriptions next to a switch run up to it instead of wrapping halfway.
+- Settings section headings are a size larger.
+- The side chat tab on the chat's right edge is an L-shaped arrow; hovering it says what it does.
+- Lists on the Sandboxing & Security page scroll smoothly and their border lights up under the
+  pointer.
+
+### Fixed
+
+- The models relay no longer sends error details to the other computer: errors could carry a
+  stack trace and this computer's paths (code scanning alert 6). A failed connection says only its
+  code (ECONNREFUSED, …); the rest goes to the relay's log here.
+- A message you send is shown exactly as typed: "log(2.6778)" was drawn as a formula, since the
+  escapes that kept it literal looked like math delimiters.
+
 ## [0.5.4] - 2026-11-25
 
 ### Changed
@@ -612,7 +689,8 @@ chats, skills and model management. Changes since the last private build:
 - A corrupt `hosts.json` is kept as a backup.
 - A remembered terminal height can no longer squeeze out the chat.
 
-[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.5.4...HEAD
+[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.5.5...HEAD
+[0.5.5]: https://github.com/seba2390/pistachio/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/seba2390/pistachio/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/seba2390/pistachio/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/seba2390/pistachio/compare/v0.5.1...v0.5.2

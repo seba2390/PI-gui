@@ -212,8 +212,7 @@ fn areas(annotation: &Dict<'_>, page: &Page<'_>) -> Vec<Rect> {
     let numbers = |key: &str| -> Vec<f64> {
         annotation
             .get::<Array<'_>>(key)
-            .map(|array| array.iter::<f32>().map(f64::from).collect())
-            .unwrap_or_default()
+            .map_or_default(|array| array.iter::<f32>().map(f64::from).collect())
     };
     let quads = numbers("QuadPoints");
     let areas: Vec<Rect> = quads

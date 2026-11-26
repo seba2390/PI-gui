@@ -474,15 +474,6 @@ impl Sidebar {
             .collect()
     }
 
-    /// The working folder of the most recent Code session, if any.
-    pub fn latest_code_folder(&self, cx: &App) -> Option<PathBuf> {
-        let config = cx.global::<AppConfig>();
-        self.sessions
-            .iter()
-            .find(|session| config.mode_of(&session.cwd) == Mode::Code && session.cwd.is_dir())
-            .map(|session| session.cwd.clone())
-    }
-
     /// Rescans pi's session directory in the background.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         let config = cx.global::<AppConfig>();

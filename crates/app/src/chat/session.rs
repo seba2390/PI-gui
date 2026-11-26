@@ -1416,8 +1416,7 @@ impl PiSession {
                     client
                         .get_messages()
                         .await
-                        .map(|messages| user_images(&messages, from_end, &text))
-                        .unwrap_or_default()
+                        .map_or_default(|messages| user_images(&messages, from_end, &text))
                 };
                 Ok(client.fork(entry_id).await?.map(|text| (text, images)))
             }
@@ -1910,11 +1909,7 @@ impl PiSession {
     }
 
     fn exit_message(&self, error: &RpcError) -> String {
-        let tail = self
-            .process
-            .as_ref()
-            .map(PiProcess::stderr_tail)
-            .unwrap_or_default();
+        let tail = self.process.as_ref().map_or_default(PiProcess::stderr_tail);
         let detail = tail
             .iter()
             .rev()
@@ -2107,7 +2102,7 @@ fn saved_host(host: Option<&HostId>, cx: &gpui_kit::App) -> Option<remote::Saved
 
 /// How to launch pi for a session in `cwd`. Chat sessions get only the web tools
 /// (`--tools web_search,web_fetch`, which the extension keeps off until the chat turns web
-/// search on), no MCP, and no built-in tools: a chat can never read or change files. An
+/// search on) and `python` (Monty: no files or network), no MCP, and no built-in tools: a chat can never read or change files. An
 /// explicit `--tools` list wins over the tool set pi recorded in the session, also for chats
 /// started with `--no-tools` before web search existed. If the extension cannot be written,
 /// chats fall back to `--no-tools`.
@@ -2146,6 +2141,7 @@ fn spawn_options(
         } else {
             builtin_skill_args(config, &mut options);
             document_args(config, &mut options);
+            sandbox_args(config, &mut options);
         }
         return (options, mode);
     };
@@ -2204,6 +2200,35 @@ fn document_args(config: &AppConfig, options: &mut SpawnOptions) {
     }
 }
 
+/// The extension that runs the agent's tools in the sandbox (see [`sandbox`]). Only local Code
+/// sessions have tools on this computer; it is loaded also while the sandbox is off, so turning
+/// it on applies to running sessions.
+fn sandbox_args(config: &AppConfig, options: &mut SpawnOptions) {
+    if !sandbox::SUPPORTED {
+        return;
+    }
+    let Some(exe) = &config.exe else {
+        return;
+    };
+    match sandbox::install_extension(&config.sandbox_dir) {
+        Ok(extension) => {
+            options
+                .extra_args
+                .extend(["--extension".into(), extension.into()]);
+            options
+                .env
+                .push((sandbox::BIN_ENV.into(), exe.clone().into()));
+            options
+                .env
+                .push((sandbox::DIR_ENV.into(), config.sandbox_dir.clone().into()));
+        }
+        Err(error) => log::warn!(
+            "commands are not sandboxed: could not write the extension to {}: {error}",
+            config.sandbox_dir.display()
+        ),
+    }
+}
+
 /// Where the helper finds the settings of document parsing.
 fn document_dir_env(config: &AppConfig, options: &mut SpawnOptions) {
     options.env.push((
@@ -2212,7 +2237,7 @@ fn document_dir_env(config: &AppConfig, options: &mut SpawnOptions) {
     ));
 }
 
-/// pi's arguments and environment for a chat: the web tools only (see [`spawn_options`]).
+/// pi's arguments and environment for a chat: the web tools and python (see [`spawn_options`]).
 fn chat_args(config: &AppConfig, options: &mut SpawnOptions) {
     let extension = match (
         &config.exe,
@@ -2235,13 +2260,41 @@ fn chat_args(config: &AppConfig, options: &mut SpawnOptions) {
         options.extra_args.push("--no-tools".into());
         return;
     };
+    // The python tool comes along when its extension can be written.
+    let python = match python_tool::install_extension(&config.python_dir) {
+        Ok(path) => Some(path),
+        Err(error) => {
+            log::warn!(
+                "chats cannot compute with Python: could not write its extension to {}: {error}",
+                config.python_dir.display()
+            );
+            None
+        }
+    };
+    let tools = deepsearch::TOOL_NAMES
+        .into_iter()
+        .chain(python.is_some().then_some(python_tool::TOOL_NAME))
+        .collect::<Vec<_>>()
+        .join(",");
     options.extra_args.extend([
         "--tools".into(),
-        deepsearch::TOOL_NAMES.join(",").into(),
+        tools.into(),
         "--no-mcp".into(),
         "--extension".into(),
         extension.into(),
     ]);
+    if let Some(python) = python {
+        options
+            .extra_args
+            .extend(["--extension".into(), python.into()]);
+        options
+            .env
+            .push((python_tool::BIN_ENV.into(), exe.clone().into()));
+        options.env.push((
+            python_tool::DIR_ENV.into(),
+            config.python_dir.clone().into(),
+        ));
+    }
     options
         .env
         .push((deepsearch::BIN_ENV.into(), exe.clone().into()));
@@ -2281,40 +2334,59 @@ mod tests {
     }
 
     #[test]
-    fn chat_sessions_launch_with_only_deep_search_tools() {
+    fn chat_sessions_launch_with_only_web_and_python_tools() {
         let config = AppConfig::for_tests("pi".into());
         let (chat, mode) = super::spawn_options(&config, &config.chat_dir.clone(), None, None, &[]);
         assert_eq!(mode, super::Mode::Chat);
         let extension = config.deepsearch_dir.join("extension.ts");
+        let python = config.python_dir.join("extension.ts");
         assert_eq!(
             chat.extra_args,
             [
                 "--tools".into(),
-                "web_search,web_fetch".into(),
+                "web_search,web_fetch,python".into(),
                 "--no-mcp".into(),
                 "--extension".into(),
                 std::ffi::OsString::from(&extension),
+                "--extension".into(),
+                std::ffi::OsString::from(&python),
             ]
         );
         assert!(extension.exists());
+        assert!(python.exists());
         assert!(chat.env.contains(&(
-            deepsearch::BIN_ENV.into(),
-            std::ffi::OsString::from("/app/pistachio")
+            python_tool::DIR_ENV.into(),
+            std::ffi::OsString::from(&config.python_dir)
         )));
+        for variable in [deepsearch::BIN_ENV, python_tool::BIN_ENV] {
+            assert!(
+                chat.env
+                    .contains(&(variable.into(), std::ffi::OsString::from("/app/pistachio")))
+            );
+        }
 
         let project = std::env::temp_dir().join("some-project");
         let session = project.join("s.jsonl");
         let (code, mode) = super::spawn_options(&config, &project, Some(&session), None, &[]);
         assert_eq!(mode, super::Mode::Code);
-        assert_eq!(
-            code.extra_args,
-            [
-                "--skill".into(),
-                std::ffi::OsString::from(config.builtin_skills_dir.join("add-skill")),
+        let mut expected: Vec<std::ffi::OsString> = vec![
+            "--skill".into(),
+            std::ffi::OsString::from(config.builtin_skills_dir.join("add-skill")),
+            "--extension".into(),
+            config.documents_dir.join("extension.ts").into(),
+        ];
+        if sandbox::SUPPORTED {
+            expected.extend([
                 "--extension".into(),
-                config.documents_dir.join("extension.ts").into(),
-            ]
-        );
+                config.sandbox_dir.join("extension.ts").into(),
+            ]);
+            assert!(config.sandbox_dir.join("extension.ts").exists());
+            assert!(code.env.contains(&(
+                sandbox::BIN_ENV.into(),
+                std::ffi::OsString::from("/app/pistachio")
+            )));
+        }
+        assert_eq!(code.extra_args, expected);
         assert!(config.documents_dir.join("extension.ts").exists());
         for (key, value) in [
             (

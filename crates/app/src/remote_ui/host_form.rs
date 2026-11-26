@@ -57,8 +57,7 @@ impl HostFields {
             user: user.or_else(|| config?.user.clone()).unwrap_or_default(),
             port: port
                 .or_else(|| Some(config?.port))
-                .map(|port| port.to_string())
-                .unwrap_or_default(),
+                .map_or_default(|port| port.to_string()),
             identity: identity
                 .or_else(|| config?.identity_file.clone())
                 .unwrap_or_default(),

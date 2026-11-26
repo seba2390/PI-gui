@@ -16,6 +16,7 @@ mod math;
 pub(crate) mod mention;
 pub mod models_dialog;
 pub mod pdf_viewer;
+mod question;
 mod queued;
 mod report;
 mod rows;
@@ -23,10 +24,12 @@ pub mod session;
 #[cfg(all(test, unix))]
 mod session_tests;
 pub mod text_viewer;
+mod turn_rail;
 mod viewer_dialog;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use gpui_kit::component::text::{TextView, TextViewState};
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, WindowExt as _, h_flex, v_flex};
@@ -102,6 +105,8 @@ pub struct ChatView {
     session: Entity<PiSession>,
     composer: Entity<Composer>,
     scroller: Entity<MessageScrollerState>,
+    /// The dots at the left edge, one per prompt.
+    turn_rail: Entity<turn_rail::TurnRail>,
     /// Item version last synced into the scroller, per row.
     row_versions: Vec<u64>,
     /// Whether the trailing "Working…" row is present.
@@ -127,6 +132,9 @@ pub struct ChatView {
     /// they are never answered for the wrong chat.
     /// Questions asked while hidden, with when they arrived.
     held_dialogs: Vec<(pi_rpc::protocol::ExtensionUiRequest, std::time::Instant)>,
+    /// Questions with a few answers (the sandbox gate's "Allow / Don't allow"), docked above the
+    /// composer in the order they came; the first is shown.
+    questions: Vec<question::Docked>,
     /// pi stopped while the chat was hidden; shown so the user sees why (and any prompts
     /// returned to the composer) before the chat is let go.
     stopped_unseen: bool,
@@ -214,6 +222,10 @@ impl ChatView {
     ) -> Self {
         let composer = cx.new(|cx| Composer::new(session.clone(), window, cx));
         let scroller = cx.new(|cx| MessageScrollerState::new(0, cx));
+        let turn_rail = {
+            let (chat, session, scroller) = (cx.weak_entity(), session.clone(), scroller.clone());
+            cx.new(|cx| turn_rail::TurnRail::new(chat, session, scroller, cx))
+        };
 
         let subscriptions = vec![
             // The speech model download banner.
@@ -246,6 +258,7 @@ impl ChatView {
             session,
             composer,
             scroller,
+            turn_rail,
             row_versions: Vec::new(),
             working_row: false,
             markdown: HashMap::new(),
@@ -259,6 +272,7 @@ impl ChatView {
             roles: Vec::new(),
             exploration: Vec::new(),
             held_dialogs: Vec::new(),
+            questions: Vec::new(),
             stopped_unseen: false,
             pi_field: None,
             highlights: std::cell::RefCell::default(),
@@ -306,6 +320,8 @@ impl ChatView {
             inherited.expanded = !inherited.expanded;
             self.scroller
                 .update(cx, |scroller, cx| scroller.remeasure(cx));
+            self.turn_rail
+                .update(cx, |rail, cx| rail.folding_changed(cx));
             cx.notify();
         }
     }
@@ -333,9 +349,78 @@ impl ChatView {
         }
     }
 
+    /// Docks `request` above the composer; it takes the keyboard once it is the one shown.
+    pub(crate) fn ask(
+        &mut self,
+        request: &pi_rpc::protocol::ExtensionUiRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let weak = cx.weak_entity();
+        let on_answer: question::OnAnswer = Rc::new(move |id, answer, window, cx| {
+            let _ = weak.update(cx, |this, cx| this.answer(id, answer, window, cx));
+        });
+        let question = question::Docked::new(request, on_answer, cx);
+        // pi stops waiting after its timeout: the question goes then too.
+        if let Some(at) = question.expires {
+            let id = request.id.clone();
+            cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(at.saturating_duration_since(std::time::Instant::now()))
+                    .await;
+                let _ = this.update(cx, |this, cx| {
+                    this.questions.retain(|question| question.id != id);
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+        self.questions.push(question);
+        if self.visible {
+            if self.questions.len() == 1 {
+                self.focus_question(window, cx);
+            }
+        } else {
+            cx.emit(ChatEvent::NeedsAttention);
+        }
+        cx.notify();
+    }
+
+    /// Sends the answer to the question `id` and shows the next one, or gives the keyboard back
+    /// to the composer.
+    fn answer(
+        &mut self,
+        id: &str,
+        answer: &pi_rpc::protocol::ExtensionUiAnswer,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.questions.iter().position(|question| question.id == id) else {
+            return;
+        };
+        self.questions.remove(index);
+        self.session
+            .update(cx, |session, _| session.answer_dialog(id, answer));
+        if self.questions.is_empty() {
+            let focus = self.composer_focus(cx);
+            window.focus(&focus, cx);
+        } else {
+            self.focus_question(window, cx);
+        }
+        cx.notify();
+    }
+
+    fn focus_question(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(question) = self.questions.first() {
+            window.focus(&question.focus, cx);
+        }
+    }
+
     /// Whether an extension question is waiting for this chat to be shown.
     pub fn needs_attention(&self) -> bool {
-        !self.held_dialogs.is_empty() || self.stopped_unseen
+        !self.held_dialogs.is_empty()
+            || (!self.visible && !self.questions.is_empty())
+            || self.stopped_unseen
     }
 
     /// Marks the chat shown or in the background; showing it opens the questions it held.
@@ -356,6 +441,9 @@ impl ChatView {
                     dialogs::open(request, self.session.clone(), window, cx);
                 }
             }
+            self.questions
+                .retain(|question| !stopped && !question.expired());
+            self.focus_question(window, cx);
         }
     }
 
@@ -436,6 +524,10 @@ impl ChatView {
                     self.session.read(cx).lifecycle(),
                     session::Lifecycle::Exited { .. }
                 );
+                // A stopped pi takes no answers.
+                if stopped {
+                    self.questions.clear();
+                }
                 if stopped && !self.visible && !self.stopped_unseen {
                     self.stopped_unseen = true;
                     cx.emit(ChatEvent::Stopped);
@@ -454,6 +546,9 @@ impl ChatView {
             SessionEvent::SessionFileChanged | SessionEvent::Settled => {
                 self.sync(cx);
                 cx.emit(ChatEvent::SessionChanged);
+            }
+            SessionEvent::Dialog(request) if question::Question::fits(request) => {
+                self.ask(request, window, cx);
             }
             SessionEvent::Dialog(request) => {
                 if self.visible {
@@ -1187,6 +1282,7 @@ impl Render for ChatView {
                         .with_bottom_fade(background)
                         .size_full(),
                     )
+                    .child(self.turn_rail.clone())
                     .children(find_bar)
                     .into_any_element()
             })
@@ -1196,16 +1292,21 @@ impl Render for ChatView {
                         .w_full()
                         .max_w(CONTENT_MAX_WIDTH + px(32.))
                         .children(self.render_reconnect(cx))
+                        // Behind the composer (painted first), its bottom tucked under it.
+                        .children(self.questions.first().map(|question| question.card.clone()))
                         .child(self.composer.clone()),
                 ),
             )
     }
 }
 
-/// Markdown that renders `text` exactly as typed: punctuation is escaped (no emphasis, links,
-/// headings or math), line breaks are kept, and leading indentation stays text instead of
-/// becoming a code block. Copying the rendered text gives the original back.
+/// Markdown that renders `text` exactly as typed: punctuation is written as character references
+/// (`&#40;`), which Markdown never reads as syntax (no emphasis, links, headings, code or math),
+/// line breaks are kept, and leading indentation stays text instead of becoming a code block.
+/// Copying the rendered text gives the original back. Not backslash escapes: the chat reads
+/// `\(…\)` and `\[…\]` as formulas, so "log(2.5)" escaped that way was drawn as math.
 fn literal_markdown(text: &str) -> String {
+    use std::fmt::Write as _;
     let lines: Vec<&str> = text.lines().collect();
     let mut out = String::with_capacity(text.len() + text.len() / 4);
     for (index, line) in lines.iter().enumerate() {
@@ -1223,9 +1324,10 @@ fn literal_markdown(text: &str) -> String {
         }
         for c in body.trim_end().chars() {
             if c.is_ascii_punctuation() {
-                out.push('\\');
+                let _ = write!(out, "&#{};", u32::from(c));
+            } else {
+                out.push(c);
             }
-            out.push(c);
         }
         // A trailing backslash is a hard line break, unless the paragraph ends here.
         let next_is_text = lines
@@ -1271,9 +1373,24 @@ mod tests {
             "tell me something funny\n"
         );
         assert_eq!(
-            literal_markdown("# not a *heading* [x](y) $5\n    indented\n\nnext"),
-            "\\# not a \\*heading\\* \\[x\\]\\(y\\) \\$5\\\n&#32;&#32;&#32;&#32;indented\n\nnext\n"
+            literal_markdown("# a *b* (c)\n  x\n\nnext"),
+            "&#35; a &#42;b&#42; &#40;c&#41;\\\n&#32;&#32;x\n\nnext\n"
         );
+    }
+
+    /// What is typed is shown as it is, through the chat's own Markdown extensions (math too):
+    /// "log(2.6778)" once came out as a formula.
+    #[gpui_kit::test]
+    fn typed_text_is_shown_as_typed(cx: &mut gpui_kit::TestAppContext) {
+        for typed in [
+            "do log(2.6778)",
+            "# not a *heading* [x](y) $5 and $10, `code`, <b>tag</b> & 1) two",
+            "\\(x^2\\) and $x$ stay text",
+            "[1, 2, 3]",
+            "a_b_c **d** ~~e~~ > quote",
+        ] {
+            assert_eq!(shown(&literal_markdown(typed), cx), typed, "{typed}");
+        }
     }
     /// The text a chat view shows for `source`, with the chat's own Markdown extensions.
     fn shown(source: &str, cx: &mut gpui_kit::TestAppContext) -> String {

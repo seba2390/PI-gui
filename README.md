@@ -25,7 +25,8 @@ when idle.
 
 ## Features
 
-- **Chat and Code modes.** Plain chat without tools, or the coding agent in a project folder.
+- **Chat and Code modes.** Plain chat that can't touch your files, or the coding agent in a
+  project folder.
 - **A readable transcript.** Streaming markdown, collapsible thinking and inline edit diffs.
   Shell commands are labelled by what they do ("Read Cargo.toml", "Ran cargo test").
 - **Side panels and a terminal** in the session's folder: git changes, a file tree, and an
@@ -34,11 +35,18 @@ when idle.
   Your models work there too: requests come back through the SSH connection, so keys stay on
   your computer.
 - **Web search** for chats: quick lookups or multi-step deep research.
+- **Numbers worked out, not guessed.** Chats compute sums, logarithms, series and statistics in
+  Python, run in [Monty](https://github.com/pydantic/monty), a sealed interpreter with no files,
+  network or programs. It can be turned off in Settings → General.
 - **Speech to text.** Dictate with the microphone button. A model you download once (Parakeet,
   Whisper or Moonshine) transcribes on your computer, so nothing you say leaves it.
+- **A sandbox for the agent.** In Code sessions its commands see only the project and the folders
+  you allow, never your keys (Seatbelt on macOS, bubblewrap or Landlock on Linux).
+  When it needs your logins (git push and pull, GitHub's `gh`, signing), you're asked, and it's done
+  outside the sandbox. Settings → Sandboxing & Security.
 - **Background sessions.** Chats keep working while you switch, plus branching, model and
   skill management.
-- **Settings and updates.** A Settings page (⌘,) for look, models, web search and SSH. When a
+- **Settings and updates.** A Settings page (⌘,) for look, models, web search, SSH and the sandbox. When a
   new release is out, Update installs it in place (only when you say yes), and the new version
   shows what changed.
 
@@ -82,20 +90,20 @@ npm i -g @earendil-works/pi-coding-agent
   - Debian, Ubuntu:
 
     ```bash
-    curl -fLO https://github.com/seba2390/pistachio/releases/download/v0.5.4/pistachio_0.5.4-1_$(dpkg --print-architecture).deb && sudo apt install ./pistachio_0.5.4-1_$(dpkg --print-architecture).deb
+    curl -fLO https://github.com/seba2390/pistachio/releases/download/v0.5.5/pistachio_0.5.5-1_$(dpkg --print-architecture).deb && sudo apt install ./pistachio_0.5.5-1_$(dpkg --print-architecture).deb
     ```
 
   - Fedora and other RPM-based systems:
 
     ```bash
-    sudo dnf install https://github.com/seba2390/pistachio/releases/download/v0.5.4/pistachio-0.5.4-1.$(uname -m).rpm
+    sudo dnf install https://github.com/seba2390/pistachio/releases/download/v0.5.5/pistachio-0.5.5-1.$(uname -m).rpm
     ```
 
   - Any other distribution (installs for your user only, no root, and adds "Pistachio" to your
     app launcher):
 
     ```bash
-    curl -fL https://github.com/seba2390/pistachio/releases/download/v0.5.4/pistachio-v0.5.4-linux-$(uname -m).tar.gz | tar xz && pistachio-v0.5.4-linux-$(uname -m)/install.sh
+    curl -fL https://github.com/seba2390/pistachio/releases/download/v0.5.5/pistachio-v0.5.5-linux-$(uname -m).tar.gz | tar xz && pistachio-v0.5.5-linux-$(uname -m)/install.sh
     ```
 
   Or download the files yourself from [Releases](https://github.com/seba2390/pistachio/releases).

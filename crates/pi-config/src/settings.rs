@@ -66,6 +66,29 @@ pub fn with_startup_defaults(
     Ok(out)
 }
 
+/// `settings.json`'s new text with `defaultProjectTrust` set to `value` (`None` removes it, which
+/// means pi's default, `"ask"`). Other settings are kept.
+pub fn with_default_project_trust(
+    text: &str,
+    value: Option<&str>,
+) -> Result<String, SettingsError> {
+    let mut object = parse(text)?;
+    match value {
+        Some(value) => {
+            object.insert(
+                "defaultProjectTrust".to_owned(),
+                Value::String(value.to_owned()),
+            );
+        }
+        None => {
+            object.remove("defaultProjectTrust");
+        }
+    }
+    let mut out = serde_json::to_string_pretty(&Value::Object(object))?;
+    out.push('\n');
+    Ok(out)
+}
+
 fn parse(text: &str) -> Result<Map<String, Value>, SettingsError> {
     if text.trim().is_empty() {
         return Ok(Map::new());
@@ -80,6 +103,17 @@ fn parse(text: &str) -> Result<Map<String, Value>, SettingsError> {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn sets_and_removes_the_default_project_trust() {
+        let text = r#"{"theme": "dark", "defaultProjectTrust": "ask"}"#;
+        let always = with_default_project_trust(text, Some("always")).unwrap();
+        assert!(always.contains(r#""defaultProjectTrust": "always""#));
+        assert!(always.contains(r#""theme": "dark""#));
+        let removed = with_default_project_trust(&always, None).unwrap();
+        assert!(!removed.contains("defaultProjectTrust"));
+        assert!(removed.contains(r#""theme": "dark""#));
+    }
 
     #[test]
     fn reads_and_writes_only_the_startup_keys() {

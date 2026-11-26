@@ -109,6 +109,8 @@ pub fn header(tool: &ToolBlock, paths: PathContext<'_>) -> ToolHeader {
         // Deep search (pistachio's chat extension).
         "web_search" => ("Searched", arg(args, "query").unwrap_or("").to_owned()),
         "web_fetch" => ("Read", short_url(arg(args, "url").unwrap_or(""))),
+        // The chats' python tool (Monty): its last line, usually the expression computed.
+        "python" => ("Computed", last_line(arg(args, "code").unwrap_or(""))),
         other => {
             return ToolHeader {
                 title: other.to_owned(),
@@ -154,6 +156,7 @@ pub fn kind(tool: &ToolBlock) -> ToolKind {
         "ls" => ToolKind::List,
         "grep" | "find" => ToolKind::Search,
         "web_search" | "web_fetch" => ToolKind::Web,
+        "python" => ToolKind::Shell,
         "bash" => arg(&tool.args, "command")
             .and_then(crate::command::summarize)
             .and_then(|summary| summary.actions.first().map(action_kind))
@@ -201,6 +204,15 @@ fn short_url(url: &str) -> String {
 }
 
 /// First non-empty line, with `…` when more lines follow (multi-line commands).
+/// The last line of `text` that has something on it, trimmed.
+fn last_line(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .rfind(|line| !line.is_empty())
+        .unwrap_or_default()
+        .to_owned()
+}
+
 fn first_line(text: &str) -> String {
     let mut lines = text
         .lines()
@@ -284,6 +296,19 @@ pub fn result_summary(tool: &ToolBlock) -> Option<String> {
                 "No results".to_owned()
             } else {
                 count(found, "result")
+            })
+        }
+        // What it printed or gave back: its last line, the result. A failure shows its error.
+        "python" if tool.status == crate::ToolStatus::Failed => Some(last_line(&tool.output)),
+        "python" => {
+            let result = last_line(&tool.output);
+            (!result.is_empty()).then(|| {
+                const MAX: usize = 80;
+                if result.chars().count() > MAX {
+                    format!("= {}…", result.chars().take(MAX).collect::<String>())
+                } else {
+                    format!("= {result}")
+                }
             })
         }
         "web_search" => {
@@ -402,6 +427,7 @@ mod tests {
                 ToolKind::Web,
             ),
             (tool("mcp__x", json!({})), ToolKind::Other),
+            (tool("python", json!({"code":"1 + 1"})), ToolKind::Shell),
             (bash("ls -la"), ToolKind::List),
             (bash("cat Cargo.toml"), ToolKind::Read),
             (bash("rg foo src"), ToolKind::Search),
@@ -428,6 +454,11 @@ mod tests {
                 "src/a.rs:10-14",
             ),
             (tool("bash", json!({"command":"ls -la"})), "Listed", "files"),
+            (
+                tool("python", json!({"code":"import math\nmath.log2(443)\n"})),
+                "Computed",
+                "math.log2(443)",
+            ),
             (
                 tool("bash", json!({"command":"frobnicate -x"})),
                 "Bash",

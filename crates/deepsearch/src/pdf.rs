@@ -43,8 +43,7 @@ fn from_pages(pages: Vec<Vec<String>>) -> Page {
     let title = blocks
         .iter()
         .find(|block| block.kind == BlockKind::Paragraph)
-        .map(|block| block.text.chars().take(150).collect())
-        .unwrap_or_default();
+        .map_or_default(|block| block.text.chars().take(150).collect());
     Page {
         title,
         blocks,

@@ -6,6 +6,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::highlighter::HighlightTheme;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -576,7 +577,7 @@ fn action_button(
     app: &App,
 ) -> impl IntoElement {
     let session = session.clone();
-    component::button::Button::new(id)
+    Button::new(id)
         .quiet(app)
         .xsmall()
         .icon(Icon::from(icon))
@@ -1104,6 +1105,8 @@ fn render_group(group: &Group, cx: &RowContext<'_>) -> AnyElement {
 
 fn render_tool(key: BlockKey, tool: &ToolBlock, cx: &RowContext<'_>) -> AnyElement {
     let expanded = cx.chat.is_expanded(key, false);
+    // What the sandbox's note tells the model is shown as the row's footer instead.
+    let output = sandbox::note::without_note(&tool.output);
     let header = tool::header(tool, cx.paths);
     let file_link = cx
         .session
@@ -1149,14 +1152,14 @@ fn render_tool(key: BlockKey, tool: &ToolBlock, cx: &RowContext<'_>) -> AnyEleme
             )
             .into(),
         ),
-        ToolStatus::Running if tool.output.is_empty() => Some("Running…".into()),
+        ToolStatus::Running if output.is_empty() => Some("Running…".into()),
         ToolStatus::Cancelled => Some("Interrupted".into()),
         _ if expanded => None,
         // A labelled call reads as what it did; its output shows only when expanded.
         _ if labelled => None,
         _ if nested_steps > 0 => Some(plural(nested_steps, "step").into()),
         _ => tool::result_summary(tool).map(Into::into).or_else(|| {
-            (!tool.output.trim().is_empty() && diff.is_none()).then(|| preview(&tool.output).into())
+            (!output.trim().is_empty() && diff.is_none()).then(|| preview(output).into())
         }),
     };
 
@@ -1267,13 +1270,10 @@ fn render_tool(key: BlockKey, tool: &ToolBlock, cx: &RowContext<'_>) -> AnyEleme
                             .font_family(cx.mono.clone())
                             .text_xs()
                             .child(match preview_language {
-                                Some(language) if summary.as_ref() == preview(&tool.output) => {
-                                    let styles = file_styles(language, &tool.output, cx);
-                                    let highlights = code_highlight::join_lines(
-                                        &styles,
-                                        &tool.output,
-                                        PREVIEW_LINES,
-                                    );
+                                Some(language) if summary.as_ref() == preview(output) => {
+                                    let styles = file_styles(language, output, cx);
+                                    let highlights =
+                                        code_highlight::join_lines(&styles, output, PREVIEW_LINES);
                                     StyledText::new(summary)
                                         .with_highlights(highlights)
                                         .into_any_element()
@@ -1293,6 +1293,7 @@ fn render_tool(key: BlockKey, tool: &ToolBlock, cx: &RowContext<'_>) -> AnyEleme
                 .child(top)
                 .children(thumbs),
         )
+        .children(sandbox_footer(tool, cx))
         .when(expanded, |this| {
             let command = (tool.name == "bash")
                 .then(|| tool.args.get("command").and_then(serde_json::Value::as_str))
@@ -1308,6 +1309,21 @@ fn render_tool(key: BlockKey, tool: &ToolBlock, cx: &RowContext<'_>) -> AnyEleme
                         .child(format!("$ {}", command.trim())),
                 )
             });
+            // The python tool's code, above what it gave.
+            let code = (tool.name == "python")
+                .then(|| tool.args.get("code").and_then(serde_json::Value::as_str))
+                .flatten();
+            let this = this.when_some(code, |this, code| {
+                this.child(
+                    div()
+                        .pl(px(15.))
+                        .font_family(cx.mono.clone())
+                        .text_xs()
+                        .text_color(cx.muted)
+                        .whitespace_normal()
+                        .children(code.trim().lines().map(|line| div().child(line.to_owned()))),
+                )
+            });
             let language = tool_language(tool);
             let body = match &diff {
                 Some(lines) => diff_box(
@@ -1317,12 +1333,12 @@ fn render_tool(key: BlockKey, tool: &ToolBlock, cx: &RowContext<'_>) -> AnyEleme
                     key,
                     cx,
                 ),
-                None if !tool.output.trim().is_empty() => output_box(
+                None if !output.trim().is_empty() => output_box(
                     ("tool-out", key.item.0 * 1_000 + key.block as u64),
-                    &tool.output,
+                    output,
                     language
                         .filter(|_| tool.name == "read")
-                        .map(|language| file_styles(language, &tool.output, cx)),
+                        .map(|language| file_styles(language, output, cx)),
                     key,
                     cx,
                 ),
@@ -1339,6 +1355,80 @@ fn render_tool(key: BlockKey, tool: &ToolBlock, cx: &RowContext<'_>) -> AnyEleme
             .child(div().pl(px(15.)).child(body))
         })
         .into_any_element()
+}
+
+/// Below a call the sandbox blocked: that it was, the folders it could be allowed to read or
+/// change, and Settings → Sandboxing & Security.
+fn sandbox_footer(tool: &ToolBlock, cx: &RowContext<'_>) -> Option<AnyElement> {
+    if tool.status != ToolStatus::Failed || !sandbox::note::is_blocked(&tool.output) {
+        return None;
+    }
+    let mut paths = sandbox::note::blocked_paths(&tool.output);
+    // A file tool's refusal: the path it was given.
+    if matches!(
+        tool.name.as_str(),
+        "read" | "write" | "edit" | "grep" | "find" | "ls"
+    ) && let Some(path) = tool.args.get("path").and_then(serde_json::Value::as_str)
+    {
+        let home = sandbox::paths::home();
+        paths.push(sandbox::paths::expand(
+            path.trim().trim_start_matches('@'),
+            home.as_deref(),
+        ));
+    }
+    let project = cx.session.read(cx.app).cwd().to_path_buf();
+    let folders = crate::security::existing(cx.app).map_or_default(|security| {
+        let settings = &security.read(cx.app).settings;
+        crate::security::folders_to_allow(settings, &project, &paths)
+    });
+    let allow = folders.into_iter().enumerate().map(|(index, offer)| {
+        let label = if offer.write {
+            format!("Allow changes in {}", offer.path)
+        } else {
+            format!("Allow reading {}", offer.path)
+        };
+        Button::new(SharedString::from(format!(
+            "sandbox-allow-{}-{index}",
+            tool.call_id
+        )))
+        .label(label)
+        .xsmall()
+        .outline()
+        .on_click(move |_, _, cx| {
+            let offer = offer.clone();
+            crate::security::security(cx).update(cx, |security, cx| {
+                security.update(cx, |settings| crate::security::allow(settings, offer));
+            });
+        })
+    });
+    Some(
+        h_flex()
+            .pl(px(15.))
+            .gap_2()
+            .flex_wrap()
+            .text_xs()
+            .text_color(cx.muted)
+            .child(
+                h_flex()
+                    .gap_1()
+                    .child(Icon::from(AppIcon::ShieldCheck).xsmall())
+                    .child("Blocked by the sandbox"),
+            )
+            .children(allow)
+            .child(
+                Button::new(SharedString::from(format!(
+                    "sandbox-settings-{}",
+                    tool.call_id
+                )))
+                .label("Sandboxing & Security settings…")
+                .xsmall()
+                .ghost()
+                .on_click(|_, window, cx| {
+                    window.dispatch_action(Box::new(crate::actions::OpenSecuritySettings), cx);
+                }),
+            )
+            .into_any_element(),
+    )
 }
 
 /// The icon at the start of a tool row: what kind of step it is (a document for a read, a
@@ -1502,8 +1592,7 @@ fn output_box(
     let shown = search::shown_output(output);
     let total = output.trim_end().lines().count();
     let syntax = styles
-        .map(|styles| code_highlight::join_lines(&styles, output, MAX_OUTPUT_LINES))
-        .unwrap_or_default();
+        .map_or_default(|styles| code_highlight::join_lines(&styles, output, MAX_OUTPUT_LINES));
     let find = cx.chat.find_highlights(key, Field::Output, cx.app);
     let highlights = code_highlight::overlay(&syntax, &find);
     let mut text = shown.into_owned();
@@ -1551,8 +1640,7 @@ fn diff_box(
             let syntax = styles
                 .as_ref()
                 .and_then(|styles| styles.get(ix))
-                .map(Vec::as_slice)
-                .unwrap_or_default();
+                .map_or_default(Vec::as_slice);
             let find = cx.chat.find_highlights(key, Field::DiffLine(ix), cx.app);
             let line_styles = (!syntax.is_empty() || !find.is_empty())
                 .then(|| code_highlight::overlay(syntax, &find));

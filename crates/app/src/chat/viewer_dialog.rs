@@ -59,8 +59,7 @@ pub fn toolbar(cx: &App) -> Div {
 pub fn name(path: &Path) -> Div {
     let name = path
         .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
+        .map_or_default(|name| name.to_string_lossy().into_owned());
     div().flex_1().min_w_0().text_sm().truncate().child(name)
 }
 

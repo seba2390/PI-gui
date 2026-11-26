@@ -30,14 +30,24 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   that the shell is only asked for it.
 - Left sidebar with a **Chat | Code** switch (⌘1 / ⌘2):
   - **Code**: the coding agent in a project folder; sessions are grouped under their folder
-    (collapsible, "+" for a new session there), including ones started from the terminal.
+    (collapsible, "+" for a new session there), including ones started from the terminal. A new
+    session (⌘N) asks which folder (recent folders, another folder or an SSH host); it never picks
+    one by itself.
   - **Chat**: plain conversation with **no file or shell tools**: the model cannot read, write
     or run anything on your computer. Chats run pi in a dedicated empty folder
-    (`~/.pi/agent/pistachio/chat`) with only deep search's two web tools (`--tools
-    web_search,web_fetch --no-mcp`), which stay off until you turn web search on. The
+    (`~/.pi/agent/pistachio/chat`) with only deep search's two web tools, which stay off until
+    you turn web search on, and `python` (`--tools web_search,web_fetch,python --no-mcp`). The
     text of attached files goes along with the message instead of a path (of PDF files as Markdown,
     see [Documents](#documents)), and shows as a small page above it; `!` shell commands are
     disabled.
+  - **Python** (Chat): the model works numbers out in Python instead of estimating them (a sum,
+    a logarithm, a series, statistics). The code runs in [Monty](https://github.com/pydantic/monty),
+    a Python interpreter written in Rust for code a model writes, started fresh for each call
+    (in milliseconds): it has no files, network, environment or programs, only the computation,
+    with `math`, `decimal`, `statistics` and more of the standard library, and stops after 5
+    seconds, at one allocation over 256 MB or at deep recursion. The chat shows the call as
+    "Computed" with the result; expanded, the code. Settings → General → Chat mode turns it off
+    (also in open chats, from their next message). By hand: `pistachio --python-tool 'code'`.
   - **Web search** (Chat): the globe button next to the paperclip chooses how the model uses
     the web, per chat (remembered in the session; `/websearch off|search|deep` works too):
     - **Search**: a quick lookup when needed (a few searches and pages), then a concise answer
@@ -115,7 +125,7 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
     in front. Questions from extensions (confirm, select, input) in a background chat wait
     until you open that chat, marked with an amber dot, so they are never answered for the
     wrong chat; its toasts name the chat.
-- **Side chats**: the "Side chat" tab on the chat column's right edge (also `/side` and ⌘⇧N)
+- **Side chats**: the tab with an L-shaped arrow on the chat column's right edge (also `/side` and ⌘⇧N)
   opens a second conversation in a column to the right, holding everything the conversation
   has at that moment, also while its agent works: finished messages and tool results, the reply
   being written (up to where it was, marked as cut off), and tools still running (with their
@@ -231,6 +241,10 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   → Appearance → Working indicator picks the style, with a live preview.
 - **Transcript layout**: the model's text is the main voice. Tool calls and thinking sit on a
   thin rail on the left in a quieter style, with more room where they meet the text.
+- **Turn rail**: dots at the left edge of the conversation, one per prompt (Chat and Code, from two
+  prompts on). The turn being read has a longer dot in the accent color. Hovering a dot shows a
+  card with that prompt and the start of its answer; clicking it scrolls there. With many turns
+  the dots move closer together. A side chat's taken-over history has none.
 - **Find in chat** (⌘F): a search bar over the conversation. Every match is highlighted;
   Enter / Shift+Enter (or ⌘G / ⌘⇧G) go to the next / previous one with a "3 of 12" count, and
   Esc closes the bar. It searches prompts and replies as shown, thinking, tool output and the
@@ -256,6 +270,88 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   (the height is remembered).
 - macOS and Linux (Wayland and X11), plus an experimental Windows build. GPU-rendered with [GPUI](https://gpui.rs) via
   [gpui-kit](https://gpui-kit.com).
+
+## Sandbox
+
+In Code sessions on this computer, the agent's commands run in a sandbox (on by default, macOS and
+Linux; Windows is planned, #47).
+
+- **What is sandboxed:** every `bash` command runs through the app's helper
+  (`pistachio --sandbox-tool run`), which starts it under **Seatbelt** on macOS, **bubblewrap** on
+  Linux, or **Landlock** where bubblewrap is missing or not allowed to run (Ubuntu's AppArmor,
+  containers). pi's file tools (`read`, `write`, `edit`, `grep`, `find`, `ls`) keep to the same
+  rules, checked by a small pi extension. pi itself, its logins and model requests, MCP servers,
+  other extensions and your own `!` commands are not sandboxed.
+- **Files:** the home folder is private. Commands and file tools see only the session's folder
+  (and, for a subfolder of a repository, the rest of it), pi's skills, the **tool folders** and the
+  **allowed folders**. Both are lists where each folder has Read and Write to tick (unticking
+  Read unticks Write; ticking Write ticks Read), a red trash can, and + to add. The tool
+  folders start as what this computer has: caches to write (`~/.cargo`, `~/.npm`, `~/.cache`, …),
+  programs and settings to read (`~/.nvm`, `~/.local`, `~/.gitconfig`, …) and `$PATH` folders in
+  the home folder; switched off, none of them. Outside the home folder, programs and system files
+  stay readable, since commands need them. Changes are allowed only in the session's folder,
+  temporary folders, the git folder its commits need (also from a subfolder or a worktree) and
+  what is writable in the lists. On macOS the folders on the way to the project (`~`, `~/code`)
+  can be listed, since programs find their working folder that way, but nothing in them read.
+- **Always hidden**, also inside an allowed folder: `~/.ssh`, `~/.aws`, `~/.azure`,
+  `~/.config/gcloud`, `~/.gnupg`, `~/.config/gh`, `~/.docker/config.json`, `~/.kube`, `~/.netrc`,
+  `~/.git-credentials`, `~/.npmrc`, `~/.pypirc`, password stores and keychains, and pi's
+  `auth.json`. Environment variables that hold keys and tokens (names ending in `_API_KEY`,
+  `_TOKEN`, `_SECRET`, …) are removed from commands. pi keeps them for its model requests, so keys
+  never reach the sandbox.
+- **The gate: what needs your keys.** In the sandbox, `git`, `gh`, `gpg` and `ssh-keygen` are small
+  wrappers. Local git (commit, branches, merge, rebase, log, …) runs in the sandbox as usual. What
+  needs your logins goes to a socket the sandbox extension listens on, outside the sandbox:
+  - git's `clone`, `fetch`, `pull`, `push` (tags, deletes and force pushes are pointed out),
+    `ls-remote`, `submodule update` (each submodule's address is listed) and git-lfs's `fetch`,
+    `pull` and `push`;
+  - `gh` for a repository: reading pull requests, issues, runs and releases; opening, commenting
+    on, closing or merging pull requests and issues; creating a repository; deleting one (asked
+    every time, with a warning that it can't be undone; GitHub needs the `delete_repo`
+    permission). `gh api`, logins and secrets are not run. With several GitHub accounts (a personal one and a company one), the
+    dialog offers each: the command runs with that account's token only, and your active account
+    stays as it is. A repository for an owner (`gh repo create acme/tool`) is offered only as
+    accounts that are that owner or members of it, else refused. "Always" remembers the account;
+
+  - signing a commit or tag with your GPG or SSH key (git's own signing call, in git's namespace).
+
+  The gate reads the request itself: only these commands and a list of their options, only in the
+  session's folder, only from remote servers (no local folders or helper programs as addresses), and
+  only in repositories whose `.git/config` starts no program (`core.sshCommand`,
+  `credential.helper`, filters, `url.*.insteadOf`, …; those it names and refuses). It runs git with
+  hooks off. You are asked in a see-through card that slides up above the message box (one line; a
+  button on its edge shows the details, open at first when something needs care) and says exactly
+  what will happen (the commits, the branch, the remote's real address, a force push or the default
+  branch): **Allow**, **Always for this project** (that project, that remote, that kind of thing:
+  fetch, push, push to the default branch, force push, sign, read or change on GitHub) or **Don't
+  allow**. Your keys never enter the sandbox; the command's output comes back to the agent. What you
+  allowed is listed in Settings → Sandboxing & Security → Git and GitHub, each removable. git's own
+  settings (`~/.gitconfig`, `~/.config/git`) are always readable in the sandbox, so commits are made
+  as you. Sandboxed sessions tell the model how this works before it starts, and `gh auth status` is
+  answered by the gate: the accounts logged in and the git identity, never a token.
+- **Allowed websites:** None (the default), All, or Custom. With None a command reaches a website
+  only once you allow it: the first time a conversation's commands use a site, a question like the
+  git gate's asks **Allow** (for that conversation), **Always for this project** (listed under
+  "Allowed when asked", each removable) or **Don't allow** (the command gets 403). Connections made
+  at once share one question. Custom lets the websites listed through without asking (others are
+  asked about), which start as where code and packages come from (GitHub, npm, PyPI, crates.io,
+  Go, RubyGems, Maven). A site is allowed as a whole (HTTPS doesn't show pages): `github.com`, or `github.com/*` with its subdomains. The field
+  checks an address as you type it (`httttp://`, `wwww.`, missing endings) and looks the name up,
+  and a page like `https://www.google.com/search` is taken as its site. Custom works through a
+  proxy in Pistachio (None too): the address commands get names their conversation, so the proxy
+  asks in the right one through its gate. Commands may connect only to it (on Linux with bubblewrap, a bridge in the
+  sandbox passes their connections to its Unix socket), it lets allowed sites through and answers
+  403 to others, and reads the list for each connection, so changes apply at once. Commands find
+  it through `HTTPS_PROXY` and the like (curl, git, npm, pip, cargo; Node with
+  `NODE_USE_ENV_PROXY`); tools that ignore those get no network. On Linux, Landlock needs Linux
+  6.7 to limit the network.
+- **In a session:** a shield next to the folder in the message box ("Some sites", "No network" or "No sandbox"
+  when that applies); its menu runs the project without a sandbox (or with one again) and opens
+  Settings → Sandboxing & Security. A call the sandbox blocked says so under it, with a button that allows
+  reading (or changing) the folder it tried to use.
+- Settings are `~/.pi/agent/pistachio/sandbox/settings.json`, read by every command, so changes
+  apply from the next one, also in running sessions. `script/test-sandbox.py` checks it end to end
+  with real pi and a scripted model.
 
 ## Documents
 
@@ -385,13 +481,14 @@ All three are Apache 2.0 licensed. Downloading one asks first and shows its file
 
 Settings opens from the Pistachio menu (⌘,) or the button at the bottom of the sidebar. Every
 change is saved right away. Small π signs drift behind its pages and move out of the way of the
-mouse.
+mouse. Picking a section in the sidebar scrolls to it, and its heading glows for a moment. Lists on
+the Sandboxing & Security page light up under the pointer and scroll by themselves.
 
 - **General:** theme (follow the system, light or dark), code colors (the syntax palette for
   code in chat, diffs, skills and `models.json`, with a live preview), the working indicator's
   style (with a live preview), text size (scales the interface),
-  whether to open in Chat, Code or the mode used last, reopening the last session, and
-  notifications for chats working in the background.
+  whether to open in Chat, Code or the mode used last, reopening the last session, whether chats
+  compute with Python, and notifications for chats working in the background.
 - **pi & models:** which `pi` to run (`PISTACHIO_PI_BIN` still wins), the model and thinking
   level pi starts with (saved in pi's own `settings.json`, like `/settings` in the terminal),
   and what is connected (with whether its server answers) to add to, change or remove.
@@ -408,6 +505,12 @@ mouse.
   (download, use, remove).
 - **Document parsing:** what reads PDF files, and the parsers that can be downloaded (size, license,
   download, use, update, remove).
+- **Sandboxing & Security:** the sandbox (see [Sandbox](#sandbox)): which one this computer has (with the
+  command that installs bubblewrap where it is missing), on or off, the tools' folders, the
+  allowed folders (read-only or to change), the network (None, All, or Custom with the allowed
+  sites), and what the agent may do with your git and GitHub logins without asking (Git and
+  GitHub). Also which project files pi loads: pi's `defaultProjectTrust` and the saved
+  decisions in its `trust.json`, which can be removed.
 
 The app's own settings live in `~/.pi/agent/pistachio/settings.json`.
 

@@ -16,7 +16,7 @@ use super::{MainWindow, focus_chat, full, keeps_working, session_key, set_draft,
 use crate::actions::OpenSideChat;
 use crate::chat::session::SideChatStart;
 use crate::chat::{ChatEvent, ChatView, ComposerEvent};
-use crate::ui::{QuietButton as _, TOP_BAR_HEIGHT};
+use crate::ui::{AppIcon, QuietButton as _, TOP_BAR_HEIGHT};
 
 /// The chat in the side column.
 pub(super) struct SideChat {
@@ -325,7 +325,6 @@ impl MainWindow {
             return None;
         }
         let opening = self.side_opening.is_some();
-        let label = if opening { "Opening…" } else { "Side chat" };
         let theme = cx.theme();
         let accent = crate::theme::palette(cx).accent;
         let (bg, hover, border, muted, fg) = (
@@ -335,7 +334,12 @@ impl MainWindow {
             theme.muted_foreground,
             theme.foreground,
         );
-        let tip = "Open a side chat with everything here so far (⌘⇧N or /side)";
+        let tip = if opening {
+            "Opening the side chat…"
+        } else {
+            "Start a new chat from this point in the conversation, with everything so far \
+             (⌘⇧N or /side)"
+        };
         Some(
             div()
                 .absolute()
@@ -350,9 +354,8 @@ impl MainWindow {
                         .role(Role::Button)
                         .aria_label(tip)
                         .h(px(30.))
-                        .pl_2p5()
-                        .pr_2()
-                        .gap_1p5()
+                        .pl_2()
+                        .pr_1p5()
                         .rounded_l_lg()
                         .border_1()
                         .border_r_0()
@@ -373,11 +376,11 @@ impl MainWindow {
                         .tooltip(move |window, cx| {
                             component::tooltip::Tooltip::new(tip).build(window, cx)
                         })
-                        .child(label)
+                        // An L-shaped arrow: a new chat branching off from here.
                         .child(
-                            component::Icon::new(IconName::ArrowRight)
-                                .xsmall()
-                                .text_color(accent),
+                            component::Icon::from(AppIcon::CornerDownRight)
+                                .small()
+                                .text_color(if opening { muted } else { accent }),
                         ),
                 )
                 .into_any_element(),

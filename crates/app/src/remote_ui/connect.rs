@@ -432,8 +432,7 @@ impl ConnectFlow {
             .hosts
             .read(cx)
             .get(&self.host)
-            .map(|host| host.recent_folders.clone())
-            .unwrap_or_default();
+            .map_or_default(|host| host.recent_folders.clone());
         let listing = match browse {
             Browse::Loading => {
                 return div()

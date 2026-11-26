@@ -385,7 +385,7 @@ impl PdfViewer {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let drawn = self.pages.get(&page);
-        let links = drawn.map(|page| page.links.clone()).unwrap_or_default();
+        let links = drawn.map_or_default(|page| page.links.clone());
         let links = (0..links.len()).map(|index| {
             let link = &links[index];
             let target = link.target.clone();

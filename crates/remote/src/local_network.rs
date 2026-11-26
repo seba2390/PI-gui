@@ -118,8 +118,7 @@ fn is_local_v6(ip: Ipv6Addr) -> bool {
 fn lookup(host: &str) -> Vec<IpAddr> {
     (host, 22)
         .to_socket_addrs()
-        .map(|addresses| addresses.map(|address| address.ip()).collect())
-        .unwrap_or_default()
+        .map_or_default(|addresses| addresses.map(|address| address.ip()).collect())
 }
 
 #[cfg(test)]

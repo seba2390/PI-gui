@@ -65,6 +65,8 @@ struct PiStartupState {
 impl Global for PiStartupState {}
 
 pub struct SettingsView {
+    /// Sandboxing & Security: the field of the allowed sites.
+    site_input: Entity<InputState>,
     brave_key: Entity<InputState>,
     tavily_key: Entity<InputState>,
     /// `(provider/id, label)` of the models to choose the startup model from.
@@ -83,6 +85,8 @@ pub struct SettingsView {
     pub(super) advanced: web_advanced::Advanced,
     /// The page shown first (scripted runs open Speech to text directly).
     start_page: usize,
+    /// The section of it scrolled to first, if any.
+    start_group: Option<usize>,
     /// The Code colors palette under the pointer in the open picker; the preview shows it.
     code_colors_hover: Option<CodeColors>,
     /// The working-indicator style under the pointer in the open picker; the preview shows it.
@@ -126,6 +130,10 @@ impl SettingsView {
             })
         };
         let brave_key = key_input(brave, "From BRAVE_API_KEY if empty", window, cx);
+        let site_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("github.com, or github.com/* with its subdomains")
+        });
         let tavily_key = key_input(tavily, "From TAVILY_API_KEY if empty", window, cx);
         let parsers = document_parsers(cx);
         parsers.update(cx, DocumentParsers::refresh);
@@ -168,9 +176,31 @@ impl SettingsView {
             }),
         ];
         check_searxng(true, cx);
+        // Settings → Sandboxing & Security: read again what may have changed elsewhere (/trust, the file).
+        let security = crate::security::security(cx);
+        security.update(cx, crate::security::Security::refresh);
+        let mut subscriptions = subscriptions;
+        subscriptions.push(cx.observe(&security, |_, _, cx| cx.notify()));
+        // The site field is checked as it is typed; Enter adds it.
+        subscriptions.push(cx.subscribe_in(
+            &site_input,
+            window,
+            |_, input, event: &InputEvent, window, cx| match event {
+                InputEvent::Change => {
+                    let text = input.read(cx).value().to_string();
+                    crate::security::security(cx).update(cx, |s, cx| s.check_site(&text, cx));
+                    cx.notify();
+                }
+                InputEvent::PressEnter { .. } => {
+                    super::security::add_site(input, window, cx);
+                }
+                _ => {}
+            },
+        ));
         let connected =
             super::models::Connected::load(session_models.iter().map(|model| &*model.0), cx);
         let mut this = Self {
+            site_input,
             brave_key,
             tavily_key,
             models: Vec::new(),
@@ -181,6 +211,7 @@ impl SettingsView {
             pi_version: None,
             advanced: web_advanced::Advanced::default(),
             start_page: 0,
+            start_group: None,
             pi_field: cx.new(|_| PiField::plain()),
             code_colors_hover: None,
             indicator_hover: None,
@@ -415,6 +446,32 @@ impl SettingsView {
                             "Instead of the welcome screen, also for sessions on SSH hosts.",
                         ),
                     ),
+            )
+            .group(
+                SettingGroup::new().title("Chat mode").item(
+                    SettingItem::new(
+                        "Compute with Python",
+                        hover_switch(
+                            "settings-switch-python",
+                            |cx| python_tool::enabled(&cx.global::<AppConfig>().python_dir),
+                            |on, cx| {
+                                let dir = cx.global::<AppConfig>().python_dir.clone();
+                                if let Err(error) = python_tool::set_enabled(&dir, on) {
+                                    log::warn!(
+                                        "could not save the Python setting in {}: {error}",
+                                        dir.display()
+                                    );
+                                }
+                            },
+                        ),
+                    )
+                    .description(
+                        "The model works numbers out in Python instead of estimating them. The \
+                             code runs in Monty, a sealed interpreter: no files, network or \
+                             programs. Applies from the next message, also in open chats.",
+                    )
+                    .keywords(["python", "monty", "calculate", "math", "code"]),
+                ),
             )
             .group(
                 SettingGroup::new()
@@ -822,6 +879,17 @@ impl SettingsView {
         self.start_page = 6;
     }
 
+    /// Opens on the Security page (before the first render).
+    pub fn start_on_security(&mut self) {
+        self.start_page = 7;
+    }
+
+    /// Opens on the Security page's Git and GitHub section (before the first render).
+    pub fn start_on_git(&mut self) {
+        self.start_page = 7;
+        self.start_group = Some(3);
+    }
+
     fn speech_page(&self) -> SettingPage {
         use crate::stt::{AutoStop, catalog};
         SettingPage::new("Speech to text")
@@ -893,7 +961,7 @@ impl Render for SettingsView {
             Settings::new("app-settings")
                 .default_selected_index(SelectIndex {
                     page_ix: self.start_page,
-                    group_ix: None,
+                    group_ix: self.start_group,
                 })
                 .pages([
                     self.general_page(&weak),
@@ -903,6 +971,7 @@ impl Render for SettingsView {
                     self.speech_page(),
                     naming_page(cx),
                     super::documents::page(),
+                    super::security::page(self.site_input.clone()),
                 ]),
         )
     }
@@ -990,7 +1059,7 @@ fn naming_page(cx: &App) -> SettingPage {
 }
 
 /// An on/off setting: gpui-kit's switch with a hover ring, so it reads as clickable.
-fn hover_switch(
+pub(super) fn hover_switch(
     id: &'static str,
     value: impl Fn(&App) -> bool + 'static,
     set_value: impl Fn(bool, &mut App) + 'static,
@@ -1557,6 +1626,76 @@ mod tests {
         });
         cx.run_until_parked();
         cx
+    }
+
+    /// Scrolling over a long list on the Sandboxing page moves the list, not the page.
+    #[gpui_kit::test]
+    fn a_long_list_scrolls_by_itself(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let settings = sandbox::Settings {
+            tool_folders: false,
+            allowed: (0..8)
+                .map(|n| sandbox::Allowed::new(format!("~/folder-{n}"), false))
+                .collect(),
+            ..sandbox::Settings::default()
+        };
+        settings.save(dir.path()).expect("save");
+        cx.executor().allow_parking();
+        cx.update(|cx| {
+            gpui_kit::component::init(cx);
+            cx.set_reduce_motion(true);
+            let mut config = AppConfig::for_tests("/nonexistent/pi".into());
+            config.deepsearch_dir = dir.path().to_path_buf();
+            config.sandbox_dir = dir.path().to_path_buf();
+            cx.set_global(config);
+            cx.set_global(AppSettings::default());
+            crate::search_server::init(cx);
+            crate::stt::init(cx);
+            crate::naming::init(cx);
+            let hosts = cx.new(|_| crate::hosts::Hosts::for_tests(Vec::new()));
+            cx.set_global(crate::hosts::HostsHandle(hosts));
+        });
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|cx| {
+                let mut view = SettingsView::new(Vec::new(), window, cx);
+                view.start_on_security();
+                view
+            });
+            Root::new(view, window, cx)
+        });
+        // Short enough that the page scrolls too, tall enough to show the whole list.
+        cx.simulate_resize(gpui_kit::size(gpui_kit::px(1100.), gpui_kit::px(950.)));
+        cx.run_until_parked();
+        let bounds = cx
+            .debug_bounds("sandbox-allowed")
+            .expect("the list is drawn");
+        let over = gpui_kit::point(bounds.center().x, bounds.bottom() - gpui_kit::px(80.));
+        let offset = |cx: &mut VisualTestContext| {
+            cx.update(|_, cx| {
+                crate::security::existing(cx)
+                    .and_then(|s| s.read(cx).list_offsets.get("sandbox-allowed").copied())
+                    .unwrap_or(0.)
+            })
+        };
+        for _ in 0..3 {
+            cx.simulate_event(gpui_kit::ScrollEvent {
+                position: over,
+                delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
+                    gpui_kit::px(0.),
+                    gpui_kit::px(-40.),
+                )),
+                ..Default::default()
+            });
+            cx.run_until_parked();
+        }
+        assert!(
+            (offset(cx) - 120.).abs() < 0.01,
+            "scrolling down moved the list by as much"
+        );
+        let after = cx
+            .debug_bounds("sandbox-allowed")
+            .expect("the list is drawn");
+        assert_eq!(after.origin, bounds.origin, "the page stayed where it was");
     }
 
     /// Every model pi has can be the startup model, also when there is no session.
