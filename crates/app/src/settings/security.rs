@@ -20,10 +20,10 @@ use crate::ui::AppIcon;
 
 /// The issue about a sandbox on Windows.
 const WINDOWS_ISSUE: &str = "https://github.com/seba2390/pistachio/issues/47";
-/// How tall a list gets before it scrolls: about three rows, the third fading out.
-const LIST_MAX_HEIGHT: f32 = 118.;
-/// Rows that fit before the list fades out and scrolls.
+/// Rows a list shows; below them the next one fades out, and the list scrolls a row at a time.
 const LIST_ROWS_SHOWN: usize = 3;
+/// How far to scroll for one row.
+const LIST_ROW_SCROLL: f32 = 34.;
 
 /// `site_input` is the allowlist's field (the view keeps it, with its text).
 pub(super) fn page(site_input: Entity<InputState>) -> SettingPage {
@@ -141,7 +141,9 @@ fn change(cx: &mut App, f: impl FnOnce(&mut sandbox::Settings)) {
     security(cx).update(cx, |s, cx| s.update(cx, f));
 }
 
-/// A titled box holding a list (scrolling when long) and, under it, how to add to it.
+/// A titled box holding a list and, under it, how to add to it. A long list shows its first
+/// rows with the next one fading out, scrolls a row at a time over them, and has a thin bar
+/// saying where it is.
 fn list_card(
     id: &'static str,
     title: &'static str,
@@ -152,17 +154,66 @@ fn list_card(
     cx: &App,
 ) -> AnyElement {
     let theme = cx.theme();
-    let fade = theme.background;
     let count = rows.len();
-    let rows = rows.into_iter().enumerate().map(|(index, row)| {
+    let last = count.saturating_sub(LIST_ROWS_SHOWN);
+    let top = read(cx, |s| s.list_tops.get(id).copied().unwrap_or(0)).min(last);
+    let more_below = top + LIST_ROWS_SHOWN < count;
+    let separator = theme.border.opacity(0.6);
+    let row_box = |row: AnyElement, line: bool| {
         div()
             .w_full()
-            .px_3()
+            .pl_3()
+            .pr_4()
             .py_1p5()
-            .when(index + 1 < count, |this| {
-                this.border_b_1().border_color(theme.border.opacity(0.6))
-            })
+            .when(line, |this| this.border_b_1().border_color(separator))
             .child(row)
+    };
+    let mut shown: Vec<AnyElement> = Vec::new();
+    let mut peek = None;
+    for (index, row) in rows.into_iter().enumerate().skip(top) {
+        if index < top + LIST_ROWS_SHOWN {
+            shown.push(row_box(row, index + 1 < count).into_any_element());
+        } else {
+            // The next row, cut and faded: there is more.
+            peek = Some(
+                div()
+                    .h(px(18.))
+                    .overflow_hidden()
+                    .opacity(0.3)
+                    .child(row_box(row, false))
+                    .into_any_element(),
+            );
+            break;
+        }
+    }
+    #[allow(clippy::cast_precision_loss)] // a short list
+    let (thumb_height, thumb_top) = if count > 0 {
+        (
+            LIST_ROWS_SHOWN.min(count) as f32 / count as f32,
+            top as f32 / count as f32,
+        )
+    } else {
+        (1., 0.)
+    };
+    let scrollbar = (count > LIST_ROWS_SHOWN).then(|| {
+        div()
+            .absolute()
+            .top(px(6.))
+            .bottom(px(6.))
+            .right(px(4.))
+            .w(px(3.))
+            .rounded_full()
+            .bg(theme.border.opacity(0.35))
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .w_full()
+                    .top(relative(thumb_top))
+                    .h(relative(thumb_height))
+                    .rounded_full()
+                    .bg(theme.muted_foreground.opacity(0.6)),
+            )
     });
     v_flex()
         .w_full()
@@ -187,49 +238,40 @@ fn list_card(
                 .overflow_hidden()
                 .child(
                     div()
+                        .id(id)
                         .relative()
                         .w_full()
-                        .child(
-                            div()
-                                .id(id)
-                                .w_full()
-                                .max_h(px(LIST_MAX_HEIGHT))
-                                .overflow_y_scroll()
-                                .when(count == 0, |this| {
-                                    this.child(
-                                        h_flex()
-                                            .w_full()
-                                            .justify_center()
-                                            .py_4()
-                                            .text_xs()
-                                            .text_color(theme.muted_foreground)
-                                            .child(empty),
-                                    )
-                                })
-                                .children(rows),
-                        )
-                        // More below: the last row shown fades out.
-                        .when(count > LIST_ROWS_SHOWN, |this| {
+                        .on_scroll(move |event, window, cx| {
+                            let delta = event.delta.pixel_delta(window.line_height()).y;
+                            let rows = (count, LIST_ROWS_SHOWN);
+                            let moved = security(cx).update(cx, |s, cx| {
+                                s.scroll_list(id, f32::from(delta), rows, LIST_ROW_SCROLL, cx)
+                            });
+                            if moved {
+                                cx.stop_propagation();
+                            }
+                        })
+                        .when(count == 0, |this| {
                             this.child(
-                                div()
-                                    .absolute()
-                                    .left_0()
-                                    .right_0()
-                                    .bottom_0()
-                                    .h(px(30.))
-                                    .bg(linear_gradient(
-                                        180.,
-                                        linear_color_stop(fade.opacity(0.), 0.),
-                                        linear_color_stop(fade, 1.),
-                                    )),
+                                h_flex()
+                                    .w_full()
+                                    .justify_center()
+                                    .py_4()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(empty),
                             )
-                        }),
+                        })
+                        .children(shown)
+                        .children(peek)
+                        .children(scrollbar),
                 )
                 .child(
                     div()
                         .w_full()
-                        .border_t_1()
-                        .border_color(theme.border)
+                        .when(!more_below || count == 0, |this| {
+                            this.border_t_1().border_color(theme.border)
+                        })
                         .px_3()
                         .py_2()
                         .child(footer),
@@ -300,37 +342,44 @@ fn chip(id: SharedString, icon: Icon, label: &'static str, on: bool, cx: &App) -
         .child(label)
 }
 
-/// A plain check box and its word: an outline, with a tick while it is on.
-fn tick(id: SharedString, label: &'static str, on: bool, cx: &App) -> Stateful<Div> {
+/// What a folder may be used for: an icon and its word, greyed out while off. A click turns it
+/// on or off.
+fn access(id: SharedString, icon: Icon, label: &'static str, on: bool, cx: &App) -> Stateful<Div> {
     let theme = cx.theme();
-    let (foreground, border, muted) = (theme.foreground, theme.border, theme.muted_foreground);
+    let (foreground, muted, hover) = (
+        theme.foreground,
+        theme.muted_foreground,
+        theme.secondary_hover,
+    );
     div()
         .id(id)
         .flex()
         .flex_none()
         .items_center()
-        .gap_1p5()
+        .gap_1()
+        .px_1p5()
+        .py_0p5()
+        .rounded_md()
         .cursor_pointer()
         .text_sm()
-        .text_color(if on { foreground } else { muted })
-        .child(
-            div()
-                .size(px(14.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(3.))
-                .border_1()
-                .border_color(if on { muted } else { border })
-                .when(on, |this| {
-                    this.child(
-                        Icon::new(IconName::Check)
-                            .size(px(11.))
-                            .text_color(foreground),
-                    )
-                }),
-        )
+        .hover(move |style| style.bg(hover))
+        .map(|this| {
+            if on {
+                this.text_color(foreground)
+            } else {
+                this.text_color(muted).opacity(0.45)
+            }
+        })
+        .child(icon.small())
         .child(label)
+        .tooltip(move |window, cx| {
+            let tip = if on {
+                format!("{label}: on (click to turn off)")
+            } else {
+                format!("{label}: off (click to turn on)")
+            };
+            component::tooltip::Tooltip::new(tip).build(window, cx)
+        })
 }
 
 /// Which list of folders a row belongs to.
@@ -370,8 +419,8 @@ impl Folders {
     }
 }
 
-/// The rows of a list of folders: the path, Read and Write to tick (no reading means no writing;
-/// writing needs reading) and the trash can.
+/// The rows of a list of folders: the path, Read and Write to turn on and off (no reading means no
+/// writing; writing needs reading) and the trash can.
 fn folder_rows(list: Folders, cx: &App) -> Vec<AnyElement> {
     let theme = cx.theme();
     let (muted, mono) = (theme.muted_foreground, theme.mono_font_family.clone());
@@ -382,18 +431,27 @@ fn folder_rows(list: Folders, cx: &App) -> Vec<AnyElement> {
             let id = |what: &str| SharedString::from(format!("{}-{index}-{what}", list.key()));
             let read_on = entry.read;
             let write_on = entry.write && entry.read;
-            let read = tick(id("read"), "Read", read_on, cx).on_click(move |_, _, cx| {
-                list.change(cx, |entries| {
-                    if let Some(entry) = entries.get_mut(index) {
-                        entry.read = !read_on;
-                        // No reading, no writing.
-                        if read_on {
-                            entry.write = false;
+            let read = access(id("read"), Icon::new(IconName::Eye), "Read", read_on, cx).on_click(
+                move |_, _, cx| {
+                    list.change(cx, |entries| {
+                        if let Some(entry) = entries.get_mut(index) {
+                            entry.read = !read_on;
+                            // No reading, no writing.
+                            if read_on {
+                                entry.write = false;
+                            }
                         }
-                    }
-                });
-            });
-            let write = tick(id("write"), "Write", write_on, cx).on_click(move |_, _, cx| {
+                    });
+                },
+            );
+            let write = access(
+                id("write"),
+                Icon::from(AppIcon::Pencil),
+                "Write",
+                write_on,
+                cx,
+            )
+            .on_click(move |_, _, cx| {
                 list.change(cx, |entries| {
                     if let Some(entry) = entries.get_mut(index) {
                         entry.write = !write_on;
@@ -426,7 +484,7 @@ fn folder_rows(list: Folders, cx: &App) -> Vec<AnyElement> {
                         .when(!read_on, |this| this.text_color(muted))
                         .child(entry.path.clone()),
                 )
-                .child(h_flex().flex_none().gap_3().child(read).child(write))
+                .child(h_flex().flex_none().gap_1().child(read).child(write))
                 .child(remove)
                 .into_any_element()
         })

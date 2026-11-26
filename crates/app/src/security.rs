@@ -90,6 +90,10 @@ pub struct Security {
     pub status: Option<Status>,
     /// The site being typed in the allowlist's field, looked up.
     pub site_check: Option<SiteCheck>,
+    /// The first row each list on the page shows (they scroll a row at a time).
+    pub list_tops: std::collections::HashMap<&'static str, usize>,
+    /// Scrolling not yet turned into rows, per list.
+    wheel: std::collections::HashMap<&'static str, f32>,
     pub trust_default: TrustDefault,
     /// Saved trust decisions: folder, trusted.
     pub trusted: Vec<(String, bool)>,
@@ -117,6 +121,8 @@ pub fn security(cx: &mut App) -> Entity<Security> {
             exe,
             status: None,
             site_check: None,
+            list_tops: std::collections::HashMap::new(),
+            wheel: std::collections::HashMap::new(),
             trust_default: TrustDefault::Ask,
             trusted: Vec::new(),
             error: None,
@@ -287,6 +293,43 @@ impl Security {
                 }
             });
         });
+    }
+
+    /// Scrolls list `id` (of `count` rows, `shown` at a time) by `delta` pixels (positive is
+    /// up), a row per `row` pixels. Returns whether the list could move that way, so the page
+    /// scrolls instead at its ends.
+    pub fn scroll_list(
+        &mut self,
+        id: &'static str,
+        delta: f32,
+        rows: (usize, usize),
+        row: f32,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let (count, shown) = rows;
+        let last = count.saturating_sub(shown);
+        let top = self.list_tops.entry(id).or_default();
+        *top = (*top).min(last);
+        let can_move = (delta < 0. && *top < last) || (delta > 0. && *top > 0);
+        if !can_move {
+            self.wheel.remove(id);
+            return false;
+        }
+        let pending = self.wheel.entry(id).or_default();
+        *pending += delta;
+        let before = *top;
+        while *pending <= -row && *top < last {
+            *top += 1;
+            *pending += row;
+        }
+        while *pending >= row && *top > 0 {
+            *top -= 1;
+            *pending -= row;
+        }
+        if *top != before {
+            cx.notify();
+        }
+        true
     }
 
     /// Adds what was typed to the allowed sites; says why not when it can't be.
