@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 gpui-kit.workspace = true
 deepsearch.workspace = true
+python-tool.workspace = true
 documents.workspace = true
 sandbox.workspace = true
 pi-config.workspace = true

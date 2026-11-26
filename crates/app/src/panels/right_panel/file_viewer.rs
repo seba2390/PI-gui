@@ -146,8 +146,7 @@ impl FileViewer {
         );
         let parent = Path::new(self.title.as_ref())
             .parent()
-            .map(|parent| parent.to_string_lossy().into_owned())
-            .unwrap_or_default();
+            .map_or_default(|parent| parent.to_string_lossy().into_owned());
         h_flex()
             .h(px(32.))
             .flex_none()

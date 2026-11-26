@@ -51,10 +51,7 @@ impl AddHost {
                                 alias: host.alias.clone(),
                             };
                             let resolved = remote::resolve(&target).ok().map(|resolved| {
-                                let user = resolved
-                                    .user
-                                    .map(|user| format!("{user}@"))
-                                    .unwrap_or_default();
+                                let user = resolved.user.map_or_default(|user| format!("{user}@"));
                                 let port = if resolved.port == 22 {
                                     String::new()
                                 } else {

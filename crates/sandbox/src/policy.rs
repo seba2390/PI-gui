@@ -72,9 +72,8 @@ impl Context {
         let agent_dir = std::env::var_os("PI_CODING_AGENT_DIR")
             .map(PathBuf::from)
             .or_else(|| home.as_ref().map(|home| home.join(".pi").join("agent")));
-        let path = std::env::var_os("PATH")
-            .map(|path| std::env::split_paths(&path).collect())
-            .unwrap_or_default();
+        let path =
+            std::env::var_os("PATH").map_or_default(|path| std::env::split_paths(&path).collect());
         Self {
             home,
             temp,

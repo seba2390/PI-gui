@@ -91,7 +91,7 @@ impl Reader {
             .and_then(|id| self.styles.get(id))
             .cloned()
             .unwrap_or_default();
-        let own = own.map(properties).unwrap_or_default();
+        let own = own.map_or_default(properties);
         let heading = own.heading.or(style.heading);
         let list = own.list.or(style.list).filter(|list| list.id != "0");
         match (heading, list) {
@@ -260,7 +260,7 @@ fn styles(text: &str) -> Result<HashMap<String, Style>, String> {
         else {
             continue;
         };
-        let mut style = child(node, "pPr").map(properties).unwrap_or_default();
+        let mut style = child(node, "pPr").map_or_default(properties);
         // Its id is in the language of the program, its name is not.
         let name = value(node, "name").unwrap_or_default().to_ascii_lowercase();
         if let Some(level) = name.strip_prefix("heading ") {

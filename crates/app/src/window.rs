@@ -3240,8 +3240,7 @@ fn welcome_menu(
     let home = cx.global::<AppConfig>().home.clone();
     let recent: Vec<PathBuf> = cx
         .try_global::<crate::config::RecentFolders>()
-        .map(|recent| recent.0.clone())
-        .unwrap_or_default()
+        .map_or_default(|recent| recent.0.clone())
         .into_iter()
         .filter(|folder| folder.is_dir())
         .take(crate::config::RECENT_FOLDERS)

@@ -8,6 +8,9 @@ All notable changes to PI-gui are listed here. The format follows
 
 ### Added
 
+- Chats compute numbers with Python: a `python` tool runs the model's code in Monty, a sandboxed
+  Python interpreter written in Rust (no files, network or environment; limits on time, memory and
+  recursion), so a sum, logarithm or series is worked out instead of estimated.
 - A sandbox for the agent's commands in Code sessions on this computer, on by default (macOS and
   Linux). Commands run under Seatbelt on macOS and bubblewrap on Linux (Landlock where bubblewrap
   can't run). Of your home folder they see only the project, folders you allow and the folders of

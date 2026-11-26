@@ -66,7 +66,7 @@ impl UiState {
     /// Reads the saved state, with defaults for what is missing or unreadable (see
     /// [`crate::persist::load`]).
     pub fn load(path: Option<&Path>) -> Self {
-        path.map(crate::persist::load).unwrap_or_default()
+        path.map_or_default(crate::persist::load)
     }
 
     /// Changes the global state with `f` and saves it in the background if it changed.

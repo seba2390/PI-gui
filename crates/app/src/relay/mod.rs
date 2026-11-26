@@ -466,11 +466,7 @@ fn absolute_resource_paths(settings: &mut Map<String, Value>, base: &str) {
             } else if prefix.is_none() && !path.contains(['*', '?']) {
                 out.push(Value::String(join(path)));
             } else {
-                let absolute = format!(
-                    "{}{}",
-                    prefix.map(String::from).unwrap_or_default(),
-                    join(path)
-                );
+                let absolute = format!("{}{}", prefix.map_or_default(String::from), join(path));
                 out.push(entry);
                 out.push(Value::String(absolute));
             }

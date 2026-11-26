@@ -167,7 +167,7 @@ impl Hosts {
 
     fn new(cx: &mut Context<Self>) -> Self {
         let path = HostStore::path();
-        let store = path.as_deref().map(HostStore::load).unwrap_or_default();
+        let store = path.as_deref().map_or_default(HostStore::load);
         // Close shared connections when the app quits (they would linger for ControlPersist).
         cx.on_app_quit(|this, _| {
             let ssh: Vec<Arc<Ssh>> = this

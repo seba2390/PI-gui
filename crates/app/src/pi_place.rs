@@ -58,9 +58,9 @@ impl PiPlace {
     /// The user's home folder there.
     pub fn home(&self) -> String {
         match self {
-            Self::Local { .. } => dirs_home()
-                .map(|home| home.to_string_lossy().into_owned())
-                .unwrap_or_default(),
+            Self::Local { .. } => {
+                dirs_home().map_or_default(|home| home.to_string_lossy().into_owned())
+            }
             Self::Remote { home, .. } => home.clone(),
         }
     }

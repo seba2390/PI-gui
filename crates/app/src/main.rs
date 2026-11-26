@@ -47,6 +47,10 @@ fn main() {
     if let Some(code) = deepsearch::cli::run_if_requested() {
         std::process::exit(code);
     }
+    // Started by the chats' python tool to run the model's code in Monty.
+    if let Some(code) = python_tool::cli::run_if_requested() {
+        std::process::exit(code);
+    }
     // Started by a chat, or by the pi extension of Code sessions, to read a document.
     if let Some(code) = documents::cli::run_if_requested() {
         std::process::exit(code);

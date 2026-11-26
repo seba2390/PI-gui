@@ -61,10 +61,7 @@ pub fn run_if_requested() -> Option<i32> {
     match (by_hand, reply) {
         (Some(_), Ok(reply)) => println!(
             "{}{}",
-            reply
-                .note
-                .map(|note| format!("({note})\n\n"))
-                .unwrap_or_default(),
+            reply.note.map_or_default(|note| format!("({note})\n\n")),
             reply.markdown
         ),
         (Some(_), Err(error)) => eprintln!("{error}"),

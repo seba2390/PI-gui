@@ -8,7 +8,7 @@ default-members = ["crates/app"]
 [workspace.package]
 version = "0.5.4"
 edition = "2024"
-rust-version = "1.92"
+rust-version = "1.98"
 publish = false
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/seba2390/pistachio"
@@ -21,6 +21,7 @@ pi-config = { path = "crates/pi-config" }
 pi-rpc = { path = "crates/pi-rpc" }
 pi-sessions = { path = "crates/pi-sessions" }
 python-env = { path = "crates/python-env" }
+python-tool = { path = "crates/python-tool" }
 remote = { path = "crates/remote" }
 sandbox = { path = "crates/sandbox" }
 searxng = { path = "crates/searxng" }

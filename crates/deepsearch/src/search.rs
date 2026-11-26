@@ -95,8 +95,7 @@ fn str_field(value: &Value, key: &str) -> String {
     value
         .get(key)
         .and_then(Value::as_str)
-        .map(fragment_text)
-        .unwrap_or_default()
+        .map_or_default(fragment_text)
 }
 
 fn results_from(array: Option<&Value>, title: &str, url: &str, snippet: &str) -> Vec<SearchResult> {

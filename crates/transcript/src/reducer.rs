@@ -1016,7 +1016,7 @@ fn result_text(result: &Value) -> String {
     result
         .get("content")
         .and_then(Value::as_array)
-        .map(|blocks| {
+        .map_or_default(|blocks| {
             blocks
                 .iter()
                 .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
@@ -1024,7 +1024,6 @@ fn result_text(result: &Value) -> String {
                 .collect::<Vec<_>>()
                 .join("\n")
         })
-        .unwrap_or_default()
 }
 
 /// The images in a live tool result (`{"content": [{"type": "image", ...}]}`).
@@ -1032,7 +1031,7 @@ fn result_images(result: &Value) -> Vec<Image> {
     result
         .get("content")
         .and_then(Value::as_array)
-        .map(|blocks| {
+        .map_or_default(|blocks| {
             blocks
                 .iter()
                 .filter(|block| block.get("type").and_then(Value::as_str) == Some("image"))
@@ -1046,7 +1045,6 @@ fn result_images(result: &Value) -> Vec<Image> {
                 })
                 .collect()
         })
-        .unwrap_or_default()
 }
 
 fn blocks_images(blocks: &[ContentBlock]) -> Vec<Image> {

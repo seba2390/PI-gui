@@ -388,8 +388,7 @@ fn ask_to_remove(parser: Parser, window: &mut Window, cx: &mut App) {
     open_form_dialog(None, window, cx, move |dialog, _, cx| {
         let size = parser
             .download()
-            .map(|download| format!(" (about {})", size_label(download.disk_size())))
-            .unwrap_or_default();
+            .map_or_default(|download| format!(" (about {})", size_label(download.disk_size())));
         let instead = if existing(cx).is_some_and(|parsers| parsers.chosen() == parser) {
             " Documents are read with the built-in reader instead."
         } else {

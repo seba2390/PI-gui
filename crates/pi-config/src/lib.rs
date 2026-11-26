@@ -199,8 +199,7 @@ impl ModelsFile {
                     models: provider
                         .get("models")
                         .and_then(Value::as_array)
-                        .map(|models| models.iter().filter_map(saved_model).collect())
-                        .unwrap_or_default(),
+                        .map_or_default(|models| models.iter().filter_map(saved_model).collect()),
                 }
             })
             .collect()

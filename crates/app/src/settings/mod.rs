@@ -195,7 +195,7 @@ impl AppSettings {
     /// Reads the settings, with defaults for what is missing or unreadable (see
     /// [`crate::persist::load`]).
     pub fn load(path: Option<&Path>) -> Self {
-        path.map(crate::persist::load).unwrap_or_default()
+        path.map_or_default(crate::persist::load)
     }
 
     fn write(&self, path: &Path) -> std::io::Result<()> {

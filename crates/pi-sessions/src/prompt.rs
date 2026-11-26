@@ -62,7 +62,7 @@ impl Prompt<'_> {
 
 /// The block of the file `name`, which says `contents`.
 pub fn block(name: &str, id: Option<&str>, contents: &str) -> String {
-    let id = id.map(|id| format!("{ID}{id}")).unwrap_or_default();
+    let id = id.map_or_else(String::new, |id| format!("{ID}{id}"));
     let contents = contents.trim_matches('\n');
     // Or the block would end there.
     let contents = contents.replace("</attachment>", "<\\/attachment>");

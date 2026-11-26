@@ -101,16 +101,13 @@ enum Progress {
 impl<M: Downloadable> ModelStore<M> {
     /// The store for `catalog` in `dir` (`None`: nowhere to keep models).
     pub fn new(dir: Option<PathBuf>, catalog: &'static [M]) -> Self {
-        let installed = dir
-            .as_deref()
-            .map(|dir| {
-                catalog
-                    .iter()
-                    .filter(|model| is_installed(dir, *model))
-                    .map(Downloadable::id)
-                    .collect()
-            })
-            .unwrap_or_default();
+        let installed = dir.as_deref().map_or_default(|dir| {
+            catalog
+                .iter()
+                .filter(|model| is_installed(dir, *model))
+                .map(Downloadable::id)
+                .collect()
+        });
         Self {
             dir,
             installed,

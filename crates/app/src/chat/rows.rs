@@ -1309,6 +1309,21 @@ fn render_tool(key: BlockKey, tool: &ToolBlock, cx: &RowContext<'_>) -> AnyEleme
                         .child(format!("$ {}", command.trim())),
                 )
             });
+            // The python tool's code, above what it gave.
+            let code = (tool.name == "python")
+                .then(|| tool.args.get("code").and_then(serde_json::Value::as_str))
+                .flatten();
+            let this = this.when_some(code, |this, code| {
+                this.child(
+                    div()
+                        .pl(px(15.))
+                        .font_family(cx.mono.clone())
+                        .text_xs()
+                        .text_color(cx.muted)
+                        .whitespace_normal()
+                        .children(code.trim().lines().map(|line| div().child(line.to_owned()))),
+                )
+            });
             let language = tool_language(tool);
             let body = match &diff {
                 Some(lines) => diff_box(
@@ -1362,12 +1377,10 @@ fn sandbox_footer(tool: &ToolBlock, cx: &RowContext<'_>) -> Option<AnyElement> {
         ));
     }
     let project = cx.session.read(cx.app).cwd().to_path_buf();
-    let folders = crate::security::existing(cx.app)
-        .map(|security| {
-            let settings = &security.read(cx.app).settings;
-            crate::security::folders_to_allow(settings, &project, &paths)
-        })
-        .unwrap_or_default();
+    let folders = crate::security::existing(cx.app).map_or_default(|security| {
+        let settings = &security.read(cx.app).settings;
+        crate::security::folders_to_allow(settings, &project, &paths)
+    });
     let allow = folders.into_iter().enumerate().map(|(index, offer)| {
         let label = if offer.write {
             format!("Allow changes in {}", offer.path)
@@ -1579,8 +1592,7 @@ fn output_box(
     let shown = search::shown_output(output);
     let total = output.trim_end().lines().count();
     let syntax = styles
-        .map(|styles| code_highlight::join_lines(&styles, output, MAX_OUTPUT_LINES))
-        .unwrap_or_default();
+        .map_or_default(|styles| code_highlight::join_lines(&styles, output, MAX_OUTPUT_LINES));
     let find = cx.chat.find_highlights(key, Field::Output, cx.app);
     let highlights = code_highlight::overlay(&syntax, &find);
     let mut text = shown.into_owned();
@@ -1628,8 +1640,7 @@ fn diff_box(
             let syntax = styles
                 .as_ref()
                 .and_then(|styles| styles.get(ix))
-                .map(Vec::as_slice)
-                .unwrap_or_default();
+                .map_or_default(Vec::as_slice);
             let find = cx.chat.find_highlights(key, Field::DiffLine(ix), cx.app);
             let line_styles = (!syntax.is_empty() || !find.is_empty())
                 .then(|| code_highlight::overlay(syntax, &find));

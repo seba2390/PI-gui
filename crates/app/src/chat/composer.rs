@@ -487,8 +487,7 @@ impl Composer {
         };
         let placeholder = match status {
             SpeechStatus::Connecting => crate::stt::models::active_model(cx)
-                .map(|model| format!("Loading {}…", model.name))
-                .unwrap_or_default(),
+                .map_or_default(|model| format!("Loading {}…", model.name)),
             SpeechStatus::Stopping => "Finishing…".to_owned(),
             _ => "Listening… speak now".to_owned(),
         };
@@ -2658,8 +2657,7 @@ fn load_attachment(path: PathBuf, inline: bool, dir: &Path, svg: &SvgRenderer) -
     let extension = path
         .extension()
         .and_then(|ext| ext.to_str())
-        .map(str::to_ascii_lowercase)
-        .unwrap_or_default();
+        .map_or_default(str::to_ascii_lowercase);
     let as_it_is = match extension.as_str() {
         "png" => Some("image/png"),
         "jpg" | "jpeg" => Some("image/jpeg"),
@@ -2892,8 +2890,7 @@ fn folder_menu(
         let home = cx.global::<AppConfig>().home.clone();
         let recent = cx
             .try_global::<RecentFolders>()
-            .map(|recent| recent.0.clone())
-            .unwrap_or_default();
+            .map_or_default(|recent| recent.0.clone());
         let mut folders = vec![cwd.clone()];
         // Folders are checked when the menu opens (not at startup): checking a folder under
         // Desktop or Documents can make macOS ask for access.

@@ -35,11 +35,18 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
     one by itself.
   - **Chat**: plain conversation with **no file or shell tools**: the model cannot read, write
     or run anything on your computer. Chats run pi in a dedicated empty folder
-    (`~/.pi/agent/pistachio/chat`) with only deep search's two web tools (`--tools
-    web_search,web_fetch --no-mcp`), which stay off until you turn web search on. The
+    (`~/.pi/agent/pistachio/chat`) with only deep search's two web tools, which stay off until
+    you turn web search on, and `python` (`--tools web_search,web_fetch,python --no-mcp`). The
     text of attached files goes along with the message instead of a path (of PDF files as Markdown,
     see [Documents](#documents)), and shows as a small page above it; `!` shell commands are
     disabled.
+  - **Python** (Chat): the model works numbers out in Python instead of estimating them (a sum,
+    a logarithm, a series, statistics). The code runs in [Monty](https://github.com/pydantic/monty),
+    a Python interpreter written in Rust for code a model writes, started fresh for each call
+    (in milliseconds): it has no files, network, environment or programs, only the computation,
+    with `math`, `decimal`, `statistics` and more of the standard library, and stops after 5
+    seconds, at one allocation over 256 MB or at deep recursion. The chat shows the call as
+    "Computed" with the result; expanded, the code. By hand: `pistachio --python-tool 'code'`.
   - **Web search** (Chat): the globe button next to the paperclip chooses how the model uses
     the web, per chat (remembered in the session; `/websearch off|search|deep` works too):
     - **Search**: a quick lookup when needed (a few searches and pages), then a concise answer

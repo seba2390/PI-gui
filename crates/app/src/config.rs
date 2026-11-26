@@ -65,7 +65,7 @@ impl ChildEnv {
         self.0
             .probed
             .is_closed()
-            .then(|| self.0.vars.get().map(Vec::as_slice).unwrap_or_default())
+            .then(|| self.0.vars.get().map_or_default(Vec::as_slice))
     }
 
     /// Resolves once the variables are [`ready`](Self::ready).
@@ -145,6 +145,8 @@ pub struct AppConfig {
     pub deepsearch_dir: PathBuf,
     /// Document parsing's settings, parsers and pi extension (see [`documents`]).
     pub documents_dir: PathBuf,
+    /// The pi extension of chats' `python` tool (see [`python_tool`]).
+    pub python_dir: PathBuf,
     /// The sandbox's settings and pi extension (see [`sandbox`]).
     pub sandbox_dir: PathBuf,
     /// Where the skills that come with the app are written (see [`crate::builtin_skills`]).
@@ -187,6 +189,7 @@ impl AppConfig {
             chat_dir: std::env::temp_dir().join("pistachio-test-chat"),
             deepsearch_dir: std::env::temp_dir().join("pistachio-test-deepsearch"),
             documents_dir: std::env::temp_dir().join("pistachio-test-documents"),
+            python_dir: std::env::temp_dir().join("pistachio-test-python"),
             sandbox_dir: std::env::temp_dir().join("pistachio-test-sandbox"),
             builtin_skills_dir: std::env::temp_dir().join("pistachio-test-skills"),
             exe: Some(PathBuf::from("/app/pistachio")),
@@ -210,22 +213,24 @@ impl AppConfig {
                 .unwrap_or_else(|| std::env::temp_dir().join("pistachio-deepsearch")),
             documents_dir: documents::config::default_dir()
                 .unwrap_or_else(|| std::env::temp_dir().join("pistachio-documents")),
+            python_dir: pi_sessions::app_dir().map_or_else(
+                || std::env::temp_dir().join("pistachio-python"),
+                |dir| dir.join("python"),
+            ),
             sandbox_dir: sandbox::default_dir(),
             builtin_skills_dir: pi_sessions::app_dir().map_or_else(
                 || std::env::temp_dir().join("pistachio-skills"),
                 |dir| dir.join("skills"),
             ),
             exe: std::env::current_exe().ok(),
-            open_at_startup: std::env::var("PISTACHIO_OPEN")
-                .map(|value| {
-                    value
-                        .split(',')
-                        .map(str::trim)
-                        .filter(|panel| !panel.is_empty())
-                        .map(str::to_owned)
-                        .collect()
-                })
-                .unwrap_or_default(),
+            open_at_startup: std::env::var("PISTACHIO_OPEN").map_or_default(|value| {
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|panel| !panel.is_empty())
+                    .map(str::to_owned)
+                    .collect()
+            }),
             demo: demo_storyboard(),
         }
         .with_bench()

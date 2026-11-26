@@ -356,13 +356,12 @@ impl Security {
         self.trusted = std::fs::read_to_string(agent.join("trust.json"))
             .ok()
             .and_then(|text| pi_config::trust::parse_store(&text).ok())
-            .map(|store| {
+            .map_or_default(|store| {
                 store
                     .into_iter()
                     .filter_map(|(folder, value)| value.as_bool().map(|trusted| (folder, trusted)))
                     .collect()
-            })
-            .unwrap_or_default();
+            });
         self.trusted.sort();
     }
 
