@@ -18,11 +18,11 @@ use crate::{
 /// Pistachio: how strong the glow of a picked group's title is, `delta` into it: full at once,
 /// held for a moment, then fading out.
 fn glow(delta: f32) -> f32 {
-    const HOLD: f32 = 0.3;
+    const HOLD: f32 = 0.15;
     if delta < HOLD {
         1.
     } else {
-        (1. - (delta - HOLD) / (1. - HOLD)).powf(1.5)
+        (1. - (delta - HOLD) / (1. - HOLD)).powi(2)
     }
 }
 
@@ -137,25 +137,20 @@ impl SettingGroup {
             .when_some(self.title.clone(), |this, title| {
                 // Pistachio: the title is centred, and glows for a moment after it is picked
                 // in the sidebar.
-                let color = options.flash_color().unwrap_or(cx.theme().primary);
                 let muted = cx.theme().muted_foreground;
                 let foreground = cx.theme().foreground;
-                let heading = div()
-                    .px_4()
-                    .py_1()
-                    .rounded(cx.theme().radius)
-                    .child(title);
+                let heading = div().child(title);
+                // The letters brighten to white with a faint haze around them, then fade back.
                 let heading = match options.flash() {
                     Some(progress) => {
                         let glow = glow(progress);
                         heading
-                            .bg(color.opacity(0.4 * glow))
                             .text_color(muted.blend(foreground.opacity(glow)))
                             .shadow(vec![BoxShadow {
-                                color: color.opacity(0.75 * glow),
+                                color: foreground.opacity(0.16 * glow),
                                 offset: point(px(0.), px(0.)),
-                                blur_radius: px(22.),
-                                spread_radius: px(3.),
+                                blur_radius: px(16.),
+                                spread_radius: px(-2.),
                                 inset: false,
                             }])
                     }

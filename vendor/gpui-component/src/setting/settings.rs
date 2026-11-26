@@ -11,7 +11,7 @@ use crate::{
     sidebar::{Sidebar, SidebarMenu, SidebarMenuItem},
 };
 use gpui::{
-    App, AppContext as _, Axis, ElementId, Entity, Hsla, InteractiveElement as _, IntoElement,
+    App, AppContext as _, Axis, ElementId, Entity, InteractiveElement as _, IntoElement,
     ParentElement as _, Pixels, RenderOnce, StyleRefinement, Styled, Window, container_query, div,
     prelude::FluentBuilder as _, px, relative,
 };
@@ -42,8 +42,6 @@ pub struct Settings {
     sidebar_style: StyleRefinement,
     default_selected_index: SelectIndex,
     header_style: StyleRefinement,
-    // Pistachio: the colour a group's title glows in after it is picked in the sidebar.
-    flash_color: Option<Hsla>,
 }
 
 impl Settings {
@@ -59,15 +57,7 @@ impl Settings {
             sidebar_style: StyleRefinement::default(),
             default_selected_index: SelectIndex::default(),
             header_style: StyleRefinement::default(),
-            flash_color: None,
         }
-    }
-
-    // Pistachio: see `flash_color`. Default is the theme's primary colour.
-    /// Set the colour a group's title glows in when it is picked in the sidebar.
-    pub fn flash_color(mut self, color: impl Into<Hsla>) -> Self {
-        self.flash_color = Some(color.into());
-        self
     }
 
     /// Set the width of the sidebar, default is `250px`.
@@ -339,7 +329,7 @@ pub(super) struct GroupFlash {
 }
 
 impl GroupFlash {
-    pub(super) const DURATION: std::time::Duration = std::time::Duration::from_millis(1800);
+    pub(super) const DURATION: std::time::Duration = std::time::Duration::from_millis(1100);
 }
 
 /// Options for rendering setting item.
@@ -360,9 +350,8 @@ pub struct RenderOptions {
     group_variant: GroupBoxVariant,
     layout: Axis,
     disabled: bool,
-    // Pistachio: how far into its glow a group's title is (0 to 1), and the glow's colour.
+    // Pistachio: how far into its glow a group's title is (0 to 1).
     flash: Option<f32>,
-    flash_color: Option<Hsla>,
 }
 
 impl RenderOptions {
@@ -376,7 +365,6 @@ impl RenderOptions {
             layout: Axis::Horizontal,
             disabled: false,
             flash: None,
-            flash_color: None,
         }
     }
 
@@ -386,18 +374,8 @@ impl RenderOptions {
         self
     }
 
-    /// Pistachio: the colour of that glow.
-    pub fn with_flash_color(mut self, color: Option<Hsla>) -> Self {
-        self.flash_color = color;
-        self
-    }
-
     pub fn flash(&self) -> Option<f32> {
         self.flash
-    }
-
-    pub fn flash_color(&self) -> Option<Hsla> {
-        self.flash_color
     }
 
     pub fn with_page_ix(mut self, page_ix: usize) -> Self {
@@ -516,8 +494,7 @@ impl RenderOnce for Settings {
         }
         let options = RenderOptions::new()
             .with_size(self.size)
-            .with_group_variant(self.group_variant)
-            .with_flash_color(self.flash_color);
+            .with_group_variant(self.group_variant);
         let sidebar_size_range = self.sidebar_size_range.clone();
         let sidebar = self
             .render_sidebar(&state, &filter, window, cx)

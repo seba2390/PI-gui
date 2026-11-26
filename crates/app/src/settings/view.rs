@@ -924,7 +924,6 @@ impl Render for SettingsView {
         // No background: the π signs are behind it.
         div().size_full().child(
             Settings::new("app-settings")
-                .flash_color(crate::theme::palette(cx).accent)
                 .default_selected_index(SelectIndex {
                     page_ix: self.start_page,
                     group_ix: None,
