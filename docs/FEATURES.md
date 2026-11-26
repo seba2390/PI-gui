@@ -23,6 +23,12 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   typed while pi starts, compacts or is busy sending are listed above the input as “Waiting to
   send”, each with a cancel button. A message you have not sent stays with its session while the app
   runs, also when you open another one.
+- Opening a conversation shows it at once, without waiting for pi to start (a few hundred
+  milliseconds): its history is read from the session file following pi's rules (compactions,
+  extension messages such as web search's, context edits), and the composer shows the model,
+  thinking level, web search mode and context use pi had for it last time (remembered in
+  `~/.pi/agent/pistachio/recall.json`) or, for one pi never opened here, what its file
+  selected. pi's own answer replaces anything that differs.
 - If pi stops (a crash or a failed start), the chat offers **Restart pi** on the same session;
   anything not yet sent, or refused by pi, goes back into the message box.
 - pi gets your login shell's environment (API keys, proxies, cloud settings), also when the app is
@@ -513,6 +519,12 @@ the Sandboxing & Security page light up under the pointer and scroll by themselv
   sites), and what the agent may do with your git and GitHub logins without asking (Git and
   GitHub). Also which project files pi loads: pi's `defaultProjectTrust` and the saved
   decisions in its `trust.json`, which can be removed.
+- **Tools:** the tools the model gets in chats and in Code sessions on this computer, each with
+  where it comes from (pi, Pistachio or an extension), the description and guidelines pi gives the
+  model, and its parameters; in chats also when web search's tools and Python are offered, and in
+  Code the tools pi has but does not offer. pi is asked for them when the page is shown: a pi
+  that keeps no session, started like a conversation of each mode, reports them through a small
+  extension (`~/.pi/agent/pistachio/tools/tools-probe.ts`) and quits.
 
 The app's own settings live in `~/.pi/agent/pistachio/settings.json`.
 

@@ -6,7 +6,20 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Settings → Tools: the tools the model gets in chats and in Code sessions, as pi describes them
+  to it (description, guidelines and parameters), where each comes from, and when web search's
+  tools and Python are offered. pi itself is asked, so your extensions' tools are listed too.
+
 ### Changed
+
+- Opening a conversation is faster: the model, thinking level, web search button and context
+  wheel in the message box show at once instead of after pi has started (about a third of a
+  second), from what pi said about the conversation last time or what its file selected.
+- Chats that used web search (and any conversation with a compaction, extension messages or
+  context edits) show their history at once too, read from the session file by pi's rules,
+  instead of waiting for pi.
 
 - Chats use Python for more than numbers: the model is told to run a short program for any small
   job a program does more reliably than reasoning, such as counting letters or words, sorting or
