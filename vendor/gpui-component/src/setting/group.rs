@@ -139,7 +139,8 @@ impl SettingGroup {
                 // in the sidebar.
                 let muted = cx.theme().muted_foreground;
                 let foreground = cx.theme().foreground;
-                let heading = div().child(title);
+                // A size up from the text around it, so sections stand apart.
+                let heading = div().text_lg().child(title);
                 // The letters brighten to white with a faint haze around them, then fade back.
                 let heading = match options.flash() {
                     Some(progress) => {

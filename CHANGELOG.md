@@ -33,6 +33,8 @@ All notable changes to PI-gui are listed here. The format follows
   or an SSH host) instead of taking the current or most recent one, which could be the home folder.
 - Settings: section headings are centred, with a thin line between sections, and a section
   picked in the sidebar has its heading glow for a moment (also with reduced motion). Descriptions next to a switch run up to it instead of wrapping halfway.
+- Settings section headings are a size larger.
+- The side chat tab on the chat's right edge is an L-shaped arrow; hovering it says what it does.
 - Lists on the Sandboxing & Security page scroll smoothly and their border lights up under the
   pointer.
 

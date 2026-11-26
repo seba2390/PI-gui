@@ -6,6 +6,7 @@ use gpui_kit::component::Icon;
 pub enum AppIcon {
     Brain,
     CodeXml,
+    CornerDownRight,
     Download,
     Files,
     GitBranch,
@@ -39,6 +40,7 @@ impl AppIcon {
         match self {
             Self::Brain => "icons/brain.svg",
             Self::CodeXml => "icons/code-xml.svg",
+            Self::CornerDownRight => "icons/corner-down-right.svg",
             Self::Download => "icons/download.svg",
             Self::Files => "icons/files.svg",
             Self::GitBranch => "icons/git-branch.svg",

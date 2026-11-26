@@ -117,7 +117,7 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
     in front. Questions from extensions (confirm, select, input) in a background chat wait
     until you open that chat, marked with an amber dot, so they are never answered for the
     wrong chat; its toasts name the chat.
-- **Side chats**: the "Side chat" tab on the chat column's right edge (also `/side` and ⌘⇧N)
+- **Side chats**: the tab with an L-shaped arrow on the chat column's right edge (also `/side` and ⌘⇧N)
   opens a second conversation in a column to the right, holding everything the conversation
   has at that moment, also while its agent works: finished messages and tool results, the reply
   being written (up to where it was, marked as cut off), and tools still running (with their
