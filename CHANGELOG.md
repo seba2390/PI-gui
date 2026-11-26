@@ -28,12 +28,15 @@ All notable changes to PI-gui are listed here. The format follows
 - The sandbox's gate: what needs your keys is asked about and done outside the sandbox. In Code
   sessions `git push`, `pull`, `fetch`, `clone`, `ls-remote`, submodules and git-lfs, GitHub's `gh`
   (pull requests, issues, runs, creating a repository) and signing commits with your GPG or SSH
-  key now work: a dialog says exactly what will happen (the commits, the branch, the remote's real
+  key now work: a card that slides up above the message box says exactly what will happen (the commits, the branch, the remote's real
   address, force pushes and the default branch called out) and offers Allow, Always for this
   project or Don't allow. Your keys never enter the sandbox. Repositories whose git settings
   could start a program are refused, and hooks are off. With several GitHub accounts, you pick
   which one each command acts as (a company repository only as a member of that company), and
   "Always" remembers it.
+- Extensions' questions with a few answers (the gate's Allow / Always / Don't allow, and other
+  extensions' choices and confirmations) are docked above the message box instead of a dialog in
+  the middle of the window, with an icon on each answer. ←/→ choose, Enter answers, Esc declines.
 - Settings → Sandboxing & Security → Git and GitHub: what the agent may do with your logins
   without asking, each removable.
 - Dots at the left edge of the conversation, one per prompt, in Chat and Code. Hovering one shows

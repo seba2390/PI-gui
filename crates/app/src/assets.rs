@@ -14,6 +14,7 @@ macro_rules! embedded {
 static EMBEDDED: &[(&str, &[u8])] = embedded![
     "demo/cursor.svg",
     "icons/brain.svg",
+    "icons/check-check.svg",
     "icons/sparkles.svg",
     "icons/code-xml.svg",
     "icons/corner-down-right.svg",

@@ -16,6 +16,7 @@ mod math;
 pub(crate) mod mention;
 pub mod models_dialog;
 pub mod pdf_viewer;
+mod question;
 mod queued;
 mod report;
 mod rows;
@@ -28,6 +29,7 @@ mod viewer_dialog;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use gpui_kit::component::text::{TextView, TextViewState};
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, WindowExt as _, h_flex, v_flex};
@@ -130,6 +132,9 @@ pub struct ChatView {
     /// they are never answered for the wrong chat.
     /// Questions asked while hidden, with when they arrived.
     held_dialogs: Vec<(pi_rpc::protocol::ExtensionUiRequest, std::time::Instant)>,
+    /// Questions with a few answers (the sandbox gate's "Allow / Don't allow"), docked above the
+    /// composer in the order they came; the first is shown.
+    questions: Vec<Entity<question::Question>>,
     /// pi stopped while the chat was hidden; shown so the user sees why (and any prompts
     /// returned to the composer) before the chat is let go.
     stopped_unseen: bool,
@@ -267,6 +272,7 @@ impl ChatView {
             roles: Vec::new(),
             exploration: Vec::new(),
             held_dialogs: Vec::new(),
+            questions: Vec::new(),
             stopped_unseen: false,
             pi_field: None,
             highlights: std::cell::RefCell::default(),
@@ -343,9 +349,82 @@ impl ChatView {
         }
     }
 
+    /// Docks `request` above the composer; it takes the keyboard once it is the one shown.
+    pub(crate) fn ask(
+        &mut self,
+        request: &pi_rpc::protocol::ExtensionUiRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let weak = cx.weak_entity();
+        let on_answer: question::OnAnswer = Rc::new(move |id, answer, window, cx| {
+            let _ = weak.update(cx, |this, cx| this.answer(id, answer, window, cx));
+        });
+        let question = cx.new(|cx| question::Question::new(request, on_answer, cx));
+        // pi stops waiting after its timeout: the question goes then too.
+        if let Some(left) = question.read(cx).time_left() {
+            let id = request.id.clone();
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(left).await;
+                let _ = this.update(cx, |this, cx| {
+                    this.questions
+                        .retain(|question| question.read(cx).id() != id);
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+        self.questions.push(question);
+        if self.visible {
+            if self.questions.len() == 1 {
+                self.focus_question(window, cx);
+            }
+        } else {
+            cx.emit(ChatEvent::NeedsAttention);
+        }
+        cx.notify();
+    }
+
+    /// Sends the answer to the question `id` and shows the next one, or gives the keyboard back
+    /// to the composer.
+    fn answer(
+        &mut self,
+        id: &str,
+        answer: &pi_rpc::protocol::ExtensionUiAnswer,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self
+            .questions
+            .iter()
+            .position(|question| question.read(cx).id() == id)
+        else {
+            return;
+        };
+        self.questions.remove(index);
+        self.session
+            .update(cx, |session, _| session.answer_dialog(id, answer));
+        if self.questions.is_empty() {
+            let focus = self.composer_focus(cx);
+            window.focus(&focus, cx);
+        } else {
+            self.focus_question(window, cx);
+        }
+        cx.notify();
+    }
+
+    fn focus_question(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(question) = self.questions.first() {
+            let focus = question.read(cx).focus_handle(cx);
+            window.focus(&focus, cx);
+        }
+    }
+
     /// Whether an extension question is waiting for this chat to be shown.
     pub fn needs_attention(&self) -> bool {
-        !self.held_dialogs.is_empty() || self.stopped_unseen
+        !self.held_dialogs.is_empty()
+            || (!self.visible && !self.questions.is_empty())
+            || self.stopped_unseen
     }
 
     /// Marks the chat shown or in the background; showing it opens the questions it held.
@@ -366,6 +445,9 @@ impl ChatView {
                     dialogs::open(request, self.session.clone(), window, cx);
                 }
             }
+            self.questions
+                .retain(|question| !stopped && !question.read(cx).expired());
+            self.focus_question(window, cx);
         }
     }
 
@@ -446,6 +528,10 @@ impl ChatView {
                     self.session.read(cx).lifecycle(),
                     session::Lifecycle::Exited { .. }
                 );
+                // A stopped pi takes no answers.
+                if stopped {
+                    self.questions.clear();
+                }
                 if stopped && !self.visible && !self.stopped_unseen {
                     self.stopped_unseen = true;
                     cx.emit(ChatEvent::Stopped);
@@ -464,6 +550,9 @@ impl ChatView {
             SessionEvent::SessionFileChanged | SessionEvent::Settled => {
                 self.sync(cx);
                 cx.emit(ChatEvent::SessionChanged);
+            }
+            SessionEvent::Dialog(request) if question::Question::fits(request) => {
+                self.ask(request, window, cx);
             }
             SessionEvent::Dialog(request) => {
                 if self.visible {
@@ -1207,6 +1296,8 @@ impl Render for ChatView {
                         .w_full()
                         .max_w(CONTENT_MAX_WIDTH + px(32.))
                         .children(self.render_reconnect(cx))
+                        // Behind the composer (painted first), its bottom tucked under it.
+                        .children(self.questions.first().cloned())
                         .child(self.composer.clone()),
                 ),
             )

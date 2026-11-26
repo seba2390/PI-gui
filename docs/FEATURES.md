@@ -318,8 +318,8 @@ Linux; Windows is planned, #47).
   session's folder, only from remote servers (no local folders or helper programs as addresses),
   and only in repositories whose `.git/config` starts no program (`core.sshCommand`,
   `credential.helper`, filters, `url.*.insteadOf`, …; those it names and refuses). It runs git
-  with hooks off. You are asked in a dialog that says exactly what will happen (the commits, the
-  branch, the remote's real address, a force push or the default branch): **Allow**, **Always for
+  with hooks off. You are asked in a card that slides up above the message box and says exactly
+  what will happen (the commits, the branch, the remote's real address, a force push or the default branch): **Allow**, **Always for
   this project** (that project, that remote, that kind of thing: fetch, push, push to the default
   branch, force push, sign, read or change on GitHub) or **Don't allow**. Your keys never enter the
   sandbox; the command's output comes back to the agent. What you allowed is listed in

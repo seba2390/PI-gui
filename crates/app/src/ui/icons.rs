@@ -5,6 +5,7 @@ use gpui_kit::component::Icon;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppIcon {
     Brain,
+    CheckCheck,
     CodeXml,
     CornerDownRight,
     Download,
@@ -39,6 +40,7 @@ impl AppIcon {
     pub fn path(self) -> &'static str {
         match self {
             Self::Brain => "icons/brain.svg",
+            Self::CheckCheck => "icons/check-check.svg",
             Self::CodeXml => "icons/code-xml.svg",
             Self::CornerDownRight => "icons/corner-down-right.svg",
             Self::Download => "icons/download.svg",

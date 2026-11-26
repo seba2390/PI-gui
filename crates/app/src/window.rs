@@ -458,7 +458,13 @@ impl MainWindow {
             if self.welcome
                 && matches!(
                     panel.as_str(),
-                    "terminal" | "diff" | "diff-expand-all" | "files" | "attach" | "context"
+                    "terminal"
+                        | "diff"
+                        | "diff-expand-all"
+                        | "files"
+                        | "attach"
+                        | "context"
+                        | "question"
                 )
                 && let Ok(folder) = std::env::current_dir()
             {
@@ -542,6 +548,24 @@ impl MainWindow {
                     if let Some(settings) = self.settings.as_ref().map(|s| s.0.clone()) {
                         settings.update(cx, |settings, _| settings.start_on_security());
                     }
+                }
+                // The sandbox gate's question, docked above the composer.
+                "question" => {
+                    let request = pi_rpc::protocol::ExtensionUiRequest {
+                        id: "layout-check".into(),
+                        method: pi_rpc::protocol::ExtensionUiMethod::Select {
+                            title: "Push 1 commit on main to github.com/acme/fibonacci as ana\n\
+                                    · 1e6145f Initial commit: Fibonacci sequence printer\n\
+                                    ⚠ main is the remote's default branch"
+                                .into(),
+                            options: ["Allow", "Always for this project", "Don't allow"]
+                                .map(str::to_owned)
+                                .to_vec(),
+                            timeout: None,
+                        },
+                    };
+                    self.chat
+                        .update(cx, |chat, cx| chat.ask(&request, window, cx));
                 }
                 "settings-git" => {
                     self.open_settings(&OpenSettings, window, cx);
