@@ -41,7 +41,9 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
     see [Documents](#documents)), and shows as a small page above it; `!` shell commands are
     disabled.
   - **Python** (Chat): the model works numbers out in Python instead of estimating them (a sum,
-    a logarithm, a series, statistics). The code runs in [Monty](https://github.com/pydantic/monty),
+    a logarithm, a series, statistics), and uses it for other small jobs a program does more
+    reliably than reasoning: counting letters or words, sorting and reformatting text, regular
+    expressions, JSON, dates and weekdays, number bases, or trying a small algorithm on examples. The code runs in [Monty](https://github.com/pydantic/monty),
     a Python interpreter written in Rust for code a model writes, started fresh for each call
     (in milliseconds): it has no files, network, environment or programs, only the computation,
     with `math`, `decimal`, `statistics` and more of the standard library, and stops after 5

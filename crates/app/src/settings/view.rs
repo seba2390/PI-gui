@@ -466,7 +466,8 @@ impl SettingsView {
                         ),
                     )
                     .description(
-                        "The model works numbers out in Python instead of estimating them. The \
+                        "The model works numbers out in Python instead of estimating them, and \
+                             uses it for other small jobs like counting or reformatting text. The \
                              code runs in Monty, a sealed interpreter: no files, network or \
                              programs. Applies from the next message, also in open chats.",
                     )

@@ -88,14 +88,21 @@ export default function (pi: any) {
     description:
       "Run Python code and get what it prints plus the value of its last expression. Use it for any calculation " +
       "beyond trivial mental arithmetic (sums, products, powers, logarithms, trigonometry, series, statistics, " +
-      "unit conversions, dates), so numbers are computed, not estimated. Write the expression explicitly, with " +
-      "the order of operations made clear. A sandboxed subset of Python 3: math, decimal, statistics, random, " +
+      "unit conversions, dates), so numbers are computed, not estimated. Use it just as readily for any other small " +
+      "job a short program does more reliably than reasoning: counting letters, words or occurrences; reversing, " +
+      "sorting, deduplicating or reformatting text and lists; regular expressions; parsing, validating or " +
+      "pretty-printing JSON; date and weekday arithmetic; base, binary, hex and Unicode " +
+      "conversions; checking a small algorithm or code snippet by running it on examples; brute-forcing a puzzle " +
+      "or enumerating combinations; simulations with random. Write the code explicitly, with the order of " +
+      "operations made clear. A sandboxed subset of Python 3: math, decimal, statistics, random, " +
       "datetime, itertools, functools, collections, re and json are there; no files, network, environment, " +
       "third-party packages (no numpy or sympy) or classes beyond simple ones. Integers are exact at any size; " +
       "use decimal.Decimal for exact decimal arithmetic. Runs stop after 5 seconds.",
-    promptSnippet: "Compute numbers with Python instead of estimating them",
+    promptSnippet:
+      "Run small Python programs: compute numbers instead of estimating them, and count, transform, check or enumerate things exactly",
     promptGuidelines: [
       "When a question needs a numerical result (arithmetic, a formula, a series, statistics), compute it with the python tool and give the computed value; say how the expression was read when it is ambiguous.",
+      "Also use the python tool whenever a short program would answer more reliably than working it out in your head: counting characters or words, manipulating or sorting text, regular expressions, JSON, dates and weekdays, number bases and encodings, testing a small function or algorithm on examples, or trying out cases exhaustively. Run the code rather than predicting its output.",
     ],
     parameters: Type.Object({
       code: Type.String({ description: "Python code. The value of the last line, if it is an expression, is returned; print() output too." }),

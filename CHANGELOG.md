@@ -6,6 +6,13 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Chats use Python for more than numbers: the model is told to run a short program for any small
+  job a program does more reliably than reasoning, such as counting letters or words, sorting or
+  reformatting text, regular expressions, JSON, dates and weekdays, number bases, or trying a
+  small algorithm on examples.
+
 ## [0.5.5] - 2026-11-26
 
 ### Added

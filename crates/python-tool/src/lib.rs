@@ -164,6 +164,51 @@ mod tests {
         );
     }
 
+    /// The small jobs beyond numbers that the tool's description offers.
+    #[test]
+    fn small_jobs_beyond_numbers() {
+        let cases = [
+            ("'strawberry'.count('r')", "3"),
+            (
+                "from collections import Counter\nCounter('hello world'.split('o')).most_common(1)[0][1]",
+                "1",
+            ),
+            ("sorted(set(['b', 'a', 'b', 'c']))", "['a', 'b', 'c']"),
+            (
+                "' '.join(reversed('one two three'.split()))",
+                "'three two one'",
+            ),
+            (
+                "import re\nre.findall(r'\\d+', 'a1b22c333')",
+                "['1', '22', '333']",
+            ),
+            ("import json\njson.loads('{\"a\": [1, 2]}')['a'][1]", "2"),
+            (
+                "import datetime\ndatetime.date(2026, 11, 26).weekday()",
+                "3",
+            ),
+            (
+                "import datetime\n(datetime.date(2027, 1, 1) - datetime.date(2026, 11, 26)).days",
+                "36",
+            ),
+            (
+                "(hex(255), bin(5), int('ff', 16), ord('A'), chr(97))",
+                "('0xff', '0b101', 255, 65, 'a')",
+            ),
+            (
+                "import itertools\nlen(list(itertools.permutations(range(4))))",
+                "24",
+            ),
+            (
+                "def fib(n):\n    a, b = 0, 1\n    for _ in range(n):\n        a, b = b, a + b\n    return a\n[fib(i) for i in range(8)]",
+                "[0, 1, 1, 2, 3, 5, 8, 13]",
+            ),
+        ];
+        for (code, expected) in cases {
+            assert_eq!(value(code), expected, "{code}");
+        }
+    }
+
     #[test]
     fn printed_output_and_none() {
         let outcome = run("print('a', 1)\nx = 2");
