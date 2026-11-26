@@ -16,21 +16,59 @@ pub const FILE: &str = "settings.json";
 #[serde(rename_all = "lowercase")]
 pub enum Network {
     /// Any site.
-    #[default]
     On,
     /// None at all.
     Off,
     /// Only [`Settings::sites`], through the app's proxy ([`crate::proxy`]).
+    #[default]
     Custom,
 }
+
+/// The sites a limited network starts with: where code and packages come from, so that git and
+/// the common package managers work.
+pub const DEFAULT_SITES: &[&str] = &[
+    "github.com/*",
+    "githubusercontent.com/*",
+    "gitlab.com",
+    "registry.npmjs.org",
+    "registry.yarnpkg.com",
+    "pypi.org",
+    "files.pythonhosted.org",
+    "crates.io",
+    "index.crates.io",
+    "static.crates.io",
+    "static.rust-lang.org",
+    "proxy.golang.org",
+    "sum.golang.org",
+    "rubygems.org",
+    "repo.maven.apache.org",
+];
 
 /// A folder (or file) outside the project the agent may use.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Allowed {
     pub path: String,
-    /// It may change it too, not only read it.
+    /// It may be read. Off, the entry stays in the list but allows nothing.
+    #[serde(default = "yes")]
+    pub read: bool,
+    /// It may be changed too (which needs [`Self::read`]).
     #[serde(default)]
     pub write: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl Allowed {
+    /// Readable, and writable when `write`.
+    pub fn new(path: impl Into<String>, write: bool) -> Self {
+        Self {
+            path: path.into(),
+            read: true,
+            write,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,10 +77,11 @@ pub struct Settings {
     /// Commands run in the sandbox (where it is available).
     pub enabled: bool,
     pub network: Network,
-    /// Commands may use the folders where common tools keep their programs, settings and caches
-    /// ([`TOOL_PROGRAMS`], [`TOOL_CACHES`]).
+    /// Commands may use the folders where tools keep their programs, settings and caches.
     #[serde(alias = "tool_caches")]
     pub tool_folders: bool,
+    /// Those folders, once the user changed the list; until then what [`default_tools`] finds.
+    pub tools: Option<Vec<Allowed>>,
     /// Folders and files outside the project the agent may use. The rest of the home folder is
     /// hidden.
     pub allowed: Vec<Allowed>,
@@ -57,10 +96,11 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             enabled: true,
-            network: Network::On,
+            network: Network::Custom,
             tool_folders: true,
+            tools: None,
             allowed: Vec::new(),
-            sites: Vec::new(),
+            sites: DEFAULT_SITES.iter().map(|&site| site.to_owned()).collect(),
             unsandboxed: Vec::new(),
         }
     }
@@ -139,7 +179,64 @@ pub const TOOL_CACHES: &[&str] = &[
     "~/Library/Developer/Xcode/DerivedData",
 ];
 
+/// The tool folders this computer has: the caches of [`TOOL_CACHES`] (to change), the programs and
+/// settings of [`TOOL_PROGRAMS`] and the folders of `$PATH` in the home folder (to read; for
+/// `…/bin`, the folder it is in, which holds its libraries). With `existing_only`, only what is
+/// there; else also what tools may create later. Never the home folder itself.
+pub fn default_tools(cx: &crate::Context, existing_only: bool) -> Vec<Allowed> {
+    use crate::paths::{expand, resolve};
+    let Some(home) = cx.home.as_deref() else {
+        return Vec::new();
+    };
+    let real_home = resolve(home);
+    let exists = |path: &str| !existing_only || expand(path, Some(home)).exists();
+    let mut tools: Vec<Allowed> = TOOL_CACHES
+        .iter()
+        .filter(|path| exists(path))
+        .map(|&path| Allowed::new(path, true))
+        .chain(
+            TOOL_PROGRAMS
+                .iter()
+                .filter(|path| exists(path))
+                .map(|&path| Allowed::new(path, false)),
+        )
+        .collect();
+    for dir in &cx.path {
+        let dir = resolve(dir);
+        if !dir.starts_with(&real_home) || dir == real_home || (existing_only && !dir.exists()) {
+            continue;
+        }
+        let dir = match dir.parent() {
+            Some(parent)
+                if dir.file_name().is_some_and(|name| name == "bin") && parent != real_home =>
+            {
+                parent.to_path_buf()
+            }
+            _ => dir,
+        };
+        let shown = match dir.strip_prefix(&real_home) {
+            Ok(rest) => format!("~/{}", rest.display()),
+            Err(_) => dir.display().to_string(),
+        };
+        let covered = tools.iter().any(|tool| {
+            let tool = resolve(&expand(&tool.path, Some(home)));
+            dir.starts_with(tool)
+        });
+        if !covered {
+            tools.push(Allowed::new(shown, false));
+        }
+    }
+    tools
+}
+
 impl Settings {
+    /// The tool folders in force: the user's list, or what this computer has.
+    pub fn tool_list(&self, cx: &crate::Context, existing_only: bool) -> Vec<Allowed> {
+        self.tools
+            .clone()
+            .unwrap_or_else(|| default_tools(cx, existing_only))
+    }
+
     pub fn path(dir: &Path) -> PathBuf {
         dir.join(FILE)
     }
@@ -190,10 +287,8 @@ mod tests {
             enabled: false,
             network: Network::Off,
             tool_folders: false,
-            allowed: vec![Allowed {
-                path: "~/work/shared".into(),
-                write: true,
-            }],
+            tools: Some(vec![Allowed::new("~/.cargo", true)]),
+            allowed: vec![Allowed::new("~/work/shared", true)],
             sites: vec!["github.com/*".into()],
             unsandboxed: vec!["/srv/app".into()],
         };
@@ -208,7 +303,51 @@ mod tests {
         assert_eq!(partial.network, Network::Off);
         assert!(partial.enabled);
         assert!(!partial.tool_folders);
-        assert!(!partial.allowed[0].write);
+        assert!(partial.allowed[0].read && !partial.allowed[0].write);
+    }
+
+    #[test]
+    fn the_tool_list_is_what_this_computer_has() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let home = dir.path().canonicalize().expect("canonical");
+        for folder in [".cargo", ".nvm/versions/node/v24/bin", ".local/bin", "bin"] {
+            std::fs::create_dir_all(home.join(folder)).expect("mkdir");
+        }
+        std::fs::write(home.join(".gitconfig"), "").expect("write");
+        let cx = crate::Context {
+            home: Some(home.clone()),
+            temp: Vec::new(),
+            agent_dir: None,
+            path: vec![
+                home.join(".nvm/versions/node/v24/bin"),
+                home.join(".local/bin"),
+                home.join("bin"),
+                home.clone(),
+                PathBuf::from("/usr/bin"),
+            ],
+        };
+        let tools = default_tools(&cx, true);
+        let shown: Vec<(&str, bool)> = tools
+            .iter()
+            .map(|tool| (tool.path.as_str(), tool.write))
+            .collect();
+        pretty_assertions::assert_eq!(
+            shown,
+            [
+                ("~/.cargo", true),
+                ("~/.gitconfig", false),
+                ("~/.nvm", false),
+                ("~/.local", false),
+                // `~/bin`'s folder is the home folder, so it stays itself; `~` is never one.
+                ("~/bin", false),
+            ]
+        );
+        assert!(default_tools(&cx, false).len() > tools.len());
+        let changed = Settings {
+            tools: Some(vec![Allowed::new("~/.cargo", false)]),
+            ..Settings::default()
+        };
+        assert_eq!(changed.tool_list(&cx, true).len(), 1);
     }
 
     #[test]

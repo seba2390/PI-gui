@@ -408,10 +408,7 @@ pub fn folders_to_allow(
         let useless = folder.parent().is_none()
             || home.as_ref() == Some(&folder)
             || (write && policy.may_write(&probe));
-        let offer = sandbox::Allowed {
-            path: tilde(&folder),
-            write,
-        };
+        let offer = sandbox::Allowed::new(tilde(&folder), write);
         if !useless && !offers.contains(&offer) {
             offers.push(offer);
         }
@@ -420,15 +417,19 @@ pub fn folders_to_allow(
     offers
 }
 
-/// Allows `offer`: adds it, or lets an entry for the same folder change it.
+/// Allows `offer`: adds it, or lets an entry for the same folder do what it says.
 pub fn allow(settings: &mut Settings, offer: sandbox::Allowed) {
-    match settings
-        .allowed
-        .iter_mut()
-        .find(|allowed| allowed.path == offer.path)
-    {
-        Some(allowed) => allowed.write |= offer.write,
-        None => settings.allowed.push(offer),
+    add_to(&mut settings.allowed, offer);
+}
+
+/// Adds `offer` to `list`, or widens the entry for the same path.
+pub fn add_to(list: &mut Vec<sandbox::Allowed>, offer: sandbox::Allowed) {
+    match list.iter_mut().find(|entry| entry.path == offer.path) {
+        Some(entry) => {
+            entry.read |= offer.read;
+            entry.write |= offer.write;
+        }
+        None => list.push(offer),
     }
 }
 

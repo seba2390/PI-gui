@@ -75,18 +75,21 @@ pub(super) fn page(site_input: Entity<InputState>) -> SettingPage {
                         ),
                     )
                     .description(
-                        "~/.cargo, ~/.npm, ~/.nvm, ~/.gitconfig and the other folders in your home \
-                         folder where tools keep their programs, settings and downloads, so \
-                         builds and installs work. pi's skills can always be read.",
+                        "The folders in your home folder where tools keep their programs, \
+                         settings and downloads (~/.cargo, ~/.npm, ~/.nvm, ~/.gitconfig, …). \
+                         pi's skills can always be read.",
                     ),
                 )
+                .item(SettingItem::render(|_, _, cx| tool_folders(cx)).keywords([
+                    "tools", "cargo", "npm", "nvm", "cache",
+                ]))
                 .item(SettingItem::render(|_, _, cx| allowed_folders(cx)).keywords([
                     "allow", "folder", "read", "write", "hidden", "home",
                 ])),
         )
         .group(
             SettingGroup::new()
-                .title("Network")
+                .title("Internet")
                 .item(
                     SettingItem::render(|_, _, cx| network_choice(cx))
                         .keywords(["network", "internet", "sites", "proxy"]),
@@ -222,48 +225,143 @@ fn add_button(id: &'static str, tooltip: &'static str) -> Button {
         .accessibility_label(tooltip)
 }
 
-/// A small icon button that removes a row.
-fn remove_button(id: SharedString, what: String) -> Button {
-    Button::new(id)
-        .icon(Icon::from(AppIcon::Trash))
-        .xsmall()
-        .ghost()
-        .tooltip("Remove")
-        .accessibility_label(format!("Remove {what}"))
+/// The red trash can that removes a row.
+fn remove_button(id: SharedString, what: String, cx: &App) -> Stateful<Div> {
+    let red = palette(cx).error;
+    div()
+        .id(id)
+        .flex_none()
+        .p_1()
+        .rounded_md()
+        .cursor_pointer()
+        .hover(move |style| style.bg(red.opacity(0.14)))
+        .child(Icon::from(AppIcon::Trash).small().text_color(red))
+        .tooltip(move |window, cx| {
+            component::tooltip::Tooltip::new(format!("Remove {what}")).build(window, cx)
+        })
 }
 
-/// The folders outside the project the agent may use, each to read or also to change.
-fn allowed_folders(cx: &mut App) -> AnyElement {
-    let entries = read(cx, |s| s.settings.allowed.clone());
+/// A choice that is on or off: an icon and a word, green while on.
+fn chip(id: SharedString, icon: Icon, label: &'static str, on: bool, cx: &App) -> Stateful<Div> {
+    let theme = cx.theme();
+    let (green, muted, hover) = (
+        palette(cx).accent,
+        theme.muted_foreground,
+        theme.secondary_hover,
+    );
+    div()
+        .id(id)
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap_1()
+        .px_2()
+        .py_0p5()
+        .rounded_md()
+        .border_1()
+        .text_xs()
+        .cursor_pointer()
+        .map(|this| {
+            if on {
+                this.bg(green.opacity(0.16))
+                    .border_color(green.opacity(0.55))
+                    .text_color(green)
+            } else {
+                this.border_color(transparent_black())
+                    .text_color(muted)
+                    .hover(move |style| style.bg(hover))
+            }
+        })
+        .child(icon.xsmall())
+        .child(label)
+}
+
+/// Which list of folders a row belongs to.
+#[derive(Clone, Copy)]
+enum Folders {
+    /// The tool folders (until changed, what this computer has).
+    Tools,
+    Allowed,
+}
+
+impl Folders {
+    fn key(self) -> &'static str {
+        match self {
+            Self::Tools => "tools",
+            Self::Allowed => "allowed",
+        }
+    }
+
+    /// The list as shown.
+    fn entries(self, cx: &App) -> Vec<sandbox::Allowed> {
+        read(cx, |s| match self {
+            Self::Tools => s.settings.tool_list(&sandbox::Context::current(), true),
+            Self::Allowed => s.settings.allowed.clone(),
+        })
+    }
+
+    /// Changes the list (the tool folders become the user's own from the first change).
+    fn change(self, cx: &mut App, f: impl FnOnce(&mut Vec<sandbox::Allowed>)) {
+        change(cx, |settings| match self {
+            Self::Tools => {
+                let mut list = settings.tool_list(&sandbox::Context::current(), true);
+                f(&mut list);
+                settings.tools = Some(list);
+            }
+            Self::Allowed => f(&mut settings.allowed),
+        });
+    }
+}
+
+/// The rows of a list of folders: the path, Read and Write to turn on and off (no reading means
+/// no writing; writing needs reading) and the trash can.
+fn folder_rows(list: Folders, cx: &App) -> Vec<AnyElement> {
     let theme = cx.theme();
     let (muted, mono) = (theme.muted_foreground, theme.mono_font_family.clone());
-    let rows = entries
+    list.entries(cx)
         .into_iter()
         .enumerate()
         .map(|(index, entry)| {
-            let access = |write: bool| {
-                let (icon, label) = if write {
-                    (Icon::from(AppIcon::Pencil), "Read and change")
-                } else {
-                    (Icon::new(IconName::Eye), "Read")
-                };
-                Button::new(SharedString::from(format!(
-                    "allowed-{index}-{}",
-                    if write { "write" } else { "read" }
-                )))
-                .icon(icon)
-                .label(label)
-                .xsmall()
-                .ghost()
-                .toggled(entry.write == write)
-                .on_click(move |_, _, cx| {
-                    change(cx, |settings| {
-                        if let Some(entry) = settings.allowed.get_mut(index) {
-                            entry.write = write;
+            let id = |what: &str| SharedString::from(format!("{}-{index}-{what}", list.key()));
+            let read_on = entry.read;
+            let write_on = entry.write && entry.read;
+            let read = chip(id("read"), Icon::new(IconName::Eye), "Read", read_on, cx).on_click(
+                move |_, _, cx| {
+                    list.change(cx, |entries| {
+                        if let Some(entry) = entries.get_mut(index) {
+                            entry.read = !read_on;
+                            if read_on {
+                                entry.write = false;
+                            }
                         }
                     });
-                })
-            };
+                },
+            );
+            let write = chip(
+                id("write"),
+                Icon::from(AppIcon::Pencil),
+                "Write",
+                write_on,
+                cx,
+            )
+            .on_click(move |_, _, cx| {
+                list.change(cx, |entries| {
+                    if let Some(entry) = entries.get_mut(index) {
+                        entry.write = !write_on;
+                        if !write_on {
+                            entry.read = true;
+                        }
+                    }
+                });
+            });
+            let remove =
+                remove_button(id("remove"), entry.path.clone(), cx).on_click(move |_, _, cx| {
+                    list.change(cx, |entries| {
+                        if index < entries.len() {
+                            entries.remove(index);
+                        }
+                    });
+                });
             h_flex()
                 .w_full()
                 .gap_2()
@@ -275,53 +373,64 @@ fn allowed_folders(cx: &mut App) -> AnyElement {
                         .truncate()
                         .text_sm()
                         .font_family(mono.clone())
+                        .when(!read_on, |this| this.text_color(muted))
                         .child(entry.path.clone()),
                 )
-                .child(
-                    h_flex()
-                        .flex_none()
-                        .gap_0p5()
-                        .child(access(false))
-                        .child(access(true)),
-                )
-                .child(
-                    remove_button(
-                        SharedString::from(format!("allowed-remove-{index}")),
-                        entry.path.clone(),
-                    )
-                    .on_click(move |_, _, cx| {
-                        change(cx, |settings| {
-                            if index < settings.allowed.len() {
-                                settings.allowed.remove(index);
-                            }
-                        });
-                    }),
-                )
+                .child(h_flex().flex_none().gap_1().child(read).child(write))
+                .child(remove)
                 .into_any_element()
         })
-        .collect();
-    let add = add_button("allowed-add", "Add a folder").on_click(|_, _, cx| {
-        pick(false, "Allow", cx, |paths, cx| {
-            change(cx, |settings| {
+        .collect()
+}
+
+/// The centred "+" that asks for folders to add to `list` (readable; Write is a click away).
+fn add_folders(list: Folders, id: &'static str) -> AnyElement {
+    let add = add_button(id, "Add a folder").on_click(move |_, _, cx| {
+        pick(false, "Add", cx, move |paths, cx| {
+            list.change(cx, |entries| {
                 for path in paths {
-                    crate::security::allow(settings, sandbox::Allowed { path, write: false });
+                    crate::security::add_to(entries, sandbox::Allowed::new(path, false));
                 }
             });
         });
     });
+    h_flex()
+        .w_full()
+        .justify_center()
+        .child(add)
+        .into_any_element()
+}
+
+/// The folders where tools keep their programs, settings and caches, while that is on.
+fn tool_folders(cx: &mut App) -> AnyElement {
+    if !read(cx, |s| s.settings.tool_folders) {
+        return div().into_any_element();
+    }
+    let rows = folder_rows(Folders::Tools, cx);
+    list_card(
+        "sandbox-tools",
+        "Tool folders",
+        "Found on this computer. Caches can be written, so builds and installs work; programs and \
+         settings only read.",
+        rows,
+        "No tool folders",
+        add_folders(Folders::Tools, "tools-add"),
+        cx,
+    )
+}
+
+/// The folders outside the project the agent may use.
+fn allowed_folders(cx: &mut App) -> AnyElement {
+    let rows = folder_rows(Folders::Allowed, cx);
     list_card(
         "sandbox-allowed",
         "Allowed folders",
-        "Folders outside the project the agent may read, or also change. Keys and logins \
+        "Folders outside the project the agent may read, or also write. Keys and logins \
          (~/.ssh, ~/.aws, ~/.gnupg, pi's own and others) stay hidden even inside an allowed \
          folder.",
         rows,
         "No folders yet",
-        h_flex()
-            .w_full()
-            .justify_center()
-            .child(add)
-            .into_any_element(),
+        add_folders(Folders::Allowed, "allowed-add"),
         cx,
     )
 }
@@ -337,20 +446,24 @@ fn network_choice(cx: &mut App) -> AnyElement {
     let theme = cx.theme();
     let warning = palette(cx).warning;
     let option = |value: Network, icon: Icon, label: &'static str| {
-        Button::new(SharedString::from(format!("network-{label}")))
-            .icon(icon)
-            .label(label)
-            .small()
-            .ghost()
-            .toggled(network == value)
-            .on_click(move |_, _, cx| change(cx, |settings| settings.network = value))
+        chip(
+            SharedString::from(format!("network-{label}")),
+            icon,
+            label,
+            network == value,
+            cx,
+        )
+        .px_2p5()
+        .py_1()
+        .text_sm()
+        .on_click(move |_, _, cx| change(cx, |settings| settings.network = value))
     };
     let description = match network {
-        Network::Off => "Commands can't connect to the Internet: installs and downloads fail.",
-        Network::On => "Commands can connect to any site.",
+        Network::Off => "Commands can't reach any website: installs and downloads fail.",
+        Network::On => "Commands can reach every website.",
         Network::Custom => {
-            "Commands reach only the sites below, through a proxy in Pistachio. Tools that \
-             don't use a proxy (most do: curl, git, npm, pip, cargo) get no network."
+            "Commands reach only the websites below. Tools that don't use a proxy get none \
+             (most do: curl, git, npm, pip, cargo)."
         }
     };
     v_flex()
@@ -366,16 +479,12 @@ fn network_choice(cx: &mut App) -> AnyElement {
                         .flex_1()
                         .text_sm()
                         .font_weight(FontWeight::MEDIUM)
-                        .child("Commands may reach"),
+                        .child("Allowed websites"),
                 )
                 .child(
                     h_flex()
                         .flex_none()
-                        .gap_0p5()
-                        .p_0p5()
-                        .rounded_lg()
-                        .border_1()
-                        .border_color(theme.border)
+                        .gap_1()
                         .child(option(Network::Off, Icon::from(AppIcon::GlobeOff), "None"))
                         .child(option(Network::On, Icon::from(AppIcon::Globe), "All"))
                         .child(option(
@@ -399,11 +508,6 @@ fn network_choice(cx: &mut App) -> AnyElement {
                     .child("This system can't limit the network (Landlock needs Linux 6.7)."),
             )
         })
-        .child(div().text_xs().text_color(theme.muted_foreground).child(
-            "Model requests are pi's own and always work. Your API keys never reach \
-                     commands: keys in environment variables (names ending in _API_KEY, _TOKEN, \
-                     …) are removed.",
-        ))
         .into_any_element()
 }
 
@@ -464,6 +568,7 @@ fn sites(input: &Entity<InputState>, window: &mut Window, cx: &mut App) -> AnyEl
                     remove_button(
                         SharedString::from(format!("site-remove-{index}")),
                         label.clone(),
+                        cx,
                     )
                     .on_click(move |_, _, cx| {
                         change(cx, |settings| {
@@ -539,11 +644,11 @@ fn sites(input: &Entity<InputState>, window: &mut Window, cx: &mut App) -> AnyEl
         .into_any_element();
     list_card(
         "sandbox-sites",
-        "Allowed sites",
-        "A site is allowed as a whole: pages can't be told apart over HTTPS. Add /* for its \
+        "Websites",
+        "A website is allowed as a whole: pages can't be told apart over HTTPS. Add /* for its \
          subdomains too, like github.com/* for api.github.com.",
         rows,
-        "No sites yet: commands reach nothing",
+        "No websites yet: commands reach none",
         footer,
         cx,
     )

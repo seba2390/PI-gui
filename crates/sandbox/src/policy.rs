@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::paths::{expand, resolve};
-use crate::settings::{ALWAYS_HIDDEN, Network, Settings, TOOL_CACHES, TOOL_PROGRAMS};
+use crate::settings::{ALWAYS_HIDDEN, Network, Settings};
 
 /// The rules for commands in one project. Paths are resolved (see [`resolve`]) and may not
 /// exist yet.
@@ -116,14 +116,14 @@ impl Policy {
             }
         }
         readable.push(at("~/.agents"));
-        if settings.tool_folders && home.is_some() {
-            writable.extend(TOOL_CACHES.iter().map(|path| at(path)));
-            readable.extend(TOOL_PROGRAMS.iter().map(|path| at(path)));
-            readable.extend(own_tools(&cx.path, home));
-        }
-        for allowed in &settings.allowed {
+        let tools = if settings.tool_folders {
+            settings.tool_list(cx, false)
+        } else {
+            Vec::new()
+        };
+        for allowed in tools.iter().chain(&settings.allowed) {
             let path = allowed.path.trim();
-            if path.is_empty() {
+            if path.is_empty() || !allowed.read {
                 continue;
             }
             if allowed.write {
@@ -210,24 +210,6 @@ impl Policy {
         dedup(&mut passages);
         passages
     }
-}
-
-/// The user's own tools: folders of `$PATH` in the home folder (for `…/bin`, the folder it is in,
-/// which holds the libraries next to it), never the home folder itself.
-fn own_tools(path: &[PathBuf], home: Option<&Path>) -> Vec<PathBuf> {
-    let Some(home) = home.map(resolve) else {
-        return Vec::new();
-    };
-    path.iter()
-        .map(|dir| resolve(dir))
-        .filter(|dir| dir.starts_with(&home) && *dir != home)
-        .map(|dir| match dir.parent() {
-            Some(parent) if dir.file_name().is_some_and(|name| name == "bin") && parent != home => {
-                parent.to_path_buf()
-            }
-            _ => dir,
-        })
-        .collect()
 }
 
 /// The git folders a project's commits write to when they are not inside it: the repository's
@@ -317,13 +299,12 @@ mod tests {
         std::fs::create_dir_all(project.join("src")).expect("mkdir");
         let settings = Settings {
             allowed: vec![
+                Allowed::new("~/Documents/specs", false),
+                Allowed::new("~/shared", true),
                 Allowed {
-                    path: "~/Documents/specs".into(),
+                    path: "~/Pictures".into(),
+                    read: false,
                     write: false,
-                },
-                Allowed {
-                    path: "~/shared".into(),
-                    write: true,
                 },
             ],
             ..Settings::default()
@@ -350,18 +331,18 @@ mod tests {
         assert!(policy.may_read(&home.join("Documents/specs/a.md")));
         assert!(!policy.may_write(&home.join("Documents/specs/a.md")));
         assert!(policy.may_write(&home.join("shared/notes.txt")));
+        assert!(!policy.may_read(&home.join("Pictures/me.jpg")));
         // The home folder in `$PATH` does not open it, nor does a folder around it.
         assert!(!policy.readable.contains(&home));
         let around = Settings {
-            allowed: vec![Allowed {
-                path: dir
-                    .path()
+            allowed: vec![Allowed::new(
+                dir.path()
                     .parent()
                     .expect("parent")
                     .to_string_lossy()
                     .into_owned(),
-                write: false,
-            }],
+                false,
+            )],
             ..Settings::default()
         };
         let policy = Policy::for_project(&around, &project, &context(&home)).expect("policy");
@@ -380,10 +361,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let home = dir.path().canonicalize().expect("canonical");
         let settings = Settings {
-            allowed: vec![Allowed {
-                path: "~".into(),
-                write: false,
-            }],
+            allowed: vec![Allowed::new("~", false)],
             ..Settings::default()
         };
         let policy =
