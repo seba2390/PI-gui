@@ -768,24 +768,21 @@ impl MainWindow {
         self.chat.read(cx).session().read(cx).mode()
     }
 
-    /// Where a new conversation in `mode` starts: the chat folder, or for Code the current
-    /// project, else the most recent one, else the launch folder.
-    /// The chat folder, or for Code the current project, else the most recent one. `None`
-    /// when there is no project yet: the user picks one (never silently the launch folder).
-    fn default_folder(&self, mode: Mode, cx: &App) -> Option<PathBuf> {
-        let config = cx.global::<AppConfig>();
-        match mode {
-            Mode::Chat => Some(config.chat_dir.clone()),
-            Mode::Code if self.local_code(cx) => Some(self.cwd(cx)),
-            Mode::Code => self.sidebar.read(cx).latest_code_folder(cx),
-        }
-    }
-
-    /// A new conversation in `mode`'s default folder; asks for a folder when there is none.
+    /// A new conversation in `mode`: a chat in the chat folder. A Code session never takes a
+    /// folder by itself (that could be the home folder, where listing files makes macOS ask
+    /// for Downloads, Documents and the rest): the welcome screen asks which, and when it is
+    /// already shown, the system's folder dialog.
     fn new_in_default_folder(&mut self, mode: Mode, window: &mut Window, cx: &mut Context<Self>) {
-        match self.default_folder(mode, cx) {
-            Some(folder) => self.new_chat_in(folder, window, cx),
-            None => self.choose_folder(None, window, cx),
+        match mode {
+            Mode::Chat => {
+                let folder = cx.global::<AppConfig>().chat_dir.clone();
+                self.new_chat_in(folder, window, cx);
+            }
+            Mode::Code if self.welcome_visible() => self.choose_folder(None, window, cx),
+            Mode::Code => {
+                self.close_pages(cx);
+                self.show_welcome(Mode::Code, window, cx);
+            }
         }
     }
 
@@ -1524,14 +1521,9 @@ impl MainWindow {
                 }
                 ComposerEvent::ChooseHost(None) => {
                     if self.chat.read(cx).session().read(cx).host().is_some() {
+                        // Which folder here is asked, never guessed.
                         let moving = Some(self.chat.entity_id());
-                        match self.default_folder(Mode::Code, cx) {
-                            Some(folder) => {
-                                let draft = self.take_moving_draft(moving, window, cx);
-                                self.show_new(None, folder, draft, window, cx);
-                            }
-                            None => self.choose_folder(moving, window, cx),
-                        }
+                        self.choose_folder(moving, window, cx);
                     }
                 }
                 ComposerEvent::ChooseHost(Some(host)) | ComposerEvent::BrowseRemote(host) => {

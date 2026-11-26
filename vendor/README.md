@@ -61,3 +61,17 @@ folder (without `Cargo.lock`, `Cargo.toml.orig` and `.cargo_vcs_info.json`), re-
 `Pistachio:` changes, and keep the version equal to the `gpui-pre` that gpui-kit pins (the same
 for `gpui-pre-apple`). Drop the
 patch once upstream GPUI paces frames this way.
+
+## gpui-component 0.11.0
+
+gpui-kit's `gpui-component` (Apache-2.0). Changed in `src/setting/` only (search for
+`Pistachio:`):
+
+- **Group titles are centred**, and the one picked in the Settings sidebar glows for a moment
+  (`GroupFlash`; its colour is `Settings::flash_color`), to show where the page went.
+- **A description runs up to its field.** Upstream stops a setting's text at three fifths of the
+  row (`max_w_3_5`), so next to a switch it wrapped halfway across.
+
+To update: copy the release gpui-kit pins from `~/.cargo/registry/src/*/gpui-component-*` over
+`vendor/gpui-component` (without `Cargo.lock`, `Cargo.toml.orig` and `.cargo_vcs_info.json`) and
+re-apply the changes.

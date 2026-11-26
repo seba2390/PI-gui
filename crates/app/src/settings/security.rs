@@ -20,10 +20,10 @@ use crate::ui::AppIcon;
 
 /// The issue about a sandbox on Windows.
 const WINDOWS_ISSUE: &str = "https://github.com/seba2390/pistachio/issues/47";
-/// Rows a list shows; below them the next one fades out, and the list scrolls a row at a time.
+/// Rows a list shows; below them half of the next one fades out, and the list scrolls.
 const LIST_ROWS_SHOWN: usize = 3;
-/// How far to scroll for one row.
-const LIST_ROW_SCROLL: f32 = 34.;
+/// The height of a row in a list.
+const LIST_ROW: f32 = 38.;
 
 /// `site_input` is the allowlist's field (the view keeps it, with its text).
 pub(super) fn page(site_input: Entity<InputState>) -> SettingPage {
@@ -77,9 +77,8 @@ pub(super) fn page(site_input: Entity<InputState>) -> SettingPage {
                         ),
                     )
                     .description(
-                        "The folders in your home folder where tools keep their programs, \
-                         settings and downloads (~/.cargo, ~/.npm, ~/.nvm, ~/.gitconfig, …). \
-                         pi's skills can always be read.",
+                        "Commands may use the folders where tools like cargo, npm and git keep \
+                         their programs, settings and caches.",
                     ),
                 )
                 .item(SettingItem::render(|_, _, cx| tool_folders(cx)).keywords([
@@ -142,8 +141,8 @@ fn change(cx: &mut App, f: impl FnOnce(&mut sandbox::Settings)) {
 }
 
 /// A titled box holding a list and, under it, how to add to it. A long list shows its first
-/// rows with the next one fading out, scrolls a row at a time over them, and has a thin bar
-/// saying where it is.
+/// rows with half of the next one fading out, scrolls smoothly over them, and has a thin bar
+/// saying where it is. Under the pointer, where it takes scrolling, its border lights up.
 fn list_card(
     id: &'static str,
     title: &'static str,
@@ -154,48 +153,31 @@ fn list_card(
     cx: &App,
 ) -> AnyElement {
     let theme = cx.theme();
+    let accent = palette(cx).accent;
     let count = rows.len();
-    let last = count.saturating_sub(LIST_ROWS_SHOWN);
-    let top = read(cx, |s| s.list_tops.get(id).copied().unwrap_or(0)).min(last);
-    let more_below = top + LIST_ROWS_SHOWN < count;
+    let scrolls = count > LIST_ROWS_SHOWN;
+    #[allow(clippy::cast_precision_loss)] // a short list
+    let total = count as f32 * LIST_ROW;
+    #[allow(clippy::cast_precision_loss)]
+    let viewport = (LIST_ROWS_SHOWN as f32 + 0.5) * LIST_ROW;
+    let max = (total - viewport).max(0.);
+    let offset = read(cx, |s| s.list_offsets.get(id).copied().unwrap_or(0.)).clamp(0., max);
     let separator = theme.border.opacity(0.6);
-    let row_box = |row: AnyElement, line: bool| {
-        div()
+    let rows = rows.into_iter().enumerate().map(|(index, row)| {
+        h_flex()
             .w_full()
+            .h(px(LIST_ROW))
+            .flex_none()
             .pl_3()
             .pr_4()
-            .py_1p5()
-            .when(line, |this| this.border_b_1().border_color(separator))
+            .overflow_hidden()
+            .when(index + 1 < count, |this| {
+                this.border_b_1().border_color(separator)
+            })
             .child(row)
-    };
-    let mut shown: Vec<AnyElement> = Vec::new();
-    let mut peek = None;
-    for (index, row) in rows.into_iter().enumerate().skip(top) {
-        if index < top + LIST_ROWS_SHOWN {
-            shown.push(row_box(row, index + 1 < count).into_any_element());
-        } else {
-            // The next row, cut and faded: there is more.
-            peek = Some(
-                div()
-                    .h(px(18.))
-                    .overflow_hidden()
-                    .opacity(0.3)
-                    .child(row_box(row, false))
-                    .into_any_element(),
-            );
-            break;
-        }
-    }
-    #[allow(clippy::cast_precision_loss)] // a short list
-    let (thumb_height, thumb_top) = if count > 0 {
-        (
-            LIST_ROWS_SHOWN.min(count) as f32 / count as f32,
-            top as f32 / count as f32,
-        )
-    } else {
-        (1., 0.)
-    };
-    let scrollbar = (count > LIST_ROWS_SHOWN).then(|| {
+    });
+    let group = SharedString::from(format!("{id}-card"));
+    let scrollbar = scrolls.then(|| {
         div()
             .absolute()
             .top(px(6.))
@@ -209,12 +191,63 @@ fn list_card(
                     .absolute()
                     .left_0()
                     .w_full()
-                    .top(relative(thumb_top))
-                    .h(relative(thumb_height))
+                    .top(relative(offset / total))
+                    .h(relative(viewport / total))
                     .rounded_full()
-                    .bg(theme.muted_foreground.opacity(0.6)),
+                    .bg(theme.muted_foreground.opacity(0.5))
+                    .group_hover(group.clone(), move |style| style.bg(accent.opacity(0.85))),
             )
     });
+    // Fades where rows go on out of sight.
+    let fade = |top: bool| {
+        let (solid, clear) = (theme.background.opacity(0.92), theme.background.opacity(0.));
+        let (from, to) = if top { (solid, clear) } else { (clear, solid) };
+        div()
+            .absolute()
+            .left_0()
+            .right_0()
+            .h(px(LIST_ROW * 0.6))
+            .map(|this| if top { this.top_0() } else { this.bottom_0() })
+            .bg(linear_gradient(
+                180.,
+                linear_color_stop(from, 0.),
+                linear_color_stop(to, 1.),
+            ))
+    };
+    let list = div()
+        .relative()
+        .w_full()
+        .when(count == 0, |this| {
+            this.child(
+                h_flex()
+                    .w_full()
+                    .justify_center()
+                    .py_4()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(empty),
+            )
+        })
+        .map(|this| {
+            if scrolls {
+                this.h(px(viewport)).overflow_hidden().child(
+                    v_flex()
+                        .absolute()
+                        .left_0()
+                        .w_full()
+                        .top(px(-offset))
+                        .children(rows),
+                )
+            } else {
+                this.children(rows)
+            }
+        })
+        .when(scrolls && offset > 0.5, |this| this.child(fade(true)))
+        .when(scrolls && offset < max - 0.5, |this| {
+            this.child(fade(false))
+        })
+        .children(scrollbar)
+        .when(scrolls, |this| this.child(scroll_catcher(id, max)));
     v_flex()
         .w_full()
         .gap_1p5()
@@ -229,6 +262,8 @@ fn list_card(
         )
         .child(
             v_flex()
+                .id(group.clone())
+                .group(group)
                 .w_full()
                 .mt_1()
                 .rounded_lg()
@@ -236,34 +271,23 @@ fn list_card(
                 .border_color(theme.border)
                 .bg(theme.background.opacity(0.6))
                 .overflow_hidden()
-                .child(
-                    div()
-                        .relative()
-                        .w_full()
-                        .when(count == 0, |this| {
-                            this.child(
-                                h_flex()
-                                    .w_full()
-                                    .justify_center()
-                                    .py_4()
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
-                                    .child(empty),
-                            )
-                        })
-                        .children(shown)
-                        .children(peek)
-                        .children(scrollbar)
-                        .when(count > LIST_ROWS_SHOWN, |this| {
-                            this.child(scroll_catcher(id, count))
-                        }),
-                )
+                .hover(move |style| {
+                    style
+                        .border_color(accent.opacity(0.6))
+                        .shadow(vec![BoxShadow {
+                            color: accent.opacity(0.18),
+                            offset: point(px(0.), px(0.)),
+                            blur_radius: px(10.),
+                            spread_radius: px(0.),
+                            inset: false,
+                        }])
+                })
+                .child(list)
                 .child(
                     div()
                         .w_full()
-                        .when(!more_below || count == 0, |this| {
-                            this.border_t_1().border_color(theme.border)
-                        })
+                        .border_t_1()
+                        .border_color(theme.border)
                         .px_3()
                         .py_2()
                         .child(footer),
@@ -273,9 +297,9 @@ fn list_card(
 }
 
 /// Takes scrolling over a list before the Settings page does (in the capture phase: the page's
-/// own scrolling would get it first otherwise), so the list moves a row at a time; at its ends
-/// the page scrolls as usual.
-fn scroll_catcher(id: &'static str, count: usize) -> impl IntoElement {
+/// own scrolling would get it first otherwise), so the list moves; at its ends the page scrolls
+/// as usual.
+fn scroll_catcher(id: &'static str, max: f32) -> impl IntoElement {
     canvas(
         |_, _, _| {},
         move |bounds, (), window, _| {
@@ -286,11 +310,9 @@ fn scroll_catcher(id: &'static str, count: usize) -> impl IntoElement {
                     return;
                 }
                 let delta = event.delta.pixel_delta(window.line_height()).y;
-                let rows = (count, LIST_ROWS_SHOWN);
-                let moved = security(cx).update(cx, |s, cx| {
-                    s.scroll_list(id, f32::from(delta), rows, LIST_ROW_SCROLL, cx)
-                });
-                if moved {
+                let took =
+                    security(cx).update(cx, |s, cx| s.scroll_list(id, f32::from(delta), max, cx));
+                if took {
                     cx.stop_propagation();
                     window.refresh();
                 }

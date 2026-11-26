@@ -924,6 +924,7 @@ impl Render for SettingsView {
         // No background: the π signs are behind it.
         div().size_full().child(
             Settings::new("app-settings")
+                .flash_color(crate::theme::palette(cx).accent)
                 .default_selected_index(SelectIndex {
                     page_ix: self.start_page,
                     group_ix: None,
@@ -1635,11 +1636,11 @@ mod tests {
             .debug_bounds("sandbox-allowed")
             .expect("the list is drawn");
         let over = gpui_kit::point(bounds.center().x, bounds.bottom() - gpui_kit::px(80.));
-        let top = |cx: &mut VisualTestContext| {
+        let offset = |cx: &mut VisualTestContext| {
             cx.update(|_, cx| {
                 crate::security::existing(cx)
-                    .and_then(|s| s.read(cx).list_tops.get("sandbox-allowed").copied())
-                    .unwrap_or(0)
+                    .and_then(|s| s.read(cx).list_offsets.get("sandbox-allowed").copied())
+                    .unwrap_or(0.)
             })
         };
         for _ in 0..3 {
@@ -1653,7 +1654,10 @@ mod tests {
             });
             cx.run_until_parked();
         }
-        assert_eq!(top(cx), 3, "scrolling down moved the list three rows");
+        assert!(
+            (offset(cx) - 120.).abs() < 0.01,
+            "scrolling down moved the list by as much"
+        );
         let after = cx
             .debug_bounds("sandbox-allowed")
             .expect("the list is drawn");

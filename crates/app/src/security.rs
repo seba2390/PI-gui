@@ -82,6 +82,9 @@ pub enum SessionSandbox {
     Checking,
 }
 
+/// How long a list keeps taking scrolling after it last moved (see [`Security::scroll_list`]).
+const LIST_LATCH: std::time::Duration = std::time::Duration::from_millis(180);
+
 pub struct Security {
     dir: PathBuf,
     exe: Option<PathBuf>,
@@ -90,10 +93,10 @@ pub struct Security {
     pub status: Option<Status>,
     /// The site being typed in the allowlist's field, looked up.
     pub site_check: Option<SiteCheck>,
-    /// The first row each list on the page shows (they scroll a row at a time).
-    pub list_tops: std::collections::HashMap<&'static str, usize>,
-    /// Scrolling not yet turned into rows, per list.
-    wheel: std::collections::HashMap<&'static str, f32>,
+    /// How far each list on the page is scrolled, in pixels.
+    pub list_offsets: std::collections::HashMap<&'static str, f32>,
+    /// The list that last took scrolling, and when.
+    list_latch: Option<(&'static str, std::time::Instant)>,
     pub trust_default: TrustDefault,
     /// Saved trust decisions: folder, trusted.
     pub trusted: Vec<(String, bool)>,
@@ -121,8 +124,8 @@ pub fn security(cx: &mut App) -> Entity<Security> {
             exe,
             status: None,
             site_check: None,
-            list_tops: std::collections::HashMap::new(),
-            wheel: std::collections::HashMap::new(),
+            list_offsets: std::collections::HashMap::new(),
+            list_latch: None,
             trust_default: TrustDefault::Ask,
             trusted: Vec::new(),
             error: None,
@@ -295,40 +298,34 @@ impl Security {
         });
     }
 
-    /// Scrolls list `id` (of `count` rows, `shown` at a time) by `delta` pixels (positive is
-    /// up), a row per `row` pixels. Returns whether the list could move that way, so the page
-    /// scrolls instead at its ends.
+    /// Scrolls list `id` by `delta` pixels (positive is up), within `0..=max`. Returns whether
+    /// the list took the scrolling: it does while it can move, and for a moment after it stops
+    /// at an end, so a flick that runs into the end doesn't carry on with the page; scrolling
+    /// that starts at an end scrolls the page.
     pub fn scroll_list(
         &mut self,
         id: &'static str,
         delta: f32,
-        rows: (usize, usize),
-        row: f32,
+        max: f32,
         cx: &mut Context<Self>,
     ) -> bool {
-        let (count, shown) = rows;
-        let last = count.saturating_sub(shown);
-        let top = self.list_tops.entry(id).or_default();
-        *top = (*top).min(last);
-        let can_move = (delta < 0. && *top < last) || (delta > 0. && *top > 0);
-        if !can_move {
-            self.wheel.remove(id);
-            return false;
+        let max = max.max(0.);
+        let offset = self.list_offsets.entry(id).or_default();
+        let before = offset.clamp(0., max);
+        let after = (before - delta).clamp(0., max);
+        *offset = after;
+        let now = std::time::Instant::now();
+        let latched = self
+            .list_latch
+            .is_some_and(|(list, at)| list == id && now.duration_since(at) < LIST_LATCH);
+        if (after - before).abs() < f32::EPSILON {
+            if latched {
+                self.list_latch = Some((id, now));
+            }
+            return latched;
         }
-        let pending = self.wheel.entry(id).or_default();
-        *pending += delta;
-        let before = *top;
-        while *pending <= -row && *top < last {
-            *top += 1;
-            *pending += row;
-        }
-        while *pending >= row && *top > 0 {
-            *top -= 1;
-            *pending -= row;
-        }
-        if *top != before {
-            cx.notify();
-        }
+        self.list_latch = Some((id, now));
+        cx.notify();
         true
     }
 

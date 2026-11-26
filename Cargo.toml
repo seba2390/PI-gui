@@ -126,5 +126,6 @@ panic = "abort"
 # amounts as prose; see vendor/README.md. Keep the versions in step with what gpui-kit pins.
 [patch.crates-io]
 gpui-base = { path = "vendor/gpui-base" }
+gpui-component = { path = "vendor/gpui-component" }
 gpui-pre-macos = { path = "vendor/gpui-pre-macos" }
 gpui-pre-apple = { path = "vendor/gpui-pre-apple" }

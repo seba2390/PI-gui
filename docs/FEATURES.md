@@ -30,7 +30,9 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   that the shell is only asked for it.
 - Left sidebar with a **Chat | Code** switch (⌘1 / ⌘2):
   - **Code**: the coding agent in a project folder; sessions are grouped under their folder
-    (collapsible, "+" for a new session there), including ones started from the terminal.
+    (collapsible, "+" for a new session there), including ones started from the terminal. A new
+    session (⌘N) asks which folder (recent folders, another folder or an SSH host); it never picks
+    one by itself.
   - **Chat**: plain conversation with **no file or shell tools**: the model cannot read, write
     or run anything on your computer. Chats run pi in a dedicated empty folder
     (`~/.pi/agent/pistachio/chat`) with only deep search's two web tools (`--tools
@@ -436,7 +438,8 @@ All three are Apache 2.0 licensed. Downloading one asks first and shows its file
 
 Settings opens from the Pistachio menu (⌘,) or the button at the bottom of the sidebar. Every
 change is saved right away. Small π signs drift behind its pages and move out of the way of the
-mouse.
+mouse. Picking a section in the sidebar scrolls to it, and its heading glows for a moment. Lists on
+the Sandboxing & Security page light up under the pointer and scroll by themselves.
 
 - **General:** theme (follow the system, light or dark), code colors (the syntax palette for
   code in chat, diffs, skills and `models.json`, with a live preview), the working indicator's
