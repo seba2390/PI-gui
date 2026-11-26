@@ -329,12 +329,17 @@ Linux; Windows is planned, #47).
   settings (`~/.gitconfig`, `~/.config/git`) are always readable in the sandbox, so commits are made
   as you. Sandboxed sessions tell the model how this works before it starts, and `gh auth status` is
   answered by the gate: the accounts logged in and the git identity, never a token.
-- **Allowed websites:** None, All, or Custom (the default): only the websites listed, which start
-  as where code and packages come from (GitHub, npm, PyPI, crates.io, Go, RubyGems, Maven). A site is allowed as a
-  whole (HTTPS doesn't show pages): `github.com`, or `github.com/*` with its subdomains. The field
+- **Allowed websites:** None (the default), All, or Custom. With None a command reaches a website
+  only once you allow it: the first time a conversation's commands use a site, a question like the
+  git gate's asks **Allow** (for that conversation), **Always for this project** (listed under
+  "Allowed when asked", each removable) or **Don't allow** (the command gets 403). Connections made
+  at once share one question. Custom lets the websites listed through without asking (others are
+  asked about), which start as where code and packages come from (GitHub, npm, PyPI, crates.io,
+  Go, RubyGems, Maven). A site is allowed as a whole (HTTPS doesn't show pages): `github.com`, or `github.com/*` with its subdomains. The field
   checks an address as you type it (`httttp://`, `wwww.`, missing endings) and looks the name up,
   and a page like `https://www.google.com/search` is taken as its site. Custom works through a
-  proxy in Pistachio: commands may connect only to it (on Linux with bubblewrap, a bridge in the
+  proxy in Pistachio (None too): the address commands get names their conversation, so the proxy
+  asks in the right one through its gate. Commands may connect only to it (on Linux with bubblewrap, a bridge in the
   sandbox passes their connections to its Unix socket), it lets allowed sites through and answers
   403 to others, and reads the list for each connection, so changes apply at once. Commands find
   it through `HTTPS_PROXY` and the like (curl, git, npm, pip, cargo; Node with

@@ -8,6 +8,13 @@ All notable changes to PI-gui are listed here. The format follows
 
 ### Changed
 
+- Allowed websites: None is the default, and now asks instead of blocking. The first time a
+  conversation's commands reach a site (curl, pip, npm, cargo, git over HTTPS, …), a question
+  above the message box asks Allow (for that conversation), Always for this project, or Don't
+  allow; connections made at once share one question. Custom lets its listed sites through and
+  asks about others. Sites allowed always are listed under Internet, each removable. The model is
+  told how this works, so it runs the command and waits instead of looking for a way around.
+
 - The question above the message box (the gate's Allow / Always / Don't allow) is a see-through
   pill of one line: the question, then ✕ (don't allow, Esc), ✓✓ (always, named in its tooltip)
   and ✓ Allow. A small button on its top edge shows the details (the commits, addresses and

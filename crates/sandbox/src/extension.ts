@@ -124,6 +124,10 @@ const GATE_NOTE = [
   "- Don't set GIT_CONFIG_* or other git variables to get around an error, and don't invent a commit author: if git has no identity, ask the user.",
 ].join("\n");
 
+// Added too while commands reach websites only through Pistachio's proxy.
+const SITES_NOTE =
+  "- Websites: commands (curl, pip, npm, cargo, git over HTTPS, …) reach the network through Pistachio's proxy. The first time a site is used, Pistachio asks the user; just run the command and wait. A site the user declined answers 403: don't try other sites or ways around it, ask the user.";
+
 const ALLOW = "Allow";
 const ALWAYS = "Always for this project";
 const DENY = "Don't allow";
@@ -210,6 +214,8 @@ function startGate(project: () => string, ui: () => any): string | undefined {
       } else if (plan.account) {
         request.account = plan.account;
       }
+      // A question only (a website for the proxy): nothing runs, the answer was the point.
+      if (!plan.program) return finish(0);
       const child = spawn(BIN!, ["--sandbox-tool", "gate", "run"], { stdio: ["pipe", "pipe", "pipe"] });
       child.stdout.setEncoding("utf8").on("data", (text: string) => send({ stdout: text }));
       child.stderr.setEncoding("utf8").on("data", (text: string) => send({ stderr: text }));
@@ -310,7 +316,8 @@ export default async function (pi: any) {
     if (!gate) return;
     const policy = policyFor(ctx?.cwd ?? process.cwd());
     if (!policy?.sandboxed) return;
-    return { systemPrompt: `${event.systemPrompt}\n\n${GATE_NOTE}` };
+    const sites = policy.network === "on" ? "" : `\n${SITES_NOTE}`;
+    return { systemPrompt: `${event.systemPrompt}\n\n${GATE_NOTE}${sites}` };
   });
 
   // A command that ran into what the sandbox blocks gets a note, so the model doesn't guess. Also
@@ -327,11 +334,9 @@ export default async function (pi: any) {
     const policy = policyFor(ctx?.cwd ?? process.cwd());
     if (!policy?.sandboxed) return;
     const network =
-      policy.network === "off"
-        ? " It has no network access."
-        : policy.network === "custom"
-          ? " It reaches only the sites the user allowed, through a proxy (HTTPS_PROXY); other sites answer 403."
-          : "";
+      policy.network === "on"
+        ? ""
+        : " It reaches websites through Pistachio's proxy (HTTPS_PROXY), which asks the user about each new site; a site the user declined, or one reached without the proxy, fails."
     const git = /unable to access '[^']*(\.gitconfig|\/git\/[^']*)': Operation not permitted/.test(text)
       ? " git's settings file was blocked: tell the user, and don't work around it (no GIT_CONFIG_GLOBAL, no made-up user.name or user.email)."
       : "";

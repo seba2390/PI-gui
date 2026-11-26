@@ -69,10 +69,12 @@ pub enum Class {
     /// Changing things on GitHub: opening, commenting on, closing or merging pull requests and
     /// issues, creating and deleting repositories (those two never without asking).
     GhWrite,
+    /// Reaching a website from a command (asked by the proxy, [`crate::proxy`]).
+    Web,
 }
 
 impl Class {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Fetch,
         Self::Push,
         Self::PushDefault,
@@ -80,6 +82,7 @@ impl Class {
         Self::Sign,
         Self::GhRead,
         Self::GhWrite,
+        Self::Web,
     ];
 
     /// What the user allows, as the settings say it.
@@ -92,6 +95,7 @@ impl Class {
             Self::Sign => "Sign",
             Self::GhRead => "Read on GitHub",
             Self::GhWrite => "Change on GitHub",
+            Self::Web => "Reach the website",
         }
     }
 }
@@ -163,6 +167,7 @@ pub fn decide(request: &Request, settings: &Settings, home: Option<&Path>) -> De
         "git" => git::plan(request),
         "gh" => gh::plan(request),
         "gpg" | "ssh-keygen" => sign::plan(request),
+        "site" => Ok(site_plan(request)),
         _ => Ok(None),
     };
     match planned {
@@ -196,6 +201,35 @@ fn git_identity(request: &Request) -> (Option<String>, Option<String>) {
         git_output(&folder, &["config", "--get", key], &hooks).filter(|value| !value.is_empty())
     };
     (get("user.name"), get("user.email"))
+}
+
+/// A command reaching a website the user hasn't allowed (`args`: the host and port, from the
+/// proxy): nothing runs, the answer is the point. "Always" is for the site in this project.
+fn site_plan(request: &Request) -> Option<Plan> {
+    let host = request.args.first()?.to_lowercase();
+    let port = request.args.get(1).map_or("443", String::as_str);
+    let shown = if matches!(port, "443" | "80") {
+        host.clone()
+    } else {
+        format!("{host}:{port}")
+    };
+    Some(Plan {
+        title: format!("Let commands reach {shown}"),
+        details: vec![
+            "For this conversation: downloads, installs and requests to this site.".to_owned(),
+            "Other sites are asked about separately.".to_owned(),
+        ],
+        warnings: Vec::new(),
+        class: Class::Web,
+        target: host,
+        rememberable: true,
+        program: String::new(),
+        args: Vec::new(),
+        cwd: request.cwd.clone(),
+        stdin: None,
+        accounts: Vec::new(),
+        account: None,
+    })
 }
 
 /// The project a request belongs to: the session's folder, else where it ran.

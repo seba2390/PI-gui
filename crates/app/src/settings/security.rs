@@ -99,6 +99,10 @@ pub(super) fn page(site_input: Entity<InputState>) -> SettingPage {
                 .item(
                     SettingItem::render(move |_, window, cx| sites(&site_input, window, cx))
                         .keywords(["allowlist", "sites", "domains", "url"]),
+                )
+                .item(
+                    SettingItem::render(|_, _, cx| allowed_when_asked(true, cx))
+                        .keywords(["sites", "allowed", "always", "asked"]),
                 ),
         )
         .group(
@@ -110,7 +114,7 @@ pub(super) fn page(site_input: Entity<InputState>) -> SettingPage {
                      the sandbox; the agent sees only what it prints.",
                 )
                 .item(SettingItem::render(|_, _, cx| gate_diagram(cx)))
-                .item(SettingItem::render(|_, _, cx| key_uses(cx)).keywords([
+                .item(SettingItem::render(|_, _, cx| allowed_when_asked(false, cx)).keywords([
                     "git", "push", "pull", "clone", "github", "gh", "sign", "keys", "approve",
                 ])),
         )
@@ -625,11 +629,16 @@ fn network_choice(cx: &mut App) -> AnyElement {
         .on_click(move |_, _, cx| change(cx, |settings| settings.network = value))
     };
     let description = match network {
-        Network::Off => "Commands can't reach any website: installs and downloads fail.",
+        Network::Off => {
+            "Commands reach a website only once you allow it: the first time one is used, you're \
+             asked in the conversation. Tools that don't use a proxy get none (most do: curl, git, \
+             npm, pip, cargo)."
+        }
         Network::On => "Commands can reach every website.",
         Network::Custom => {
-            "Commands reach only the websites below. Tools that don't use a proxy get none \
-             (most do: curl, git, npm, pip, cargo)."
+            "Commands reach the websites below without asking; for others you're asked in the \
+             conversation. Tools that don't use a proxy get none (most do: curl, git, npm, pip, \
+             cargo)."
         }
     };
     v_flex()
@@ -903,21 +912,31 @@ fn diagram_region(title: &'static str, about: &'static str, color: Hsla, muted: 
         )
 }
 
-/// What the user allowed to be done with their keys without asking: per project and remote, the
-/// kinds (push, fetch, …); each can be removed.
-fn key_uses(cx: &mut App) -> AnyElement {
-    let rules = read(cx, |s| s.settings.gate.clone());
+/// What the user allowed without asking (by answering "Always for this project"): with their keys
+/// (per project and remote, the kinds: push, fetch, …), or with `web` the websites commands may
+/// reach. Each can be removed.
+fn allowed_when_asked(web: bool, cx: &mut App) -> AnyElement {
+    let (rules, network) = read(cx, |s| (s.settings.gate.clone(), s.settings.network));
+    if web && network == Network::On {
+        return div().into_any_element();
+    }
     let theme = cx.theme();
     let (muted, mono) = (theme.muted_foreground, theme.mono_font_family.clone());
+    let icon = if web {
+        AppIcon::Globe
+    } else {
+        AppIcon::GitBranch
+    };
     let rows = rules
         .iter()
         .enumerate()
+        .filter(|(_, rule)| rule.allow.contains(&sandbox::gate::Class::Web) == web)
         .map(|(index, rule)| {
             let kinds: Vec<&str> = rule.allow.iter().map(|class| class.label()).collect();
             h_flex()
                 .w_full()
                 .gap_2()
-                .child(Icon::from(AppIcon::GitBranch).small().text_color(muted))
+                .child(Icon::from(icon).small().text_color(muted))
                 .child(
                     div()
                         .flex_none()
@@ -935,6 +954,7 @@ fn key_uses(cx: &mut App) -> AnyElement {
                         .text_xs()
                         .text_color(muted)
                         .child(match &rule.account {
+                            None if web => format!("in {}", rule.project),
                             Some(account) => {
                                 format!("{} as {account} · in {}", kinds.join(", "), rule.project)
                             }
@@ -962,21 +982,36 @@ fn key_uses(cx: &mut App) -> AnyElement {
         .w_full()
         .text_xs()
         .text_color(muted)
-        .child(
+        .child(if web {
+            "Asked the first time a conversation uses a site; \u{201c}Always for this \
+             project\u{201d} adds it here."
+        } else {
             "Asked the first time; \u{201c}Always for this project\u{201d} adds it here. Force \
-             pushes, the default branch and signing are asked about separately.",
-        )
+             pushes, the default branch and signing are asked about separately."
+        })
         .into_any_element();
-    list_card(
-        "sandbox-key-uses",
-        "Allowed with your keys",
-        "What the agent may do with your git and GitHub logins without asking, per project and \
-         remote.",
-        rows,
-        "Nothing yet: the agent asks the first time it needs your keys",
-        footer,
-        cx,
-    )
+    if web {
+        list_card(
+            "sandbox-sites-allowed",
+            "Allowed when asked",
+            "Websites commands may reach without asking, per project.",
+            rows,
+            "None yet: you're asked the first time a site is used",
+            footer,
+            cx,
+        )
+    } else {
+        list_card(
+            "sandbox-key-uses",
+            "Allowed with your keys",
+            "What the agent may do with your git and GitHub logins without asking, per project \
+             and remote.",
+            rows,
+            "Nothing yet: the agent asks the first time it needs your keys",
+            footer,
+            cx,
+        )
+    }
 }
 
 /// Which sandbox this computer has, and what to do when it has none.

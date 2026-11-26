@@ -164,15 +164,13 @@ fn run(dir: &Path, exe: &Path, args: &[OsString]) -> i32 {
         settings.unsandboxed.clear();
     }
     let mut policy = Policy::for_project(&settings, &cwd, &Context::current());
-    // A limited network goes through the app's proxy; without one (the app is not running)
-    // there is none.
+    // A limited network (sites asked about, or a list) goes through the app's proxy: for the
+    // sandbox, only the proxy can be reached. Without one (the app is not running) there is none.
     let mut proxy = None;
-    if let Some(policy) = policy
-        .as_mut()
-        .filter(|policy| policy.network == Network::Custom)
-    {
+    if let Some(policy) = policy.as_mut().filter(|policy| policy.network.uses_proxy()) {
         match crate::proxy::endpoint(dir) {
             Some(endpoint) => {
+                policy.network = Network::Custom;
                 policy.proxy = Some(endpoint.port);
                 proxy = Some(endpoint);
             }
@@ -231,7 +229,11 @@ fn run(dir: &Path, exe: &Path, args: &[OsString]) -> i32 {
         }
     }
     if let Some(endpoint) = &proxy {
-        command.envs(endpoint.env());
+        // The session (its gate's socket), so the proxy asks in the right conversation.
+        let session = std::env::var_os(crate::gate::shim::SOCKET_ENV)
+            .map(PathBuf::from)
+            .and_then(|socket| crate::proxy::session_of(&socket));
+        command.envs(endpoint.env_for(session.as_deref()));
     }
     if let Some(bin) = wrappers {
         let path = std::env::var_os("PATH").unwrap_or_default();

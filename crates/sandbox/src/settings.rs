@@ -17,11 +17,19 @@ pub const FILE: &str = "settings.json";
 pub enum Network {
     /// Any site.
     On,
-    /// None at all.
-    Off,
-    /// Only [`Settings::sites`], through the app's proxy ([`crate::proxy`]).
+    /// No site without asking: through the app's proxy ([`crate::proxy`]), which asks the user
+    /// the first time a session's commands reach a site. Without the proxy, no network at all.
     #[default]
+    Off,
+    /// [`Settings::sites`] without asking, others asked about, through the app's proxy.
     Custom,
+}
+
+impl Network {
+    /// Whether commands go through the app's proxy.
+    pub fn uses_proxy(self) -> bool {
+        self != Self::On
+    }
 }
 
 /// The sites a limited network starts with: where code and packages come from, so that git and
@@ -99,7 +107,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             enabled: true,
-            network: Network::Custom,
+            network: Network::Off,
             tool_folders: true,
             tools: None,
             allowed: Vec::new(),

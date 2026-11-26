@@ -1491,15 +1491,15 @@ impl Composer {
                 AppIcon::ShieldCheck,
                 Some("Some sites"),
                 "Sandboxed: commands can change only this project, can't read your keys and \
-                 reach only the sites you allowed",
+                 reach the sites you listed; others are asked about",
             ),
             SessionSandbox::Sandboxed {
                 network: Reach::None,
             } => (
                 AppIcon::ShieldCheck,
-                Some("No network"),
+                Some("Sites asked"),
                 "Sandboxed: commands can change only this project, can't read your keys and \
-                 have no network",
+                 reach a website only once you allow it",
             ),
             SessionSandbox::Off => (
                 AppIcon::ShieldOff,
