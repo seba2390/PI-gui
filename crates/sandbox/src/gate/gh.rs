@@ -52,20 +52,43 @@ pub trait Accounts {
     fn logins(&self, host: &str) -> Vec<String>;
     /// The organisations `login` on `host` is a member of.
     fn orgs(&self, host: &str, login: &str) -> Vec<String>;
+    /// The permissions (OAuth scopes) of `login`'s token on `host`, if gh says.
+    fn scopes(&self, _host: &str, _login: &str) -> Option<Vec<String>> {
+        None
+    }
 }
 
 /// The accounts of the `gh` on this computer.
 pub struct Installed;
 
+/// `gh auth status` for `host`, as JSON.
+fn auth_json(host: &str) -> Option<serde_json::Value> {
+    let output = gh_command()
+        .args(["auth", "status", "--json", "hosts", "--hostname", host])
+        .output()
+        .ok()?;
+    serde_json::from_slice(&output.stdout).ok()
+}
+
 impl Accounts for Installed {
+    fn scopes(&self, host: &str, login: &str) -> Option<Vec<String>> {
+        let status = auth_json(host)?;
+        let account = status["hosts"][host]
+            .as_array()?
+            .iter()
+            .find(|account| account["login"].as_str() == Some(login))?;
+        Some(
+            account["scopes"]
+                .as_str()?
+                .split(',')
+                .map(|scope| scope.trim().to_owned())
+                .filter(|scope| !scope.is_empty())
+                .collect(),
+        )
+    }
+
     fn logins(&self, host: &str) -> Vec<String> {
-        let Ok(output) = gh_command()
-            .args(["auth", "status", "--json", "hosts", "--hostname", host])
-            .output()
-        else {
-            return Vec::new();
-        };
-        let Ok(status) = serde_json::from_slice::<serde_json::Value>(&output.stdout) else {
+        let Some(status) = auth_json(host) else {
             return Vec::new();
         };
         let mut accounts: Vec<(bool, String)> =
@@ -482,7 +505,32 @@ fn repo_delete(
     );
     plan.details
         .push("The files in this folder stay as they are.".to_owned());
-    plan.accounts = logged_in(accounts, host)?;
+    // GitHub deletes only with the delete_repo permission: without it the user would allow it
+    // for nothing. An account whose permissions gh doesn't say is offered.
+    let logins = logged_in(accounts, host)?;
+    plan.accounts = logins
+        .iter()
+        .filter(|login| {
+            accounts
+                .scopes(host, login)
+                .is_none_or(|scopes| scopes.iter().any(|scope| scope == "delete_repo"))
+        })
+        .cloned()
+        .collect();
+    if plan.accounts.is_empty() {
+        let (who, lacks) = if logins.len() == 1 {
+            ("login", "doesn't")
+        } else {
+            ("logins", "don't")
+        };
+        return Err(format!(
+            "The user's GitHub {who} ({}) {lacks} have the permission to delete repositories, so \
+             GitHub would refuse. Tell the user they can add it once by running \
+             `gh auth refresh -h {host} -s delete_repo` in their own terminal (it opens the \
+             browser), then ask again.",
+            logins.join(", ")
+        ));
+    }
     name_the_account(&mut plan);
     Ok(plan)
 }
@@ -572,6 +620,42 @@ mod tests {
         assert_eq!(here.target, "github.com/a/app");
         assert!(plan(&request(&work, &["repo", "delete", "app"])).is_err());
         assert!(plan(&request(&work, &["repo", "delete", "a/app", "--force"])).is_err());
+    }
+
+    /// Logins whose tokens may (`me-at-work`) or may not (`me`) delete repositories.
+    struct Scoped(bool);
+
+    impl Accounts for Scoped {
+        fn logins(&self, _host: &str) -> Vec<String> {
+            vec!["me".into(), "me-at-work".into()]
+        }
+        fn orgs(&self, _host: &str, _login: &str) -> Vec<String> {
+            Vec::new()
+        }
+        fn scopes(&self, _host: &str, login: &str) -> Option<Vec<String>> {
+            let mut scopes = vec!["repo".to_owned()];
+            if self.0 && login == "me-at-work" {
+                scopes.push("delete_repo".into());
+            }
+            Some(scopes)
+        }
+    }
+
+    #[test]
+    fn deleting_needs_the_permission_before_the_user_is_asked() {
+        let (_dir, work) = work();
+        let delete = request(&work, &["repo", "delete", "a/app"]);
+        let only = plan_with(&delete, &Scoped(true))
+            .expect("allowed")
+            .expect("gated");
+        assert_eq!(only.accounts, ["me-at-work"]);
+        assert!(only.title.ends_with("as me-at-work"), "{}", only.title);
+        let refused = plan_with(&delete, &Scoped(false)).unwrap_err();
+        assert!(
+            refused.contains("gh auth refresh -h github.com -s delete_repo"),
+            "{refused}"
+        );
+        assert!(refused.contains("me, me-at-work"), "{refused}");
     }
 
     #[test]
