@@ -15,9 +15,9 @@ use crate::{
     v_flex,
 };
 
-/// Pistachio: how strong the glow of a picked group's title is, `delta` into it: full at once,
+/// Pistachio: how strong the glow of a picked group's title (and lines) is, `delta` into it: full at once,
 /// held for a moment, then fading out.
-fn glow(delta: f32) -> f32 {
+pub(super) fn glow(delta: f32) -> f32 {
     const HOLD: f32 = 0.15;
     if delta < HOLD {
         1.

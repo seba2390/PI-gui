@@ -2,9 +2,9 @@ use gpui_base::LogicalStyledExt as _;
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, Entity, InteractiveElement as _, IntoElement, ListAlignment, ListOffset,
-    ListState, ParentElement as _, SharedString, StyleRefinement, Styled, Window, div, list,
-    prelude::FluentBuilder as _, px,
+    AnyElement, App, BoxShadow, Entity, InteractiveElement as _, IntoElement, ListAlignment,
+    ListOffset, ListState, ParentElement as _, SharedString, StyleRefinement, Styled, Window, div,
+    list, point, prelude::FluentBuilder as _, px,
 };
 use rust_i18n::t;
 
@@ -16,6 +16,7 @@ use crate::{
     scroll::ScrollableElement,
     setting::{
         RenderOptions, SettingGroup,
+        group::glow,
         settings::{GroupFlash, SettingsState},
     },
     v_flex,
@@ -303,40 +304,64 @@ impl SettingPage {
                             let flash = state.read(cx).flash;
                             move |visible_ix, window, cx| {
                                 let (group_ix, group) = groups[visible_ix].clone();
-                                // Pistachio: the group just picked in the sidebar glows. Driven by
-                                // the clock, not an animation, which would be skipped when motion
-                                // is reduced (it fades; nothing moves).
-                                let flash = flash
-                                    .filter(|flash| flash.page_ix == ix && flash.group_ix == group_ix)
-                                    .map(|flash| {
-                                        flash.at.elapsed().as_secs_f32()
-                                            / GroupFlash::DURATION.as_secs_f32()
-                                    })
-                                    .filter(|progress| *progress < 1.);
-                                if flash.is_some() {
+                                // Pistachio: the group just picked in the sidebar glows: its title
+                                // and the lines above and below it. Driven by the clock, not an
+                                // animation, which would be skipped when motion is reduced (it
+                                // fades; nothing moves).
+                                let progress = |group_ix: usize| {
+                                    flash
+                                        .filter(|flash| {
+                                            flash.page_ix == ix && flash.group_ix == group_ix
+                                        })
+                                        .map(|flash| {
+                                            flash.at.elapsed().as_secs_f32()
+                                                / GroupFlash::DURATION.as_secs_f32()
+                                        })
+                                        .filter(|progress| *progress < 1.)
+                                };
+                                let own = progress(group_ix);
+                                // The line above this group is the one below the group before it.
+                                let above = visible_ix
+                                    .checked_sub(1)
+                                    .and_then(|previous| progress(groups[previous].0));
+                                if own.is_some() || above.is_some() {
                                     window.request_animation_frame();
                                 }
+                                let line_glow = own
+                                    .into_iter()
+                                    .chain(above)
+                                    .map(glow)
+                                    .fold(0., f32::max);
                                 // Pistachio: a thin line above every group but the first.
-                                let line = cx.theme().border.opacity(0.7);
+                                let theme = cx.theme();
+                                let (line, foreground) =
+                                    (theme.border.opacity(0.7), theme.foreground);
+                                let line = div()
+                                    .w_full()
+                                    .h(px(1.))
+                                    .bg(line.blend(foreground.opacity(line_glow)))
+                                    .when(line_glow > 0., |this| {
+                                        this.shadow(vec![BoxShadow {
+                                            color: foreground.opacity(0.16 * line_glow),
+                                            offset: point(px(0.), px(0.)),
+                                            blur_radius: px(8.),
+                                            spread_radius: px(0.),
+                                            inset: false,
+                                        }])
+                                    });
                                 div()
                                     .w_full()
                                     .px_4()
-                                    .child(
-                                        div()
-                                            .w_full()
-                                            .when(visible_ix > 0, |this| {
-                                                this.border_t_1().border_color(line)
-                                            })
-                                            .child(group.py_4().render(
-                                                &query,
-                                                &options
-                                                    .with_page_ix(ix)
-                                                    .with_group_ix(group_ix)
-                                                    .with_flash(flash),
-                                                window,
-                                                cx,
-                                            )),
-                                    )
+                                    .when(visible_ix > 0, |this| this.child(line))
+                                    .child(group.py_4().render(
+                                        &query,
+                                        &options
+                                            .with_page_ix(ix)
+                                            .with_group_ix(group_ix)
+                                            .with_flash(own),
+                                        window,
+                                        cx,
+                                    ))
                                     .into_any_element()
                             }
                         })
