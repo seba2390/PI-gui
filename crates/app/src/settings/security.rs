@@ -5,7 +5,6 @@
 use std::path::Path;
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::setting::{SettingField, SettingGroup, SettingItem, SettingPage};
 use gpui_kit::component::{
@@ -21,8 +20,10 @@ use crate::ui::AppIcon;
 
 /// The issue about a sandbox on Windows.
 const WINDOWS_ISSUE: &str = "https://github.com/seba2390/pistachio/issues/47";
-/// How tall a list gets before it scrolls.
-const LIST_MAX_HEIGHT: f32 = 232.;
+/// How tall a list gets before it scrolls: about three rows, the third fading out.
+const LIST_MAX_HEIGHT: f32 = 118.;
+/// Rows that fit before the list fades out and scrolls.
+const LIST_ROWS_SHOWN: usize = 3;
 
 /// `site_input` is the allowlist's field (the view keeps it, with its text).
 pub(super) fn page(site_input: Entity<InputState>) -> SettingPage {
@@ -151,6 +152,7 @@ fn list_card(
     cx: &App,
 ) -> AnyElement {
     let theme = cx.theme();
+    let fade = theme.background;
     let count = rows.len();
     let rows = rows.into_iter().enumerate().map(|(index, row)| {
         div()
@@ -185,22 +187,43 @@ fn list_card(
                 .overflow_hidden()
                 .child(
                     div()
-                        .id(id)
+                        .relative()
                         .w_full()
-                        .max_h(px(LIST_MAX_HEIGHT))
-                        .overflow_y_scroll()
-                        .when(count == 0, |this| {
+                        .child(
+                            div()
+                                .id(id)
+                                .w_full()
+                                .max_h(px(LIST_MAX_HEIGHT))
+                                .overflow_y_scroll()
+                                .when(count == 0, |this| {
+                                    this.child(
+                                        h_flex()
+                                            .w_full()
+                                            .justify_center()
+                                            .py_4()
+                                            .text_xs()
+                                            .text_color(theme.muted_foreground)
+                                            .child(empty),
+                                    )
+                                })
+                                .children(rows),
+                        )
+                        // More below: the last row shown fades out.
+                        .when(count > LIST_ROWS_SHOWN, |this| {
                             this.child(
-                                h_flex()
-                                    .w_full()
-                                    .justify_center()
-                                    .py_4()
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
-                                    .child(empty),
+                                div()
+                                    .absolute()
+                                    .left_0()
+                                    .right_0()
+                                    .bottom_0()
+                                    .h(px(30.))
+                                    .bg(linear_gradient(
+                                        180.,
+                                        linear_color_stop(fade.opacity(0.), 0.),
+                                        linear_color_stop(fade, 1.),
+                                    )),
                             )
-                        })
-                        .children(rows),
+                        }),
                 )
                 .child(
                     div()
@@ -277,6 +300,39 @@ fn chip(id: SharedString, icon: Icon, label: &'static str, on: bool, cx: &App) -
         .child(label)
 }
 
+/// A plain check box and its word: an outline, with a tick while it is on.
+fn tick(id: SharedString, label: &'static str, on: bool, cx: &App) -> Stateful<Div> {
+    let theme = cx.theme();
+    let (foreground, border, muted) = (theme.foreground, theme.border, theme.muted_foreground);
+    div()
+        .id(id)
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap_1p5()
+        .cursor_pointer()
+        .text_sm()
+        .text_color(if on { foreground } else { muted })
+        .child(
+            div()
+                .size(px(14.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(3.))
+                .border_1()
+                .border_color(if on { muted } else { border })
+                .when(on, |this| {
+                    this.child(
+                        Icon::new(IconName::Check)
+                            .size(px(11.))
+                            .text_color(foreground),
+                    )
+                }),
+        )
+        .child(label)
+}
+
 /// Which list of folders a row belongs to.
 #[derive(Clone, Copy)]
 enum Folders {
@@ -326,38 +382,28 @@ fn folder_rows(list: Folders, cx: &App) -> Vec<AnyElement> {
             let id = |what: &str| SharedString::from(format!("{}-{index}-{what}", list.key()));
             let read_on = entry.read;
             let write_on = entry.write && entry.read;
-            let read = Checkbox::new(id("read"))
-                .small()
-                .label("Read")
-                .checked(read_on)
-                .on_click(move |checked: &bool, _, cx| {
-                    let checked = *checked;
-                    list.change(cx, |entries| {
-                        if let Some(entry) = entries.get_mut(index) {
-                            entry.read = checked;
-                            // No reading, no writing.
-                            if !checked {
-                                entry.write = false;
-                            }
+            let read = tick(id("read"), "Read", read_on, cx).on_click(move |_, _, cx| {
+                list.change(cx, |entries| {
+                    if let Some(entry) = entries.get_mut(index) {
+                        entry.read = !read_on;
+                        // No reading, no writing.
+                        if read_on {
+                            entry.write = false;
                         }
-                    });
+                    }
                 });
-            let write = Checkbox::new(id("write"))
-                .small()
-                .label("Write")
-                .checked(write_on)
-                .on_click(move |checked: &bool, _, cx| {
-                    let checked = *checked;
-                    list.change(cx, |entries| {
-                        if let Some(entry) = entries.get_mut(index) {
-                            entry.write = checked;
-                            // Writing needs reading.
-                            if checked {
-                                entry.read = true;
-                            }
+            });
+            let write = tick(id("write"), "Write", write_on, cx).on_click(move |_, _, cx| {
+                list.change(cx, |entries| {
+                    if let Some(entry) = entries.get_mut(index) {
+                        entry.write = !write_on;
+                        // Writing needs reading.
+                        if !write_on {
+                            entry.read = true;
                         }
-                    });
+                    }
                 });
+            });
             let remove =
                 remove_button(id("remove"), entry.path.clone(), cx).on_click(move |_, _, cx| {
                     list.change(cx, |entries| {
