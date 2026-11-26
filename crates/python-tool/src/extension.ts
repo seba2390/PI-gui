@@ -2,11 +2,16 @@
 // guessing them. The code runs in Monty, a Python interpreter written in Rust for code a model
 // writes, inside Pistachio's own executable (`<exe> --python-tool`, the code as JSON on stdin):
 // no files, network, environment or programs, and limits on time, memory and recursion.
-// Pistachio writes this file on start; edits here are overwritten.
+// Settings → General → Chat mode turns it off (settings.json next to this file, read before each
+// message). Pistachio writes this file on start; edits here are overwritten.
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { Type } from "typebox";
 
 const BIN = process.env.PISTACHIO_PYTHON_BIN;
+const DIR = process.env.PISTACHIO_PYTHON_DIR;
+const TOOL = "python";
 // The helper stops code after 5 s of computing; this ends a helper that hangs anyway.
 const KILL_AFTER_MS = 15_000;
 // What the model gets back at most.
@@ -48,13 +53,37 @@ function helper(code: string, signal?: AbortSignal): Promise<Reply> {
   });
 }
 
+// On unless the settings say otherwise.
+function enabled(): boolean {
+  if (!DIR) return true;
+  try {
+    return JSON.parse(readFileSync(join(DIR, "settings.json"), "utf8"))?.enabled !== false;
+  } catch {
+    return true;
+  }
+}
+
 function cut(text: string): string {
   return text.length > MAX_TEXT ? `${text.slice(0, MAX_TEXT)}\n… (cut: ${text.length - MAX_TEXT} more characters)` : text;
 }
 
 export default function (pi: any) {
+  // Offers the tool, or takes it away, as the settings say (other tools stay as they are).
+  const apply = () => {
+    const others = pi.getActiveTools().filter((name: string) => name !== TOOL);
+    pi.setActiveTools(enabled() ? [...others, TOOL] : others);
+  };
+  pi.on("session_start", async () => apply());
+  pi.on("before_agent_start", async () => apply());
+  // A call made anyway while it is off (the model still had it) is refused.
+  pi.on("tool_call", async (event: any) => {
+    if (event.toolName === TOOL && !enabled()) {
+      return { block: true, reason: "Python is turned off in Pistachio's settings. Answer without it." };
+    }
+  });
+
   pi.registerTool({
-    name: "python",
+    name: TOOL,
     label: "Python",
     description:
       "Run Python code and get what it prints plus the value of its last expression. Use it for any calculation " +

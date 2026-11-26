@@ -2290,6 +2290,10 @@ fn chat_args(config: &AppConfig, options: &mut SpawnOptions) {
         options
             .env
             .push((python_tool::BIN_ENV.into(), exe.clone().into()));
+        options.env.push((
+            python_tool::DIR_ENV.into(),
+            config.python_dir.clone().into(),
+        ));
     }
     options
         .env
@@ -2350,6 +2354,10 @@ mod tests {
         );
         assert!(extension.exists());
         assert!(python.exists());
+        assert!(chat.env.contains(&(
+            python_tool::DIR_ENV.into(),
+            std::ffi::OsString::from(&config.python_dir)
+        )));
         for variable in [deepsearch::BIN_ENV, python_tool::BIN_ENV] {
             assert!(
                 chat.env

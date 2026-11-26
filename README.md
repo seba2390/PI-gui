@@ -25,7 +25,8 @@ when idle.
 
 ## Features
 
-- **Chat and Code modes.** Plain chat without tools, or the coding agent in a project folder.
+- **Chat and Code modes.** Plain chat that can't touch your files, or the coding agent in a
+  project folder.
 - **A readable transcript.** Streaming markdown, collapsible thinking and inline edit diffs.
   Shell commands are labelled by what they do ("Read Cargo.toml", "Ran cargo test").
 - **Side panels and a terminal** in the session's folder: git changes, a file tree, and an
@@ -34,13 +35,16 @@ when idle.
   Your models work there too: requests come back through the SSH connection, so keys stay on
   your computer.
 - **Web search** for chats: quick lookups or multi-step deep research.
+- **Numbers worked out, not guessed.** Chats compute sums, logarithms, series and statistics in
+  Python, run in [Monty](https://github.com/pydantic/monty), a sealed interpreter with no files,
+  network or programs. It can be turned off in Settings → General.
 - **Speech to text.** Dictate with the microphone button. A model you download once (Parakeet,
   Whisper or Moonshine) transcribes on your computer, so nothing you say leaves it.
 - **A sandbox for the agent.** In Code sessions its commands see only the project and the folders
   you allow, never your keys (Seatbelt on macOS, bubblewrap or Landlock on Linux). Settings → Sandboxing & Security.
 - **Background sessions.** Chats keep working while you switch, plus branching, model and
   skill management.
-- **Settings and updates.** A Settings page (⌘,) for look, models, web search and SSH. When a
+- **Settings and updates.** A Settings page (⌘,) for look, models, web search, SSH and the sandbox. When a
   new release is out, Update installs it in place (only when you say yes), and the new version
   shows what changed.
 

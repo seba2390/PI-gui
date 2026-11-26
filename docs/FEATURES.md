@@ -46,7 +46,8 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
     (in milliseconds): it has no files, network, environment or programs, only the computation,
     with `math`, `decimal`, `statistics` and more of the standard library, and stops after 5
     seconds, at one allocation over 256 MB or at deep recursion. The chat shows the call as
-    "Computed" with the result; expanded, the code. By hand: `pistachio --python-tool 'code'`.
+    "Computed" with the result; expanded, the code. Settings → General → Chat mode turns it off
+    (also in open chats, from their next message). By hand: `pistachio --python-tool 'code'`.
   - **Web search** (Chat): the globe button next to the paperclip chooses how the model uses
     the web, per chat (remembered in the session; `/websearch off|search|deep` works too):
     - **Search**: a quick lookup when needed (a few searches and pages), then a concise answer
@@ -451,8 +452,8 @@ the Sandboxing & Security page light up under the pointer and scroll by themselv
 - **General:** theme (follow the system, light or dark), code colors (the syntax palette for
   code in chat, diffs, skills and `models.json`, with a live preview), the working indicator's
   style (with a live preview), text size (scales the interface),
-  whether to open in Chat, Code or the mode used last, reopening the last session, and
-  notifications for chats working in the background.
+  whether to open in Chat, Code or the mode used last, reopening the last session, whether chats
+  compute with Python, and notifications for chats working in the background.
 - **pi & models:** which `pi` to run (`PISTACHIO_PI_BIN` still wins), the model and thinking
   level pi starts with (saved in pi's own `settings.json`, like `/settings` in the terminal),
   and what is connected (with whether its server answers) to add to, change or remove.

@@ -23,6 +23,11 @@ pub const EXTENSION_SOURCE: &str = include_str!("extension.ts");
 pub const BIN_ENV: &str = "PISTACHIO_PYTHON_BIN";
 /// The tool's name (in the allowlist chat sessions start pi with).
 pub const TOOL_NAME: &str = "python";
+/// The environment variable that tells the extension where [`SETTINGS_FILE`] is.
+pub const DIR_ENV: &str = "PISTACHIO_PYTHON_DIR";
+/// Whether chats may use the tool (`{"enabled": false}` turns it off). The extension reads it
+/// before each message, so a change applies also to chats that are running.
+pub const SETTINGS_FILE: &str = "settings.json";
 
 /// How long the code may compute (sleeping not included).
 const MAX_TIME: Duration = Duration::from_secs(5);
@@ -45,6 +50,22 @@ pub fn install_extension(dir: &Path) -> io::Result<PathBuf> {
         std::fs::write(&path, EXTENSION_SOURCE)?;
     }
     Ok(path)
+}
+
+/// Whether chats may use the tool: on unless [`SETTINGS_FILE`] in `dir` says otherwise.
+pub fn enabled(dir: &Path) -> bool {
+    std::fs::read_to_string(dir.join(SETTINGS_FILE))
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|settings| settings["enabled"].as_bool())
+        .unwrap_or(true)
+}
+
+/// Turns the tool on or off for chats.
+pub fn set_enabled(dir: &Path, on: bool) -> io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let text = serde_json::to_string_pretty(&serde_json::json!({ "enabled": on }))?;
+    std::fs::write(dir.join(SETTINGS_FILE), text + "\n")
 }
 
 /// What a run gave.
@@ -101,6 +122,20 @@ mod tests {
         let outcome = run(code);
         assert_eq!(outcome.error, None, "{code}");
         outcome.value.unwrap_or_default()
+    }
+
+    #[test]
+    fn the_switch_is_on_until_turned_off() {
+        let dir = std::env::temp_dir().join(format!("python-tool-switch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(enabled(&dir), "on without a file");
+        set_enabled(&dir, false).expect("write");
+        assert!(!enabled(&dir));
+        set_enabled(&dir, true).expect("write");
+        assert!(enabled(&dir));
+        std::fs::write(dir.join(SETTINGS_FILE), "not json").expect("write");
+        assert!(enabled(&dir), "on when the file can't be read");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

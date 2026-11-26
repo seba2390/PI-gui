@@ -445,6 +445,32 @@ impl SettingsView {
                     ),
             )
             .group(
+                SettingGroup::new().title("Chat mode").item(
+                    SettingItem::new(
+                        "Compute with Python",
+                        hover_switch(
+                            "settings-switch-python",
+                            |cx| python_tool::enabled(&cx.global::<AppConfig>().python_dir),
+                            |on, cx| {
+                                let dir = cx.global::<AppConfig>().python_dir.clone();
+                                if let Err(error) = python_tool::set_enabled(&dir, on) {
+                                    log::warn!(
+                                        "could not save the Python setting in {}: {error}",
+                                        dir.display()
+                                    );
+                                }
+                            },
+                        ),
+                    )
+                    .description(
+                        "The model works numbers out in Python instead of estimating them. The \
+                             code runs in Monty, a sealed interpreter: no files, network or \
+                             programs. Applies from the next message, also in open chats.",
+                    )
+                    .keywords(["python", "monty", "calculate", "math", "code"]),
+                ),
+            )
+            .group(
                 SettingGroup::new()
                     .title("Background chats")
                     .item(

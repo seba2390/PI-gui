@@ -31,7 +31,8 @@ pub(super) fn page(site_input: Entity<InputState>) -> SettingPage {
         .icon(AppIcon::ShieldCheck)
         .description(
             "What the agent can do on this computer in Code sessions. Sessions on SSH hosts run \
-             there, and chats have no tools.",
+             there. Chats can't reach your files: their only tools are web search and Python in \
+             a sealed interpreter (no files, network or programs).",
         )
         .group(
             SettingGroup::new()

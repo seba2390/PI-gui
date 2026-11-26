@@ -10,7 +10,8 @@ All notable changes to PI-gui are listed here. The format follows
 
 - Chats compute numbers with Python: a `python` tool runs the model's code in Monty, a sandboxed
   Python interpreter written in Rust (no files, network or environment; limits on time, memory and
-  recursion), so a sum, logarithm or series is worked out instead of estimated.
+  recursion), so a sum, logarithm or series is worked out instead of estimated. Settings → General
+  → Chat mode turns it off, also in open chats.
 - A sandbox for the agent's commands in Code sessions on this computer, on by default (macOS and
   Linux). Commands run under Seatbelt on macOS and bubblewrap on Linux (Landlock where bubblewrap
   can't run). Of your home folder they see only the project, folders you allow and the folders of
@@ -40,6 +41,11 @@ All notable changes to PI-gui are listed here. The format follows
 - The side chat tab on the chat's right edge is an L-shaped arrow; hovering it says what it does.
 - Lists on the Sandboxing & Security page scroll smoothly and their border lights up under the
   pointer.
+
+### Fixed
+
+- A message you send is shown exactly as typed: "log(2.6778)" was drawn as a formula, since the
+  escapes that kept it literal looked like math delimiters.
 
 ## [0.5.4] - 2026-11-25
 

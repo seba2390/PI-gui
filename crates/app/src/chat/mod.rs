@@ -1213,10 +1213,13 @@ impl Render for ChatView {
     }
 }
 
-/// Markdown that renders `text` exactly as typed: punctuation is escaped (no emphasis, links,
-/// headings or math), line breaks are kept, and leading indentation stays text instead of
-/// becoming a code block. Copying the rendered text gives the original back.
+/// Markdown that renders `text` exactly as typed: punctuation is written as character references
+/// (`&#40;`), which Markdown never reads as syntax (no emphasis, links, headings, code or math),
+/// line breaks are kept, and leading indentation stays text instead of becoming a code block.
+/// Copying the rendered text gives the original back. Not backslash escapes: the chat reads
+/// `\(…\)` and `\[…\]` as formulas, so "log(2.5)" escaped that way was drawn as math.
 fn literal_markdown(text: &str) -> String {
+    use std::fmt::Write as _;
     let lines: Vec<&str> = text.lines().collect();
     let mut out = String::with_capacity(text.len() + text.len() / 4);
     for (index, line) in lines.iter().enumerate() {
@@ -1234,9 +1237,10 @@ fn literal_markdown(text: &str) -> String {
         }
         for c in body.trim_end().chars() {
             if c.is_ascii_punctuation() {
-                out.push('\\');
+                let _ = write!(out, "&#{};", u32::from(c));
+            } else {
+                out.push(c);
             }
-            out.push(c);
         }
         // A trailing backslash is a hard line break, unless the paragraph ends here.
         let next_is_text = lines
@@ -1282,9 +1286,24 @@ mod tests {
             "tell me something funny\n"
         );
         assert_eq!(
-            literal_markdown("# not a *heading* [x](y) $5\n    indented\n\nnext"),
-            "\\# not a \\*heading\\* \\[x\\]\\(y\\) \\$5\\\n&#32;&#32;&#32;&#32;indented\n\nnext\n"
+            literal_markdown("# a *b* (c)\n  x\n\nnext"),
+            "&#35; a &#42;b&#42; &#40;c&#41;\\\n&#32;&#32;x\n\nnext\n"
         );
+    }
+
+    /// What is typed is shown as it is, through the chat's own Markdown extensions (math too):
+    /// "log(2.6778)" once came out as a formula.
+    #[gpui_kit::test]
+    fn typed_text_is_shown_as_typed(cx: &mut gpui_kit::TestAppContext) {
+        for typed in [
+            "do log(2.6778)",
+            "# not a *heading* [x](y) $5 and $10, `code`, <b>tag</b> & 1) two",
+            "\\(x^2\\) and $x$ stay text",
+            "[1, 2, 3]",
+            "a_b_c **d** ~~e~~ > quote",
+        ] {
+            assert_eq!(shown(&literal_markdown(typed), cx), typed, "{typed}");
+        }
     }
     /// The text a chat view shows for `source`, with the chat's own Markdown extensions.
     fn shown(source: &str, cx: &mut gpui_kit::TestAppContext) -> String {
