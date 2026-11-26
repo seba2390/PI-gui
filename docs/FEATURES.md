@@ -287,9 +287,17 @@ Linux; Windows is planned, #47).
   `auth.json`. Environment variables that hold keys and tokens (names ending in `_API_KEY`,
   `_TOKEN`, `_SECRET`, …) are removed from commands. pi keeps them for its model requests, so keys
   never reach the sandbox.
-- **Network:** on by default; with it off, commands can't connect to the Internet (on Linux,
-  Landlock needs Linux 6.7 for this).
-- **In a session:** a shield next to the folder in the message box ("No network" or "No sandbox"
+- **Network:** All (the default), None, or Custom: only the sites you list. A site is allowed as a
+  whole (HTTPS doesn't show pages): `github.com`, or `github.com/*` with its subdomains. The field
+  checks an address as you type it (`httttp://`, `wwww.`, missing endings) and looks the name up,
+  and a page like `https://www.google.com/search` is taken as its site. Custom works through a
+  proxy in Pistachio: commands may connect only to it (on Linux with bubblewrap, a bridge in the
+  sandbox passes their connections to its Unix socket), it lets allowed sites through and answers
+  403 to others, and reads the list for each connection, so changes apply at once. Commands find
+  it through `HTTPS_PROXY` and the like (curl, git, npm, pip, cargo; Node with
+  `NODE_USE_ENV_PROXY`); tools that ignore those get no network. On Linux, Landlock needs Linux
+  6.7 to limit the network.
+- **In a session:** a shield next to the folder in the message box ("Some sites", "No network" or "No sandbox"
   when that applies); its menu runs the project without a sandbox (or with one again) and opens
   Settings → Sandboxing & Security. A call the sandbox blocked says so under it, with a button that allows
   reading (or changing) the folder it tried to use.
@@ -450,8 +458,8 @@ mouse.
   download, use, update, remove).
 - **Sandboxing & Security:** the sandbox (see [Sandbox](#sandbox)): which one this computer has (with the
   command that installs bubblewrap where it is missing), on or off, the tools' folders, the
-  allowed folders (read-only or to change), the network, the projects without a sandbox, and a test of
-  what it blocks. Also which project files pi loads: pi's `defaultProjectTrust` and the saved
+  allowed folders (read-only or to change), and the network (None, All, or Custom with the allowed
+  sites). Also which project files pi loads: pi's `defaultProjectTrust` and the saved
   decisions in its `trust.json`, which can be removed.
 
 The app's own settings live in `~/.pi/agent/pistachio/settings.json`.

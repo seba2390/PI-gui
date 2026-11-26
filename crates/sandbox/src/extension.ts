@@ -28,7 +28,7 @@ type Policy = {
   readable: string[];
   writable: string[];
   hidden: string[];
-  network: "on" | "off";
+  network: "on" | "off" | "custom";
 };
 
 let cached: { key: string; policy: Policy | null } | undefined;
@@ -160,10 +160,20 @@ export default async function (pi: any) {
   pi.on("tool_result", async (event: any, ctx: any) => {
     if (event.toolName !== "bash" || !event.isError) return;
     const text = (event.content ?? []).map((part: any) => (part.type === "text" ? part.text : "")).join("\n");
-    if (!/Operation not permitted|Read-only file system|Permission denied|Network is unreachable|Could not resolve host|Temporary failure in name resolution/i.test(text)) return;
+    if (
+      !/Operation not permitted|Read-only file system|Permission denied|Network is unreachable|Could not resolve host|Temporary failure in name resolution|not an allowed site|CONNECT tunnel failed|403 Forbidden/i.test(
+        text,
+      )
+    )
+      return;
     const policy = policyFor(ctx?.cwd ?? process.cwd());
     if (!policy?.sandboxed) return;
-    const network = policy.network === "off" ? " It has no network access." : "";
+    const network =
+      policy.network === "off"
+        ? " It has no network access."
+        : policy.network === "custom"
+          ? " It reaches only the sites the user allowed, through a proxy (HTTPS_PROXY); other sites answer 403."
+          : "";
     const note =
       `\n\n[Pistachio] This command ran in a sandbox: it can write only in ${where(policy)}, and of the home folder ` +
       `it sees only the project, folders the user allowed and tools' folders (keys and logins never).${network} If the sandbox blocked ` +

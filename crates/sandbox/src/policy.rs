@@ -29,6 +29,10 @@ pub struct Policy {
     /// What commands may neither read nor write, wherever it is.
     pub hidden: Vec<PathBuf>,
     pub network: Network,
+    /// With [`Network::Custom`]: the loopback port of the app's proxy, the only place commands
+    /// may connect to (set by the helper, which knows where the proxy listens).
+    #[serde(skip)]
+    pub proxy: Option<u16>,
 }
 
 /// What the rules depend on besides the settings.
@@ -145,6 +149,7 @@ impl Policy {
             writable,
             hidden,
             network: settings.network,
+            proxy: None,
         })
     }
 

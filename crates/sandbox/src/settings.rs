@@ -15,11 +15,13 @@ pub const FILE: &str = "settings.json";
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Network {
-    /// Any host.
+    /// Any site.
     #[default]
     On,
     /// None at all.
     Off,
+    /// Only [`Settings::sites`], through the app's proxy ([`crate::proxy`]).
+    Custom,
 }
 
 /// A folder (or file) outside the project the agent may use.
@@ -44,6 +46,9 @@ pub struct Settings {
     /// Folders and files outside the project the agent may use. The rest of the home folder is
     /// hidden.
     pub allowed: Vec<Allowed>,
+    /// The sites commands may reach while the network is [`Network::Custom`]: `github.com`, or
+    /// `github.com/*` with its subdomains ([`crate::sites`]).
+    pub sites: Vec<String>,
     /// Project folders whose sessions run without the sandbox (also their subfolders).
     pub unsandboxed: Vec<String>,
 }
@@ -55,6 +60,7 @@ impl Default for Settings {
             network: Network::On,
             tool_folders: true,
             allowed: Vec::new(),
+            sites: Vec::new(),
             unsandboxed: Vec::new(),
         }
     }
@@ -188,6 +194,7 @@ mod tests {
                 path: "~/work/shared".into(),
                 write: true,
             }],
+            sites: vec!["github.com/*".into()],
             unsandboxed: vec!["/srv/app".into()],
         };
         settings.save(dir.path()).expect("save");

@@ -1,15 +1,15 @@
 //! What Settings → Sandboxing & Security shows and changes: the sandbox's settings ([`sandbox::Settings`]),
-//! which sandbox this computer has, the self-test, and pi's project trust (its default and the
-//! saved decisions in `trust.json`).
+//! which sandbox this computer has, the allowed sites' check, and pi's project trust (its default
+//! and the saved decisions in `trust.json`).
 //!
 //! The sandbox's settings are a file that each sandboxed command reads, so a change applies to
-//! running sessions from their next command. Checking the sandbox and the test run the app's own
-//! helper (`--sandbox-tool status` / `test`) in the background.
+//! running sessions from their next command. Checking the sandbox runs the app's own helper
+//! (`--sandbox-tool status`) in the background.
 
 use std::path::{Path, PathBuf};
 
 use gpui_kit::*;
-use sandbox::{Settings, Status, TestReport};
+use sandbox::{Settings, Status};
 
 use crate::config::AppConfig;
 
@@ -50,21 +50,29 @@ impl TrustDefault {
     }
 }
 
-/// The self-test.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub enum Test {
-    #[default]
-    NotRun,
-    Running,
-    Done(TestReport),
-    Failed(String),
+/// What sandboxed commands can reach on the network.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reach {
+    All,
+    /// Only the allowed sites.
+    Some,
+    None,
+}
+
+/// What the site being typed in the allowlist's field resolves to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SiteCheck {
+    /// The host that was looked up.
+    pub host: String,
+    /// `None` while it is looked up.
+    pub found: Option<bool>,
 }
 
 /// How a session's commands run, for the badge in its header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionSandbox {
     Sandboxed {
-        network: bool,
+        network: Reach,
     },
     /// The user turned it off (for all or this project).
     Off,
@@ -80,14 +88,15 @@ pub struct Security {
     pub settings: Settings,
     /// `None` while it is checked.
     pub status: Option<Status>,
-    pub test: Test,
+    /// The site being typed in the allowlist's field, looked up.
+    pub site_check: Option<SiteCheck>,
     pub trust_default: TrustDefault,
     /// Saved trust decisions: folder, trusted.
     pub trusted: Vec<(String, bool)>,
     /// The last thing that could not be saved.
     pub error: Option<String>,
     _check: Task<()>,
-    _test: Task<()>,
+    _lookup: Task<()>,
 }
 
 struct SecurityHandle(Entity<Security>);
@@ -107,12 +116,12 @@ pub fn security(cx: &mut App) -> Entity<Security> {
             dir,
             exe,
             status: None,
-            test: Test::NotRun,
+            site_check: None,
             trust_default: TrustDefault::Ask,
             trusted: Vec::new(),
             error: None,
             _check: Task::ready(()),
-            _test: Task::ready(()),
+            _lookup: Task::ready(()),
         };
         security.load_trust();
         security.check(cx);
@@ -189,35 +198,6 @@ impl Security {
         cx.notify();
     }
 
-    /// Tries what the sandbox should allow and block, in the background.
-    pub fn run_test(&mut self, cx: &mut Context<Self>) {
-        if self.test == Test::Running {
-            return;
-        }
-        self.test = Test::Running;
-        let (dir, exe, settings) = (self.dir.clone(), self.exe.clone(), self.settings.clone());
-        self._test = cx.spawn(async move |this, cx| {
-            let report = cx
-                .background_spawn(async move {
-                    // The test reads the saved settings: what is shown must be on disk first.
-                    settings.save(&dir).map_err(|error| error.to_string())?;
-                    helper::<TestReport>(exe.as_deref(), &dir, "test")
-                })
-                .await;
-            let _ = this.update(cx, |this, cx| {
-                this.test = match report {
-                    Ok(report) => {
-                        this.status = Some(report.status.clone());
-                        Test::Done(report)
-                    }
-                    Err(error) => Test::Failed(error),
-                };
-                cx.notify();
-            });
-        });
-        cx.notify();
-    }
-
     /// How sessions in `project` run their commands.
     pub fn session(&self, project: &Path) -> SessionSandbox {
         if !sandbox::SUPPORTED {
@@ -233,8 +213,14 @@ impl Security {
         match &self.status {
             None => SessionSandbox::Checking,
             Some(status) if status.backend.is_none() => SessionSandbox::Unavailable,
+            // Where the network can't be blocked, it is all there.
             Some(status) => SessionSandbox::Sandboxed {
-                network: self.settings.network == sandbox::Network::On || !status.network,
+                network: match self.settings.network {
+                    _ if !status.network => Reach::All,
+                    sandbox::Network::On => Reach::All,
+                    sandbox::Network::Custom => Reach::Some,
+                    sandbox::Network::Off => Reach::None,
+                },
             },
         }
     }
@@ -257,6 +243,62 @@ impl Security {
                 });
             }
         });
+    }
+
+    /// Looks up the site in the allowlist's field (`text`, as typed) after a pause in typing,
+    /// so the field can say whether it exists.
+    pub fn check_site(&mut self, text: &str, cx: &mut Context<Self>) {
+        let Ok(parsed) = sandbox::sites::parse(text) else {
+            self.site_check = None;
+            self._lookup = Task::ready(());
+            cx.notify();
+            return;
+        };
+        let host = parsed.site.host;
+        if self
+            .site_check
+            .as_ref()
+            .is_some_and(|check| check.host == host)
+        {
+            return;
+        }
+        self.site_check = Some(SiteCheck {
+            host: host.clone(),
+            found: None,
+        });
+        cx.notify();
+        self._lookup = cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(400))
+                .await;
+            let lookup = host.clone();
+            let found = cx
+                .background_spawn(async move {
+                    use std::net::ToSocketAddrs as _;
+                    (lookup.as_str(), 443)
+                        .to_socket_addrs()
+                        .is_ok_and(|mut addresses| addresses.next().is_some())
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(check) = this.site_check.as_mut().filter(|check| check.host == host) {
+                    check.found = Some(found);
+                    cx.notify();
+                }
+            });
+        });
+    }
+
+    /// Adds what was typed to the allowed sites; says why not when it can't be.
+    pub fn add_site(&mut self, text: &str, cx: &mut Context<Self>) -> Result<(), String> {
+        let label = sandbox::sites::parse(text)?.site.label();
+        self.update(cx, |settings| {
+            if !settings.sites.contains(&label) {
+                settings.sites.push(label);
+            }
+        });
+        self.site_check = None;
+        Ok(())
     }
 
     fn agent_dir() -> Option<PathBuf> {

@@ -49,10 +49,17 @@ pub fn profile(policy: &Policy) -> String {
         }
         out.push_str(")\n");
     }
-    if policy.network == Network::Off {
+    if policy.network != Network::On {
         // Local (Unix) sockets stay allowed: system services answer on them.
         out.push_str("(deny network-outbound (remote ip \"*:*\"))\n");
         out.push_str("(deny network-bind (local ip \"*:*\"))\n");
+        // A limited network: only the app's proxy, which lets the allowed sites through.
+        if let (Network::Custom, Some(port)) = (policy.network, policy.proxy) {
+            let _ = writeln!(
+                out,
+                "(allow network-outbound (remote ip \"localhost:{port}\"))"
+            );
+        }
     }
     out
 }
@@ -86,6 +93,7 @@ mod tests {
             writable: vec![PathBuf::from("/Users/ana/code/app"), PathBuf::from("/tmp")],
             hidden: vec![PathBuf::from("/Users/ana/.ssh"), PathBuf::from("/x/\"q\"")],
             network,
+            proxy: None,
         }
     }
 
@@ -121,6 +129,15 @@ mod tests {
     }
 
     #[test]
+    fn a_limited_network_reaches_only_the_proxy() {
+        let mut limited = policy(Network::Custom);
+        limited.proxy = Some(8123);
+        let profile = profile(&limited);
+        assert!(profile.contains("(deny network-outbound (remote ip \"*:*\"))"));
+        assert!(profile.contains("(allow network-outbound (remote ip \"localhost:8123\"))"));
+    }
+
+    #[test]
     fn network_off_denies_internet_connections() {
         let profile = profile(&policy(Network::Off));
         assert!(profile.contains("(deny network-outbound (remote ip \"*:*\"))"));
@@ -150,6 +167,7 @@ mod tests {
             writable: vec![project.clone()],
             hidden: vec![keys.clone()],
             network: Network::Off,
+            proxy: None,
         };
         let sh = |script: String| {
             std::process::Command::new(SANDBOX_EXEC)

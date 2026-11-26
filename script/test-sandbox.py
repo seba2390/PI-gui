@@ -39,7 +39,8 @@ def steps(home, project):
         ("grep", {"pattern": "PRIVATE", "path": os.path.dirname(home)}, False, "narrower"),
         ("read", {"path": f"{home}/.bashrc"}, False, "outside what"),
         ("bash", {"command": f"cat {home}/.bashrc"}, False, ""),
-        ("bash", {"command": f"ls {home}"}, False, ""),
+        # The home folder's names can be listed on macOS (getcwd needs it), not what is in them.
+        ("bash", {"command": f"ls {home}/.ssh"}, False, ""),
         ("bash", {"command": "git --version && pwd"}, True, "git version"),
         ("ls", {"path": "."}, True, "inside.txt"),
     ]

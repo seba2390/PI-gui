@@ -1472,18 +1472,31 @@ impl Composer {
     /// (with "No network" when that is off), a crossed-out one with "No sandbox" when they are
     /// not; its menu turns the sandbox off or on for the project and opens Settings → Sandboxing & Security.
     fn render_sandbox(&self, cwd: &Path, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        use crate::security::SessionSandbox;
+        use crate::security::{Reach, SessionSandbox};
         let security = crate::security::security(cx);
         let state = security.read(cx);
         let session = state.session(cwd);
         let all_off = !state.settings.enabled;
         let (icon, label, tooltip): (AppIcon, Option<&str>, &str) = match session {
-            SessionSandbox::Sandboxed { network: true } | SessionSandbox::Checking => (
+            SessionSandbox::Sandboxed {
+                network: Reach::All,
+            }
+            | SessionSandbox::Checking => (
                 AppIcon::ShieldCheck,
                 None,
                 "Sandboxed: commands can change only this project and can't read your keys",
             ),
-            SessionSandbox::Sandboxed { network: false } => (
+            SessionSandbox::Sandboxed {
+                network: Reach::Some,
+            } => (
+                AppIcon::ShieldCheck,
+                Some("Some sites"),
+                "Sandboxed: commands can change only this project, can't read your keys and \
+                 reach only the sites you allowed",
+            ),
+            SessionSandbox::Sandboxed {
+                network: Reach::None,
+            } => (
                 AppIcon::ShieldCheck,
                 Some("No network"),
                 "Sandboxed: commands can change only this project, can't read your keys and \

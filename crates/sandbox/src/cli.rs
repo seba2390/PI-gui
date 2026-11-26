@@ -6,7 +6,7 @@
 //! - `policy --cwd <folder>` prints the rules for that folder as JSON ([`PolicyReply`]); the
 //!   extension checks the file tools' paths against them.
 //! - `status` checks again which sandbox works here and prints it ([`Status`]).
-//! - `test` tries what the sandbox should block and prints what happened ([`TestReport`]).
+//! - `proxy` runs the proxy of a limited network by itself (the app runs it otherwise).
 //!
 //! The settings come from `$PISTACHIO_SANDBOX_DIR` (see [`crate::default_dir`]).
 
@@ -16,12 +16,14 @@ use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 
-use crate::backend::{self, Backend, Status};
+use crate::backend::{self, Backend};
 use crate::policy::{Context, Policy};
 use crate::settings::{Network, Settings};
 
 pub const FLAG: &str = "--sandbox-tool";
 pub(crate) const LANDLOCK_PROBE: &str = "landlock-probe";
+/// Inside bubblewrap with a limited network: `bridge <socket> <port> -- <program> <args…>`.
+const BRIDGE: &str = "bridge";
 
 /// The rules for a folder, as the extension reads them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,21 +44,6 @@ pub struct PolicyReply {
     pub network: Network,
 }
 
-/// One thing the test tried.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Check {
-    pub name: String,
-    /// `None`: not tried.
-    pub passed: Option<bool>,
-    pub detail: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TestReport {
-    pub status: Status,
-    pub checks: Vec<Check>,
-}
-
 /// Runs the helper when the process was started with [`FLAG`], returning its exit code.
 pub fn run_if_requested() -> Option<i32> {
     let mut args = std::env::args_os().skip(1);
@@ -71,10 +58,23 @@ pub fn run_if_requested() -> Option<i32> {
         Some("run") => run(&dir, &exe, &rest),
         Some("policy") => print_json(&policy_reply(&dir, &exe, &cwd_arg(&rest))),
         Some("status") => print_json(&backend::detect(&dir, &exe)),
-        Some("test") => print_json(&test(&dir, &exe)),
         Some(LANDLOCK_PROBE) => landlock_probe(),
+        Some(BRIDGE) => bridge(&rest),
+        Some("proxy") => match crate::proxy::start(&dir) {
+            // The app runs it; this runs it alone, to try it.
+            Ok(endpoint) => {
+                println!("{}", endpoint.url());
+                loop {
+                    std::thread::park();
+                }
+            }
+            Err(error) => {
+                eprintln!("the proxy could not start: {error}");
+                1
+            }
+        },
         _ => {
-            eprintln!("usage: {FLAG} run|policy|status|test");
+            eprintln!("usage: {FLAG} run|policy|status");
             2
         }
     })
@@ -153,10 +153,25 @@ fn run(dir: &Path, exe: &Path, args: &[OsString]) -> i32 {
         settings.enabled = true;
         settings.unsandboxed.clear();
     }
-    let policy = Policy::for_project(&settings, &cwd, &Context::current());
+    let mut policy = Policy::for_project(&settings, &cwd, &Context::current());
+    // A limited network goes through the app's proxy; without one (the app is not running)
+    // there is none.
+    let mut proxy = None;
+    if let Some(policy) = policy
+        .as_mut()
+        .filter(|policy| policy.network == Network::Custom)
+    {
+        match crate::proxy::endpoint(dir) {
+            Some(endpoint) => {
+                policy.proxy = Some(endpoint.port);
+                proxy = Some(endpoint);
+            }
+            None => policy.network = Network::Off,
+        }
+    }
     let mut command = match &policy {
         None => plain(program, program_args),
-        Some(policy) => match sandboxed(policy, dir, exe, program, program_args) {
+        Some(policy) => match sandboxed(policy, proxy.as_ref(), dir, exe, program, program_args) {
             Ok(command) => command,
             Err(error) => {
                 eprintln!("Pistachio's sandbox: {error}");
@@ -172,6 +187,9 @@ fn run(dir: &Path, exe: &Path, args: &[OsString]) -> i32 {
             }
         }
     }
+    if let Some(endpoint) = &proxy {
+        command.envs(endpoint.env());
+    }
     exec(command, program)
 }
 
@@ -185,6 +203,7 @@ fn plain(program: &OsString, args: &[OsString]) -> Command {
 /// that sessions are not sandboxed). With Landlock, this process restricts itself first.
 fn sandboxed(
     policy: &Policy,
+    proxy: Option<&crate::proxy::Endpoint>,
     dir: &Path,
     exe: &Path,
     program: &OsString,
@@ -202,10 +221,39 @@ fn sandboxed(
         }
         Some(Backend::Bubblewrap { path }) => {
             let mut command = Command::new(path);
-            command
-                .args(crate::bwrap::args(policy))
-                .arg(program)
-                .args(args);
+            // A limited network: the command has a network of its own, and this program, mounted
+            // in, passes its connections on to the proxy's socket.
+            let bridge = match (policy.network, policy.proxy, proxy) {
+                (
+                    Network::Custom,
+                    Some(port),
+                    Some(crate::proxy::Endpoint {
+                        socket: Some(socket),
+                        ..
+                    }),
+                ) => Some((socket.clone(), port)),
+                _ => None,
+            };
+            match bridge {
+                Some((socket, port)) => {
+                    let extra = [(socket.clone(), true), (exe.to_path_buf(), false)];
+                    command
+                        .args(crate::bwrap::args(policy, &extra))
+                        .arg(exe)
+                        .args([FLAG, BRIDGE])
+                        .arg(&socket)
+                        .arg(port.to_string())
+                        .arg("--")
+                        .arg(program)
+                        .args(args);
+                }
+                None => {
+                    command
+                        .args(crate::bwrap::args(policy, &[]))
+                        .arg(program)
+                        .args(args);
+                }
+            }
             Ok(command)
         }
         Some(Backend::Landlock) => {
@@ -257,6 +305,7 @@ fn landlock_probe() -> i32 {
             writable: vec![std::env::temp_dir()],
             hidden: Vec::new(),
             network: Network::Off,
+            proxy: None,
         };
         match crate::landlock::apply(&probe) {
             Ok(enforced) => {
@@ -279,130 +328,27 @@ fn landlock_probe() -> i32 {
     }
 }
 
-/// Tries, in a fresh folder standing in for a project, what the sandbox should allow and block
-/// with the saved settings (as if it were on).
-fn test(dir: &Path, exe: &Path) -> TestReport {
-    let status = backend::detect(dir, exe);
-    let mut checks = Vec::new();
-    if status.backend.is_none() || cfg!(windows) {
-        return TestReport { status, checks };
+/// `bridge <socket> <port> -- <program> <args…>` (see [`crate::proxy::bridge`]).
+fn bridge(args: &[OsString]) -> i32 {
+    #[cfg(unix)]
+    {
+        let split = args.iter().position(|arg| arg == "--");
+        let (Some(socket), Some(port), Some(split)) = (args.first(), args.get(1), split) else {
+            eprintln!("usage: {FLAG} {BRIDGE} <socket> <port> -- <program> <args…>");
+            return 2;
+        };
+        let Some(port) = port.to_str().and_then(|port| port.parse().ok()) else {
+            eprintln!("{FLAG} {BRIDGE}: not a port");
+            return 2;
+        };
+        match args[split + 1..].split_first() {
+            Some((program, rest)) => crate::proxy::bridge(Path::new(socket), port, program, rest),
+            None => 2,
+        }
     }
-    let project =
-        std::env::temp_dir().join(format!("pistachio-sandbox-test-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&project);
-    let mut settings = Settings::load(dir);
-    settings.enabled = true;
-    let policy = Policy::for_project(&settings, &project, &Context::current());
-    let run_in = |program: &str, script: &str| -> bool {
-        Command::new(exe)
-            .arg(FLAG)
-            .arg("run")
-            .arg("--cwd")
-            .arg(&project)
-            .args(["--force", "--", program, "-c", script])
-            .env(crate::DIR_ENV, dir)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .is_ok_and(|status| status.success())
-    };
-    let shell = |script: &str| run_in("/bin/sh", script);
-
-    let inside = project.join("written-by-the-test");
-    let wrote_inside = shell(&format!("echo ok > {}", sh_quote(&inside))) && inside.exists();
-    checks.push(Check {
-        name: "Writing inside the project".into(),
-        passed: Some(wrote_inside),
-        detail: if wrote_inside {
-            "Allowed, as it should be.".into()
-        } else {
-            "Blocked: commands could not change the project.".into()
-        },
-    });
-
-    let outside = crate::paths::home()
-        .unwrap_or_else(|| PathBuf::from("/"))
-        .join(format!(".pistachio-sandbox-test-{}", std::process::id()));
-    let _ = shell(&format!("echo no > {}", sh_quote(&outside)));
-    let wrote_outside = outside.exists();
-    let _ = std::fs::remove_file(&outside);
-    checks.push(Check {
-        name: "Writing outside the project".into(),
-        passed: Some(!wrote_outside),
-        detail: if wrote_outside {
-            format!("Allowed: a command could write {}.", outside.display())
-        } else {
-            "Blocked.".into()
-        },
-    });
-
-    // Something in the home folder the project may not see: keys if there are any, else
-    // another folder there.
-    let private = policy.as_ref().and_then(|policy| {
-        let home_entries = policy.private.iter().flat_map(|private| {
-            std::fs::read_dir(private)
-                .into_iter()
-                .flatten()
-                .flatten()
-                .map(|entry| entry.path())
-        });
-        policy
-            .hidden
-            .iter()
-            .filter(|path| path.exists())
-            .cloned()
-            .chain(home_entries.filter(|path| !policy.may_read(&crate::paths::resolve(path))))
-            .next()
-    });
-    checks.push(match private {
-        Some(path) => {
-            let what = if path.is_dir() { "ls" } else { "cat" };
-            let read = shell(&format!("{what} {} > /dev/null", sh_quote(&path)));
-            Check {
-                name: "Reading your other files".into(),
-                passed: Some(!read),
-                detail: if read {
-                    format!("Allowed: a command could read {}.", path.display())
-                } else {
-                    format!("Blocked ({}).", path.display())
-                },
-            }
-        }
-        None => Check {
-            name: "Reading your other files".into(),
-            passed: None,
-            detail: "There is nothing in the home folder to try.".into(),
-        },
-    });
-
-    checks.push(match settings.network {
-        Network::On => Check {
-            name: "Network".into(),
-            passed: None,
-            detail: "Allowed, as set.".into(),
-        },
-        Network::Off => {
-            // bash has /dev/tcp; `sh` may not.
-            let connected = run_in("/bin/bash", "exec 3<>/dev/tcp/1.1.1.1/443");
-            Check {
-                name: "Network".into(),
-                passed: Some(!connected),
-                detail: if connected {
-                    "Allowed: a command could connect to the Internet.".into()
-                } else if status.network {
-                    "Blocked.".into()
-                } else {
-                    "No connection, but this system can't block the network: it may just be offline."
-                        .into()
-                },
-            }
-        }
-    });
-    let _ = std::fs::remove_dir_all(&project);
-    TestReport { status, checks }
-}
-
-fn sh_quote(path: &Path) -> String {
-    format!("'{}'", path.to_string_lossy().replace('\'', r"'\''"))
+    #[cfg(not(unix))]
+    {
+        let _ = args;
+        2
+    }
 }

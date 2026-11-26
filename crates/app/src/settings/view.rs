@@ -65,6 +65,8 @@ struct PiStartupState {
 impl Global for PiStartupState {}
 
 pub struct SettingsView {
+    /// Sandboxing & Security: the field of the allowed sites.
+    site_input: Entity<InputState>,
     brave_key: Entity<InputState>,
     tavily_key: Entity<InputState>,
     /// `(provider/id, label)` of the models to choose the startup model from.
@@ -126,6 +128,10 @@ impl SettingsView {
             })
         };
         let brave_key = key_input(brave, "From BRAVE_API_KEY if empty", window, cx);
+        let site_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("github.com, or github.com/* with its subdomains")
+        });
         let tavily_key = key_input(tavily, "From TAVILY_API_KEY if empty", window, cx);
         let parsers = document_parsers(cx);
         parsers.update(cx, DocumentParsers::refresh);
@@ -173,9 +179,26 @@ impl SettingsView {
         security.update(cx, crate::security::Security::refresh);
         let mut subscriptions = subscriptions;
         subscriptions.push(cx.observe(&security, |_, _, cx| cx.notify()));
+        // The site field is checked as it is typed; Enter adds it.
+        subscriptions.push(cx.subscribe_in(
+            &site_input,
+            window,
+            |_, input, event: &InputEvent, window, cx| match event {
+                InputEvent::Change => {
+                    let text = input.read(cx).value().to_string();
+                    crate::security::security(cx).update(cx, |s, cx| s.check_site(&text, cx));
+                    cx.notify();
+                }
+                InputEvent::PressEnter { .. } => {
+                    super::security::add_site(input, window, cx);
+                }
+                _ => {}
+            },
+        ));
         let connected =
             super::models::Connected::load(session_models.iter().map(|model| &*model.0), cx);
         let mut this = Self {
+            site_input,
             brave_key,
             tavily_key,
             models: Vec::new(),
@@ -913,7 +936,7 @@ impl Render for SettingsView {
                     self.speech_page(),
                     naming_page(cx),
                     super::documents::page(),
-                    super::security::page(),
+                    super::security::page(self.site_input.clone()),
                 ]),
         )
     }

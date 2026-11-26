@@ -19,15 +19,17 @@ pub mod landlock;
 pub mod note;
 pub mod paths;
 pub mod policy;
+pub mod proxy;
 pub mod seatbelt;
 pub mod secrets;
 pub mod settings;
+pub mod sites;
 
 use std::io;
 use std::path::{Path, PathBuf};
 
 pub use backend::{Backend, Status};
-pub use cli::{Check, PolicyReply, TestReport};
+pub use cli::PolicyReply;
 pub use policy::{Context, Policy};
 pub use settings::{ALWAYS_HIDDEN, Allowed, Network, Settings, TOOL_CACHES, TOOL_PROGRAMS};
 

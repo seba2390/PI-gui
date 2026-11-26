@@ -11,8 +11,9 @@ use crate::policy::Policy;
 use crate::settings::Network;
 
 /// bubblewrap's arguments for `policy`, up to and including the `--` before the command. What
-/// doesn't exist can't be mounted and is left out.
-pub fn args(policy: &Policy) -> Vec<OsString> {
+/// doesn't exist can't be mounted and is left out. `extra` are mounted as well, writable or not
+/// (the proxy's socket and the helper that bridges to it).
+pub fn args(policy: &Policy, extra: &[(PathBuf, bool)]) -> Vec<OsString> {
     let mut args: Vec<OsString> = Vec::new();
     let mut push = |items: &[&dyn AsRef<std::ffi::OsStr>]| {
         args.extend(items.iter().map(|item| item.as_ref().to_owned()));
@@ -21,7 +22,8 @@ pub fn args(policy: &Policy) -> Vec<OsString> {
     push(&[&"--dev", &"/dev"]);
     // Its own processes: when bubblewrap ends, everything the command started ends with it.
     push(&[&"--unshare-pid", &"--proc", &"/proc", &"--die-with-parent"]);
-    if policy.network == Network::Off {
+    // Off, or only the proxy: a network of its own (the proxy is reached through `extra`).
+    if policy.network != Network::On {
         push(&[&"--unshare-net"]);
     }
     for private in &policy.private {
@@ -73,6 +75,9 @@ pub fn args(policy: &Policy) -> Vec<OsString> {
         } else if hidden.exists() {
             push(&[&"--ro-bind", &"/dev/null", hidden]);
         }
+    }
+    for (path, write) in extra.iter().filter(|(path, _)| path.exists()) {
+        push(&[if *write { &"--bind" } else { &"--ro-bind" }, path, path]);
     }
     push(&[&"--chdir", &policy.project]);
     push(&[&"--"]);
@@ -145,8 +150,9 @@ mod tests {
             ],
             hidden: vec![ssh.clone(), token.clone()],
             network: Network::Off,
+            proxy: None,
         };
-        let args: Vec<String> = args(&policy)
+        let args: Vec<String> = args(&policy, &[])
             .into_iter()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect();

@@ -85,6 +85,13 @@ fn main() {
     app.run(move |cx| {
         perf::phase("app_run");
         let config = config::AppConfig::detect(child_env);
+        // The proxy that lets sandboxed commands reach the sites the user allowed. It waits
+        // on its sockets and costs nothing until a command connects.
+        if sandbox::SUPPORTED
+            && let Err(error) = sandbox::proxy::start(&config.sandbox_dir)
+        {
+            log::warn!("a limited network for sandboxed commands is unavailable: {error}");
+        }
         init(cx);
         perf::phase("gpui_kit_init");
         cx.set_global(settings::AppSettings::load(

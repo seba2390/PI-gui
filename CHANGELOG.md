@@ -16,7 +16,8 @@ All notable changes to PI-gui are listed here. The format follows
   and folders you allow to change, and the network can be turned off. pi's file tools keep to the
   same rules. pi itself and its model requests run as before, so keys never enter the sandbox.
   Windows is planned (#47).
-- Settings → Sandboxing & Security: the sandbox's state and settings, a test of what it blocks, and which
+- Settings → Sandboxing & Security: the sandbox's state and settings, the allowed folders, the
+  network (None, All, or Custom: only the sites you list, checked as you type them), and which
   project files pi loads (its project trust default and saved decisions).
 - Dots at the left edge of the conversation, one per prompt, in Chat and Code. Hovering one shows
   that prompt and the start of its answer; clicking it scrolls there.

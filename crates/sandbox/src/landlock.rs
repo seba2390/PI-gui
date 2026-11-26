@@ -48,13 +48,14 @@ pub struct Enforced {
 #[cfg(target_os = "linux")]
 pub fn apply(policy: &crate::Policy) -> Result<Enforced, String> {
     use landlock::{
-        ABI, Access, AccessFs, AccessNet, LandlockStatus, Ruleset, RulesetAttr, RulesetCreatedAttr,
-        RulesetStatus, path_beneath_rules,
+        ABI, Access, AccessFs, AccessNet, LandlockStatus, NetPort, Ruleset, RulesetAttr,
+        RulesetCreatedAttr, RulesetStatus, path_beneath_rules,
     };
 
     let abi = ABI::V5;
     let error = |error: landlock::RulesetError| error.to_string();
-    let block_network = policy.network == crate::Network::Off;
+    // Off, or only the app's proxy (its port on the loopback address).
+    let block_network = policy.network != crate::Network::On;
     let mut ruleset = Ruleset::default()
         .handle_access(AccessFs::from_all(abi))
         .map_err(error)?;
@@ -77,6 +78,15 @@ pub fn apply(policy: &crate::Policy) -> Result<Enforced, String> {
         .add_rules(path_beneath_rules(&read, AccessFs::from_read(abi)))
         .map_err(error)?
         .add_rules(path_beneath_rules(&writable, AccessFs::from_all(abi)))
+        .map_err(error)?
+        .add_rules(
+            policy
+                .proxy
+                .filter(|_| policy.network == crate::Network::Custom)
+                .map(|port| {
+                    Ok::<_, landlock::RulesetError>(NetPort::new(port, AccessNet::ConnectTcp))
+                }),
+        )
         .map_err(error)?
         .restrict_self()
         .map_err(error)?;
