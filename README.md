@@ -41,7 +41,7 @@ when idle.
 - **Speech to text.** Dictate with the microphone button. A model you download once (Parakeet,
   Whisper or Moonshine) transcribes on your computer, so nothing you say leaves it.
 - **A sandbox for the agent.** In Code sessions its commands see only the project and the folders
-  you allow, never your keys or `.env` files (Seatbelt on macOS, bubblewrap or Landlock on Linux).
+  you allow, never your keys (Seatbelt on macOS, bubblewrap or Landlock on Linux).
   When it needs your logins (git push and pull, GitHub's `gh`, signing), you're asked, and it's done
   outside the sandbox. Settings → Sandboxing & Security.
 - **Background sessions.** Chats keep working while you switch, plus branching, model and

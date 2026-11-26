@@ -35,9 +35,6 @@ type Policy = {
   writable: string[];
   hidden: string[];
   network: "on" | "off" | "custom";
-  secret_roots?: string[];
-  secret_names?: string[];
-  secret_examples?: string[];
 };
 
 let cached: { key: string; policy: Policy | null } | undefined;
@@ -98,23 +95,6 @@ function mayRead(policy: Policy, path: string): boolean {
   // Only what is open inside the private folder counts, not a folder around it.
   return [...policy.readable, ...policy.writable].some((root) => under(root, inside) && under(path, root));
 }
-
-// A file with secrets (`.env`, a private key) in the project or an allowed folder.
-function isSecret(policy: Policy, path: string): boolean {
-  if (!policy.secret_roots?.some((root) => under(path, root))) return false;
-  const name = basename(path);
-  if ((policy.secret_examples ?? []).some((ending) => name.endsWith(ending))) return false;
-  return (policy.secret_names ?? []).some((glob) => {
-    const star = glob.indexOf("*");
-    if (star < 0) return glob === name;
-    const [start, end] = [glob.slice(0, star), glob.slice(star + 1)];
-    return name.length >= start.length + end.length && name.startsWith(start) && name.endsWith(end);
-  });
-}
-
-const SECRET_NOTE =
-  "looks like a file with secrets (.env, a private key), which Pistachio's sandbox keeps from the agent. Don't try " +
-  "to get at it another way; if the task needs a value from it, ask the user (Settings → Sandboxing & Security → Keys and secrets).";
 
 function where(policy: Policy): string {
   const others = policy.writable.filter((path) => path !== policy.project).length;
@@ -287,9 +267,6 @@ export default async function (pi: any) {
         };
       }
     }
-    if ((tool === "read" || tool === "edit") && isSecret(policy, path)) {
-      return { block: true, reason: `${given} ${SECRET_NOTE}` };
-    }
     if (WRITES.has(tool) && !policy.writable.some((root) => under(path, root))) {
       return {
         block: true,
@@ -299,32 +276,7 @@ export default async function (pi: any) {
   });
 
   // A command that failed on what the sandbox blocks gets a note, so the model doesn't guess.
-  // grep's matches in files with secrets are left out.
   pi.on("tool_result", async (event: any, ctx: any) => {
-    if (event.toolName === "grep" && !event.isError) {
-      const cwd = ctx?.cwd ?? process.cwd();
-      const policy = policyFor(cwd);
-      if (!policy?.enforced || !policy.secret_roots?.length) return;
-      const base = typeof event.input?.path === "string" && event.input.path.trim() ? realPath(event.input.path, cwd) : cwd;
-      const left = new Set<string>();
-      const content = (event.content ?? []).map((part: any) => {
-        if (part.type !== "text") return part;
-        const kept = String(part.text)
-          .split("\n")
-          .filter((line: string) => {
-            const match = /^(.+?)[:-]\d+[:-]/.exec(line);
-            if (!match) return true;
-            const file = realPath(match[1], base);
-            if (!isSecret(policy, file)) return true;
-            left.add(match[1]);
-            return false;
-          });
-        return { ...part, text: kept.join("\n") };
-      });
-      if (!left.size) return;
-      content.push({ type: "text", text: `\n[Pistachio] Matches in ${left.size} file(s) with secrets left out (${[...left].join(", ")}).` });
-      return { content };
-    }
     if (event.toolName !== "bash" || !event.isError) return;
     const text = (event.content ?? []).map((part: any) => (part.type === "text" ? part.text : "")).join("\n");
     if (

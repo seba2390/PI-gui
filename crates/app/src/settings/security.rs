@@ -103,36 +103,14 @@ pub(super) fn page(site_input: Entity<InputState>) -> SettingPage {
         )
         .group(
             SettingGroup::new()
-                .title("Keys and secrets")
+                .title("Git and GitHub")
                 .description(
-                    "Your keys and logins never enter the sandbox. What needs them (git push, pull \
-                     and clone, GitHub's gh, signing commits) is asked about first and done \
-                     outside it; the agent sees only what it prints.",
-                )
-                .item(
-                    SettingItem::new(
-                        "Hide files with secrets in projects",
-                        super::view::hover_switch(
-                            "sandbox-secret-files",
-                            |cx| read(cx, |s| s.settings.secret_files),
-                            |on, cx| change(cx, |settings| settings.secret_files = on),
-                        ),
-                    )
-                    .description(
-                        ".env files and private keys (*.pem, *.key, id_ed25519, …) in the project \
-                         and allowed folders can't be read; examples like .env.example can. With \
-                         Landlock (Linux) only pi's file tools keep to this.",
-                    )
-                    .keywords(["secrets", "env", "dotenv", "pem", "private key"]),
+                    "Your git and GitHub logins never enter the sandbox. When the agent needs them \
+                     (push, pull, clone, gh, signing commits), you're asked, and it's done outside \
+                     the sandbox; the agent sees only what it prints.",
                 )
                 .item(SettingItem::render(|_, _, cx| key_uses(cx)).keywords([
                     "git", "push", "pull", "clone", "github", "gh", "sign", "keys", "approve",
-                ]))
-                .item(SettingItem::render(|_, _, cx| always_hidden(cx)).keywords([
-                    "ssh", "aws", "gnupg", "keychain", "hidden", "logins",
-                ]))
-                .item(SettingItem::render(|_, _, cx| removed_variables(cx)).keywords([
-                    "environment", "variables", "token", "api key",
                 ])),
         )
         .group(
@@ -919,101 +897,6 @@ fn key_uses(cx: &mut App) -> AnyElement {
         footer,
         cx,
     )
-}
-
-/// The keys and logins hidden wherever they are, also inside allowed folders.
-fn always_hidden(cx: &mut App) -> AnyElement {
-    let theme = cx.theme();
-    let (muted, mono, chip_bg) = (
-        theme.muted_foreground,
-        theme.mono_font_family.clone(),
-        theme.secondary,
-    );
-    v_flex()
-        .w_full()
-        .gap_1p5()
-        .py_1()
-        .child(
-            div()
-                .text_sm()
-                .font_weight(FontWeight::MEDIUM)
-                .child("Always hidden"),
-        )
-        .child(
-            div()
-                .text_xs()
-                .text_color(muted)
-                .child("Keys and logins: hidden from commands and file tools wherever they are, also inside an allowed folder."),
-        )
-        .child(
-            h_flex()
-                .w_full()
-                .flex_wrap()
-                .gap_1()
-                .children(sandbox::ALWAYS_HIDDEN.iter().map(|path| {
-                    h_flex()
-                        .gap_1()
-                        .px_1p5()
-                        .py_0p5()
-                        .rounded_md()
-                        .bg(chip_bg)
-                        .text_xs()
-                        .font_family(mono.clone())
-                        .child(Icon::from(AppIcon::Key).xsmall().text_color(muted))
-                        .child(*path)
-                })),
-        )
-        .into_any_element()
-}
-
-/// The environment variables with keys and tokens that commands don't get, by name.
-fn removed_variables(cx: &mut App) -> AnyElement {
-    let config = cx.global::<crate::config::AppConfig>();
-    let mut names: Vec<String> = match config.child_env.ready() {
-        Some(vars) => vars
-            .iter()
-            .map(|(name, _)| name.to_string_lossy().into_owned())
-            .collect(),
-        None => std::env::vars_os()
-            .map(|(name, _)| name.to_string_lossy().into_owned())
-            .collect(),
-    };
-    names.retain(|name| sandbox::secrets::is_secret(name));
-    names.sort();
-    names.dedup();
-    let theme = cx.theme();
-    let (muted, mono) = (theme.muted_foreground, theme.mono_font_family.clone());
-    v_flex()
-        .w_full()
-        .gap_1p5()
-        .py_1()
-        .child(
-            div()
-                .text_sm()
-                .font_weight(FontWeight::MEDIUM)
-                .child("Removed from commands"),
-        )
-        .child(
-            div()
-                .text_xs()
-                .text_color(muted)
-                .child("Environment variables that hold keys and tokens (names ending in _API_KEY, _TOKEN, _SECRET, …): commands in the sandbox don't get them; pi keeps them for its model requests."),
-        )
-        .child(if names.is_empty() {
-            div()
-                .text_xs()
-                .italic()
-                .text_color(muted)
-                .child("None of your environment variables look like keys.")
-                .into_any_element()
-        } else {
-            div()
-                .text_xs()
-                .font_family(mono)
-                .child(names.join(" \u{b7} "))
-                .into_any_element()
-        })
-        .into_any_element()
 }
 
 /// Which sandbox this computer has, and what to do when it has none.

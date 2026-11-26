@@ -46,14 +46,6 @@ pub struct PolicyReply {
     /// Hidden wherever they are.
     pub hidden: Vec<PathBuf>,
     pub network: Network,
-    /// Where files with secrets can't be read ([`crate::secret_files`]).
-    #[serde(default)]
-    pub secret_roots: Vec<PathBuf>,
-    /// Those files' names (globs), and the endings of examples that stay readable.
-    #[serde(default)]
-    pub secret_names: Vec<String>,
-    #[serde(default)]
-    pub secret_examples: Vec<String>,
 }
 
 /// Runs the helper when the process was started with [`FLAG`], returning its exit code.
@@ -139,15 +131,6 @@ pub fn policy_reply(dir: &Path, exe: &Path, cwd: &Path) -> PolicyReply {
             writable: policy.writable,
             hidden: policy.hidden,
             network: policy.network,
-            secret_roots: policy.secret_roots,
-            secret_names: crate::secret_files::NAMES
-                .iter()
-                .map(|&name| name.to_owned())
-                .collect(),
-            secret_examples: crate::secret_files::EXAMPLES
-                .iter()
-                .map(|&name| name.to_owned())
-                .collect(),
         },
         None => PolicyReply {
             sandboxed: false,
@@ -159,9 +142,6 @@ pub fn policy_reply(dir: &Path, exe: &Path, cwd: &Path) -> PolicyReply {
             writable: Vec::new(),
             hidden: Vec::new(),
             network: settings.network,
-            secret_roots: Vec::new(),
-            secret_names: Vec::new(),
-            secret_examples: Vec::new(),
         },
     }
 }
@@ -453,7 +433,6 @@ fn landlock_probe() -> i32 {
             writable: vec![std::env::temp_dir()],
             hidden: Vec::new(),
             network: Network::Off,
-            secret_roots: Vec::new(),
             proxy: None,
         };
         match crate::landlock::apply(&probe) {

@@ -22,7 +22,6 @@ pub mod paths;
 pub mod policy;
 pub mod proxy;
 pub mod seatbelt;
-pub mod secret_files;
 pub mod secrets;
 pub mod settings;
 pub mod sites;

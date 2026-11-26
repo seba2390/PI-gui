@@ -29,9 +29,6 @@ pub struct Policy {
     /// What commands may neither read nor write, wherever it is.
     pub hidden: Vec<PathBuf>,
     pub network: Network,
-    /// Folders where files with secrets (`.env`, keys) can't be read: the project and the
-    /// folders the user allowed ([`crate::secret_files`]); none while that is off.
-    pub secret_roots: Vec<PathBuf>,
     /// With [`Network::Custom`]: the loopback port of the app's proxy, the only place commands
     /// may connect to (set by the helper, which knows where the proxy listens).
     #[serde(skip)]
@@ -134,20 +131,6 @@ impl Policy {
                 readable.push(at(path));
             }
         }
-        let secret_roots: Vec<PathBuf> = if settings.secret_files {
-            std::iter::once(project.clone())
-                .chain(
-                    settings
-                        .allowed
-                        .iter()
-                        .filter(|allowed| allowed.read && !allowed.path.trim().is_empty())
-                        .map(|allowed| at(allowed.path.trim())),
-                )
-                .filter(|path| path.is_absolute())
-                .collect()
-        } else {
-            Vec::new()
-        };
         let mut hidden: Vec<PathBuf> = ALWAYS_HIDDEN.iter().map(|path| at(path)).collect();
         if let Some(agent) = &cx.agent_dir {
             hidden.push(resolve(&agent.join("auth.json")));
@@ -165,7 +148,6 @@ impl Policy {
             writable,
             hidden,
             network: settings.network,
-            secret_roots,
             proxy: None,
         })
     }

@@ -43,11 +43,6 @@ def steps(home, project):
         # The home folder's names can be listed on macOS (getcwd needs it), not what is in them.
         ("bash", {"command": f"ls {home}/.ssh"}, False, ""),
         ("bash", {"command": "git --version && pwd"}, True, "git version"),
-        # Files with secrets in the project: not for commands or file tools; examples are.
-        ("bash", {"command": "printf 'TOKEN=abc123\\n' > .env && printf 'TOKEN=\\n' > .env.example && cat .env"}, False, ""),
-        ("bash", {"command": "cat .env.example"}, True, "TOKEN="),
-        ("read", {"path": ".env"}, False, "secrets"),
-        ("grep", {"pattern": "TOKEN", "path": "."}, True, ".env.example"),
         ("ls", {"path": "."}, True, "inside.txt"),
         # The gate: git's local work stays in the sandbox; what needs the network or keys is
         # asked about (the answers are in ANSWERS, in order) and done outside it.

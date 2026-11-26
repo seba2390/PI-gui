@@ -32,11 +32,8 @@ All notable changes to PI-gui are listed here. The format follows
   address, force pushes and the default branch called out) and offers Allow, Always for this
   project or Don't allow. Your keys never enter the sandbox. Repositories whose git settings
   could start a program are refused, and hooks are off.
-- Files with secrets in projects (`.env`, private keys) can't be read by the agent's commands and
-  file tools; `.env.example` and the like can. On by default.
-- Settings → Sandboxing & Security → Keys and secrets: that switch, what the agent may do with
-  your logins without asking (removable), what is always hidden, and which environment variables
-  commands don't get.
+- Settings → Sandboxing & Security → Git and GitHub: what the agent may do with your logins
+  without asking, each removable.
 - Dots at the left edge of the conversation, one per prompt, in Chat and Code. Hovering one shows
   that prompt and the start of its answer; clicking it scrolls there.
 - A shield next to the folder in Code sessions shows whether commands are sandboxed; its menu turns
