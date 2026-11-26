@@ -1,4 +1,4 @@
-//! The sandbox for the agent's tools in Pistachio's local Code sessions (Settings → Security).
+//! The sandbox for the agent's tools in Pistachio's local Code sessions (Settings → Sandboxing & Security).
 //!
 //! pi itself runs as usual, with its logins and keys. A pi extension ([`EXTENSION_SOURCE`])
 //! runs each `bash` command through this crate's helper (`<app> --sandbox-tool run`, see
@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 pub use backend::{Backend, Status};
 pub use cli::{Check, PolicyReply, TestReport};
 pub use policy::{Context, Policy};
-pub use settings::{DEFAULT_HIDDEN, Network, Settings, TOOL_CACHES};
+pub use settings::{ALWAYS_HIDDEN, Allowed, Network, Settings, TOOL_CACHES, TOOL_PROGRAMS};
 
 /// The pi extension that runs the agent's tools in the sandbox.
 pub const EXTENSION_SOURCE: &str = include_str!("extension.ts");

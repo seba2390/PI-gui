@@ -1907,7 +1907,7 @@ impl MainWindow {
         }
     }
 
-    /// Settings → Security (from a session's sandbox badge).
+    /// Settings → Sandboxing & Security (from a session's sandbox badge).
     fn open_security_settings(
         &mut self,
         _: &crate::actions::OpenSecuritySettings,

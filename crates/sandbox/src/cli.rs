@@ -33,7 +33,11 @@ pub struct PolicyReply {
     pub enforced: bool,
     pub backend: Option<Backend>,
     pub project: Option<PathBuf>,
+    /// Hidden as a whole except what is readable or writable in them (the home folder).
+    pub private: Vec<PathBuf>,
+    pub readable: Vec<PathBuf>,
     pub writable: Vec<PathBuf>,
+    /// Hidden wherever they are.
     pub hidden: Vec<PathBuf>,
     pub network: Network,
 }
@@ -112,6 +116,8 @@ pub fn policy_reply(dir: &Path, exe: &Path, cwd: &Path) -> PolicyReply {
             enforced: true,
             backend,
             project: Some(policy.project),
+            private: policy.private,
+            readable: policy.readable,
             writable: policy.writable,
             hidden: policy.hidden,
             network: policy.network,
@@ -121,6 +127,8 @@ pub fn policy_reply(dir: &Path, exe: &Path, cwd: &Path) -> PolicyReply {
             enforced: false,
             backend: None,
             project: None,
+            private: Vec::new(),
+            readable: Vec::new(),
             writable: Vec::new(),
             hidden: Vec::new(),
             network: settings.network,
@@ -244,6 +252,8 @@ fn landlock_probe() -> i32 {
     {
         let probe = Policy {
             project: std::env::temp_dir(),
+            private: Vec::new(),
+            readable: Vec::new(),
             writable: vec![std::env::temp_dir()],
             hidden: Vec::new(),
             network: Network::Off,
@@ -327,15 +337,30 @@ fn test(dir: &Path, exe: &Path) -> TestReport {
         },
     });
 
-    let hidden = policy
-        .as_ref()
-        .and_then(|policy| policy.hidden.iter().find(|path| path.exists()).cloned());
-    checks.push(match hidden {
+    // Something in the home folder the project may not see: keys if there are any, else
+    // another folder there.
+    let private = policy.as_ref().and_then(|policy| {
+        let home_entries = policy.private.iter().flat_map(|private| {
+            std::fs::read_dir(private)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|entry| entry.path())
+        });
+        policy
+            .hidden
+            .iter()
+            .filter(|path| path.exists())
+            .cloned()
+            .chain(home_entries.filter(|path| !policy.may_read(&crate::paths::resolve(path))))
+            .next()
+    });
+    checks.push(match private {
         Some(path) => {
             let what = if path.is_dir() { "ls" } else { "cat" };
             let read = shell(&format!("{what} {} > /dev/null", sh_quote(&path)));
             Check {
-                name: "Reading hidden files".into(),
+                name: "Reading your other files".into(),
                 passed: Some(!read),
                 detail: if read {
                     format!("Allowed: a command could read {}.", path.display())
@@ -345,9 +370,9 @@ fn test(dir: &Path, exe: &Path) -> TestReport {
             }
         }
         None => Check {
-            name: "Reading hidden files".into(),
+            name: "Reading your other files".into(),
             passed: None,
-            detail: "None of the hidden paths exist on this computer.".into(),
+            detail: "There is nothing in the home folder to try.".into(),
         },
     });
 

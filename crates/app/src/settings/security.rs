@@ -1,4 +1,4 @@
-//! Settings → Security: the sandbox the agent's tools run in (local Code sessions), and which
+//! Settings → Sandboxing & Security: the sandbox the agent's tools run in (local Code sessions), and which
 //! project files pi loads (its project trust). The state is [`crate::security::Security`].
 
 use std::path::Path;
@@ -18,7 +18,7 @@ use crate::ui::AppIcon;
 const WINDOWS_ISSUE: &str = "https://github.com/seba2390/pistachio/issues/47";
 
 pub(super) fn page() -> SettingPage {
-    SettingPage::new("Security")
+    SettingPage::new("Sandboxing & Security")
         .icon(AppIcon::ShieldCheck)
         .description(
             "What the agent can do on this computer in Code sessions. Sessions on SSH hosts run \
@@ -52,31 +52,29 @@ pub(super) fn page() -> SettingPage {
             SettingGroup::new()
                 .title("Files")
                 .description(
-                    "Commands can read everything except what is hidden, and change only the \
-                     session's folder, temporary files and the git folder its commits need, \
-                     plus what you allow here.",
+                    "Your home folder is hidden from the agent, except the session's folder and \
+                     what you allow here. Programs and system files outside it stay readable, \
+                     since commands need them. Changes are allowed only in the session's \
+                     folder, temporary files and the git folder its commits need, plus what you \
+                     allow to change.",
                 )
                 .item(
                     SettingItem::new(
-                        "Let tools use their caches",
+                        "Let tools use their folders",
                         super::view::hover_switch(
-                            "sandbox-caches",
-                            |cx| read(cx, |s| s.settings.tool_caches),
-                            |on, cx| change(cx, |settings| settings.tool_caches = on),
+                            "sandbox-tool-folders",
+                            |cx| read(cx, |s| s.settings.tool_folders),
+                            |on, cx| change(cx, |settings| settings.tool_folders = on),
                         ),
                     )
                     .description(
-                        "~/.cargo, ~/.npm, ~/.cache and the other folders where package managers \
-                         and build tools keep downloads, so builds and installs work.",
+                        "~/.cargo, ~/.npm, ~/.nvm, ~/.gitconfig and the other folders in your home \
+                         folder where tools keep their programs, settings and downloads, so \
+                         builds and installs work. pi's skills can always be read.",
                     ),
                 )
-                .item(SettingItem::render(|_, _, cx| writable(cx)).keywords([
-                    "writable",
-                    "allow",
-                    "folder",
-                ]))
-                .item(SettingItem::render(|_, _, cx| hidden(cx)).keywords([
-                    "hidden", "secret", "keys", "ssh", "credentials",
+                .item(SettingItem::render(|_, _, cx| allowed(cx)).keywords([
+                    "allow", "folder", "read", "write", "hidden", "home",
                 ])),
         )
         .group(
@@ -383,9 +381,69 @@ fn pick(
     .detach();
 }
 
-fn writable(cx: &mut App) -> AnyElement {
-    let paths = read(cx, |s| s.settings.writable.clone());
-    let add = Button::new("sandbox-add-writable")
+/// The folders outside the project the agent may use, each read-only or also to change.
+fn allowed(cx: &mut App) -> AnyElement {
+    let entries = read(cx, |s| s.settings.allowed.clone());
+    let theme = cx.theme();
+    let rows: Vec<_> = entries
+        .into_iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            let access = |write: bool, label: &'static str| {
+                Button::new(SharedString::from(format!(
+                    "sandbox-allowed-{index}-{}",
+                    if write { "write" } else { "read" }
+                )))
+                .label(label)
+                .xsmall()
+                .ghost()
+                .toggled(entry.write == write)
+                .on_click(move |_, _, cx| {
+                    change(cx, |settings| {
+                        if let Some(entry) = settings.allowed.get_mut(index) {
+                            entry.write = write;
+                        }
+                    });
+                })
+            };
+            h_flex()
+                .w_full()
+                .gap_2()
+                .py_0p5()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_sm()
+                        .font_family(theme.mono_font_family.clone())
+                        .child(entry.path.clone()),
+                )
+                .child(
+                    h_flex()
+                        .gap_0p5()
+                        .child(access(false, "Read"))
+                        .child(access(true, "Read and change")),
+                )
+                .child(
+                    Button::new(SharedString::from(format!(
+                        "sandbox-allowed-remove-{index}"
+                    )))
+                    .label("Remove")
+                    .accessibility_label(format!("Remove {}", entry.path))
+                    .xsmall()
+                    .ghost()
+                    .on_click(move |_, _, cx| {
+                        change(cx, |settings| {
+                            if index < settings.allowed.len() {
+                                settings.allowed.remove(index);
+                            }
+                        });
+                    }),
+                )
+        })
+        .collect();
+    let add = Button::new("sandbox-add-allowed")
         .label("Add folder…")
         .xsmall()
         .outline()
@@ -393,84 +451,39 @@ fn writable(cx: &mut App) -> AnyElement {
             pick(false, "Allow", cx, |paths, cx| {
                 change(cx, |settings| {
                     for path in paths {
-                        if !settings.writable.contains(&path) {
-                            settings.writable.push(path);
-                        }
+                        crate::security::allow(settings, sandbox::Allowed { path, write: false });
                     }
                 });
             });
         });
-    path_list(
-        "sandbox-writable",
-        "Also writable",
-        "Folders outside the project that commands may change.",
-        paths,
-        "None.",
-        |index, cx| {
-            change(cx, |settings| {
-                if index < settings.writable.len() {
-                    settings.writable.remove(index);
-                }
-            });
-        },
-        vec![add],
-        cx,
-    )
-}
-
-fn hidden(cx: &mut App) -> AnyElement {
-    let paths = read(cx, |s| s.settings.hidden.clone());
-    let is_default = paths
-        .iter()
-        .map(String::as_str)
-        .eq(sandbox::DEFAULT_HIDDEN.iter().copied());
-    let add = Button::new("sandbox-add-hidden")
-        .label("Add…")
-        .xsmall()
-        .outline()
-        .on_click(|_, _, cx| {
-            pick(true, "Hide", cx, |paths, cx| {
-                change(cx, |settings| {
-                    for path in paths {
-                        if !settings.hidden.contains(&path) {
-                            settings.hidden.push(path);
-                        }
-                    }
-                });
-            });
-        });
-    let mut buttons = vec![add];
-    if !is_default {
-        buttons.push(
-            Button::new("sandbox-hidden-defaults")
-                .label("Restore the defaults")
-                .xsmall()
-                .ghost()
-                .on_click(|_, _, cx| {
-                    change(cx, |settings| {
-                        settings.hidden = sandbox::Settings::default().hidden;
-                    });
-                }),
-        );
-    }
-    path_list(
-        "sandbox-hidden",
-        "Hidden from the agent",
-        "Keys, logins and credentials: commands and file tools can't read them. pi's own \
-         logins (auth.json) are always hidden. Hiding ~/.ssh or ~/.config/gh also means the \
-         agent can't push or use gh for you.",
-        paths,
-        "Nothing is hidden.",
-        |index, cx| {
-            change(cx, |settings| {
-                if index < settings.hidden.len() {
-                    settings.hidden.remove(index);
-                }
-            });
-        },
-        buttons,
-        cx,
-    )
+    v_flex()
+        .w_full()
+        .gap_1()
+        .py_1()
+        .debug_selector(|| "sandbox-allowed".into())
+        .child(
+            div()
+                .text_sm()
+                .font_weight(FontWeight::MEDIUM)
+                .child("Allowed folders"),
+        )
+        .child(div().text_xs().text_color(theme.muted_foreground).child(
+            "Folders outside the project the agent may read, or also change. Keys and \
+                     logins (~/.ssh, ~/.aws, ~/.gnupg, pi's own and others) stay hidden even \
+                     inside an allowed folder.",
+        ))
+        .when(rows.is_empty(), |this| {
+            this.child(
+                div()
+                    .text_xs()
+                    .italic()
+                    .text_color(theme.muted_foreground)
+                    .child("None yet."),
+            )
+        })
+        .children(rows)
+        .child(h_flex().pt_1().child(add))
+        .into_any_element()
 }
 
 fn unsandboxed(cx: &mut App) -> AnyElement {

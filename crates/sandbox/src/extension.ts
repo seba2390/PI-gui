@@ -1,10 +1,11 @@
-// Runs the agent's tools in Pistachio's sandbox in local Code sessions (Settings → Security).
+// Runs the agent's tools in Pistachio's sandbox in local Code sessions (Settings → Sandboxing & Security).
 //
 // - `bash` commands start through Pistachio's helper (`<exe> --sandbox-tool run`), which puts
 //   them in the sandbox this computer has (Seatbelt on macOS, bubblewrap or Landlock on Linux).
 //   What the call shows and pi's handling of output, time limits and Esc stay pi's own.
 // - `read`, `write`, `edit`, `grep`, `find` and `ls` run inside pi, so their paths are checked
-//   against the same rules here: no writes outside the writable folders, nothing hidden read.
+//   against the same rules here: in the home folder only the project, allowed folders and tool
+//   folders can be read, keys and logins never, and changes only where they are allowed.
 // - pi itself, its logins and model requests, MCP servers, other extensions and your own `!`
 //   commands are not sandboxed.
 //
@@ -23,6 +24,8 @@ type Policy = {
   enforced: boolean;
   backend: { kind: string } | null;
   project: string | null;
+  private: string[];
+  readable: string[];
   writable: string[];
   hidden: string[];
   network: "on" | "off";
@@ -79,6 +82,14 @@ const under = (path: string, root: string) => path === root || path.startsWith(r
 const READS = new Set(["read", "grep", "find", "ls"]);
 const WRITES = new Set(["write", "edit"]);
 
+function mayRead(policy: Policy, path: string): boolean {
+  if (policy.hidden.some((h) => under(path, h))) return false;
+  const inside = policy.private.find((p) => under(path, p));
+  if (!inside) return true;
+  // Only what is open inside the private folder counts, not a folder around it.
+  return [...policy.readable, ...policy.writable].some((root) => under(root, inside) && under(path, root));
+}
+
 function where(policy: Policy): string {
   const others = policy.writable.filter((path) => path !== policy.project).length;
   return `${policy.project ?? "the project"}${others ? ` (and ${others} more folders such as temporary files and tool caches)` : ""}`;
@@ -118,27 +129,29 @@ export default async function (pi: any) {
     if (!policy.enforced) return;
     const given = typeof event.input?.path === "string" && event.input.path.trim() ? event.input.path : ".";
     const path = realPath(given, cwd);
-    const hidden = policy.hidden.find((h) => under(path, h));
-    if (hidden) {
+    if (!mayRead(policy, path)) {
       return {
         block: true,
-        reason: `${given} is hidden by Pistachio's sandbox (${hidden}). Don't try to get at it another way; ask the user if it is needed (Settings → Security).`,
+        reason:
+          `${given} is outside what Pistachio's sandbox lets this session see (the project, folders the user ` +
+          `allowed and tools' folders; keys and logins never). Don't try to get at it another way; ask the user ` +
+          `if it is needed (Settings → Sandboxing & Security).`,
       };
     }
-    // Searching a folder that holds a hidden one would read it too; listing names is fine.
-    if (tool === "grep") {
-      const inside = policy.hidden.find((h) => under(h, path));
+    // Searching or listing a folder that holds hidden ones would show them too.
+    if (tool === "grep" || tool === "find") {
+      const inside = [...policy.hidden, ...policy.private].find((h) => under(h, path) && h !== path && !mayRead(policy, h));
       if (inside) {
         return {
           block: true,
-          reason: `Searching ${given} would read ${inside}, which Pistachio's sandbox hides. Search a narrower folder.`,
+          reason: `Searching ${given} would look into ${inside}, which Pistachio's sandbox hides. Search a narrower folder.`,
         };
       }
     }
     if (WRITES.has(tool) && !policy.writable.some((root) => under(path, root))) {
       return {
         block: true,
-        reason: `Pistachio's sandbox only allows changes in ${where(policy)}; ${given} is outside. Ask the user if it should change (they can allow the folder in Settings → Security).`,
+        reason: `Pistachio's sandbox only allows changes in ${where(policy)}; ${given} is outside. Ask the user if it should change (they can allow the folder in Settings → Sandboxing & Security).`,
       };
     }
   });
@@ -152,9 +165,9 @@ export default async function (pi: any) {
     if (!policy?.sandboxed) return;
     const network = policy.network === "off" ? " It has no network access." : "";
     const note =
-      `\n\n[Pistachio] This command ran in a sandbox: it can write only in ${where(policy)} and can't read ` +
-      `${policy.hidden.length} hidden paths such as ${policy.hidden.slice(0, 3).join(", ")}.${network} If the sandbox blocked ` +
-      `what the task needs, say so and ask the user instead of working around it (Settings → Security).`;
+      `\n\n[Pistachio] This command ran in a sandbox: it can write only in ${where(policy)}, and of the home folder ` +
+      `it sees only the project, folders the user allowed and tools' folders (keys and logins never).${network} If the sandbox blocked ` +
+      `what the task needs, say so and ask the user instead of working around it (Settings → Sandboxing & Security).`;
     return { content: [...(event.content ?? []), { type: "text", text: note }] };
   });
 }

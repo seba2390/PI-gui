@@ -168,7 +168,7 @@ impl SettingsView {
             }),
         ];
         check_searxng(true, cx);
-        // Settings → Security: read again what may have changed elsewhere (/trust, the file).
+        // Settings → Sandboxing & Security: read again what may have changed elsewhere (/trust, the file).
         let security = crate::security::security(cx);
         security.update(cx, crate::security::Security::refresh);
         let mut subscriptions = subscriptions;

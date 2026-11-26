@@ -268,21 +268,27 @@ Linux; Windows is planned, #47).
   containers). pi's file tools (`read`, `write`, `edit`, `grep`, `find`, `ls`) keep to the same
   rules, checked by a small pi extension. pi itself, its logins and model requests, MCP servers,
   other extensions and your own `!` commands are not sandboxed.
-- **Files:** commands can read everything except what is hidden, and change only the session's
-  folder, temporary folders, the git folder its commits need (also from a subfolder or a
-  worktree), the caches of common tools (`~/.cargo`, `~/.npm`, `~/.cache`, …; can be turned off)
-  and folders you allow.
-- **Hidden:** `~/.ssh`, `~/.aws`, `~/.azure`, `~/.config/gcloud`, `~/.gnupg`, `~/.config/gh`,
-  `~/.docker/config.json`, `~/.kube`, `~/.netrc`, `~/.git-credentials`, the macOS keychains and
-  pi's `auth.json` (always). Environment variables that hold keys and tokens (names ending in
-  `_API_KEY`, `_TOKEN`, `_SECRET`, …) are removed from commands. pi keeps them for its model
-  requests, so keys never reach the sandbox.
+- **Files:** the home folder is private. Commands and file tools see only the session's folder
+  (and, for a subfolder of a repository, the rest of it), the folders you allow (read-only, or to
+  change too), the folders where tools keep their programs, settings and caches (`~/.cargo`,
+  `~/.npm`, `~/.nvm`, `~/.gitconfig`, `$PATH` folders in your home, …; can be turned off) and
+  pi's skills. Outside the home folder, programs and system files stay readable, since commands
+  need them. Changes are allowed only in the session's folder, temporary folders, the git folder
+  its commits need (also from a subfolder or a worktree), the tools' caches and folders you allow
+  to change. On macOS the folders on the way to the project (`~`, `~/code`) can be listed, since
+  programs find their working folder that way, but nothing in them read.
+- **Always hidden**, also inside an allowed folder: `~/.ssh`, `~/.aws`, `~/.azure`,
+  `~/.config/gcloud`, `~/.gnupg`, `~/.config/gh`, `~/.docker/config.json`, `~/.kube`, `~/.netrc`,
+  `~/.git-credentials`, `~/.npmrc`, `~/.pypirc`, password stores and keychains, and pi's
+  `auth.json`. Environment variables that hold keys and tokens (names ending in `_API_KEY`,
+  `_TOKEN`, `_SECRET`, …) are removed from commands. pi keeps them for its model requests, so keys
+  never reach the sandbox.
 - **Network:** on by default; with it off, commands can't connect to the Internet (on Linux,
   Landlock needs Linux 6.7 for this).
 - **In a session:** a shield next to the folder in the message box ("No network" or "No sandbox"
   when that applies); its menu runs the project without a sandbox (or with one again) and opens
-  Settings → Security. A call the sandbox blocked says so under it, with a button that allows
-  changes in the folder it tried to write.
+  Settings → Sandboxing & Security. A call the sandbox blocked says so under it, with a button that allows
+  reading (or changing) the folder it tried to use.
 - Settings are `~/.pi/agent/pistachio/sandbox/settings.json`, read by every command, so changes
   apply from the next one, also in running sessions. `script/test-sandbox.py` checks it end to end
   with real pi and a scripted model.
@@ -438,9 +444,9 @@ mouse.
   (download, use, remove).
 - **Document parsing:** what reads PDF files, and the parsers that can be downloaded (size, license,
   download, use, update, remove).
-- **Security:** the sandbox (see [Sandbox](#sandbox)): which one this computer has (with the
-  command that installs bubblewrap where it is missing), on or off, the caches of tools, more
-  writable folders, the hidden paths, the network, the projects without a sandbox, and a test of
+- **Sandboxing & Security:** the sandbox (see [Sandbox](#sandbox)): which one this computer has (with the
+  command that installs bubblewrap where it is missing), on or off, the tools' folders, the
+  allowed folders (read-only or to change), the network, the projects without a sandbox, and a test of
   what it blocks. Also which project files pi loads: pi's `defaultProjectTrust` and the saved
   decisions in its `trust.json`, which can be removed.
 

@@ -30,12 +30,18 @@ def steps(home, project):
         ("bash", {"command": f"cat {home}/.ssh/id_test"}, False, ""),
         ("bash", {"command": "echo key=${ANTHROPIC_API_KEY:-none}"}, True, "key=none"),
         ("bash", {"command": "echo home=$HOME"}, True, "home="),
-        ("read", {"path": f"{home}/.ssh/id_test"}, False, "hidden"),
-        ("read", {"path": "~/.ssh/id_test"}, False, "hidden"),
-        ("write", {"path": f"{home}/notes.txt", "content": "x"}, False, "only allows changes"),
+        ("read", {"path": f"{home}/.ssh/id_test"}, False, "outside what"),
+        ("read", {"path": "~/.ssh/id_test"}, False, "outside what"),
+        ("write", {"path": f"{home}/notes.txt", "content": "x"}, False, "outside what"),
+        ("write", {"path": "/usr/local/pistachio-test.txt", "content": "x"}, False, "only allows changes"),
         ("write", {"path": "written.txt", "content": "ok"}, True, ""),
-        ("grep", {"pattern": "PRIVATE", "path": home}, False, "narrower"),
-        ("read", {"path": f"{home}/.bashrc"}, True, "export"),
+        ("grep", {"pattern": "PRIVATE", "path": home}, False, "outside what"),
+        ("grep", {"pattern": "PRIVATE", "path": os.path.dirname(home)}, False, "narrower"),
+        ("read", {"path": f"{home}/.bashrc"}, False, "outside what"),
+        ("bash", {"command": f"cat {home}/.bashrc"}, False, ""),
+        ("bash", {"command": f"ls {home}"}, False, ""),
+        ("bash", {"command": "git --version && pwd"}, True, "git version"),
+        ("ls", {"path": "."}, True, "inside.txt"),
     ]
 
 

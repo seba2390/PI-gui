@@ -1,15 +1,17 @@
 //! Linux: the command runs under bubblewrap (`bwrap`), which gives it its own view of the
-//! files: everything read-only, the writable folders mounted writable on top, hidden folders
-//! replaced by empty ones and hidden files by an empty file. With the network off it gets a
-//! network of its own with nothing in it.
+//! files: everything read-only, the home folder replaced by an empty one with only what is open
+//! in it mounted back (read-only, or writable), the writable folders mounted writable, hidden
+//! folders replaced by empty ones and hidden files by an empty file. With the network off it gets
+//! a network of its own with nothing in it.
 
 use std::ffi::OsString;
+use std::path::PathBuf;
 
 use crate::policy::Policy;
 use crate::settings::Network;
 
-/// bubblewrap's arguments for `policy`, up to and including the `--` before the command.
-/// Writable folders that don't exist can't be mounted and are left out.
+/// bubblewrap's arguments for `policy`, up to and including the `--` before the command. What
+/// doesn't exist can't be mounted and is left out.
 pub fn args(policy: &Policy) -> Vec<OsString> {
     let mut args: Vec<OsString> = Vec::new();
     let mut push = |items: &[&dyn AsRef<std::ffi::OsStr>]| {
@@ -22,14 +24,50 @@ pub fn args(policy: &Policy) -> Vec<OsString> {
     if policy.network == Network::Off {
         push(&[&"--unshare-net"]);
     }
-    for root in &policy.writable {
+    for private in &policy.private {
+        push(&[&"--tmpfs", private]);
+    }
+    // Writable wins over read-only for the same folder and what is inside it; outer folders are
+    // mounted before inner ones.
+    let mut mounts: Vec<(PathBuf, bool)> = policy
+        .writable
+        .iter()
+        .map(|path| (path.clone(), true))
+        .chain(
+            policy
+                .readable
+                .iter()
+                .filter(|path| !policy.writable.iter().any(|root| path.starts_with(root)))
+                .map(|path| (path.clone(), false)),
+        )
         // `--dev` made a new /dev (with its own /dev/shm).
-        if root.starts_with("/dev") || root.starts_with("/proc") || !root.exists() {
-            continue;
+        .filter(|(path, _)| {
+            !path.starts_with("/dev") && !path.starts_with("/proc") && path.exists()
+        })
+        .collect();
+    mounts.sort_by_key(|(path, _)| path.components().count());
+    for (path, write) in &mounts {
+        // Outside the private folders, read-only is what everything already is.
+        let in_private = policy
+            .private
+            .iter()
+            .any(|private| path.starts_with(private));
+        if *write {
+            push(&[&"--bind", path, path]);
+        } else if in_private {
+            push(&[&"--ro-bind", path, path]);
         }
-        push(&[&"--bind", root, root]);
     }
     for hidden in &policy.hidden {
+        // Under a private folder only what was mounted back can be seen.
+        let visible = !policy
+            .private
+            .iter()
+            .any(|private| hidden.starts_with(private))
+            || mounts.iter().any(|(path, _)| hidden.starts_with(path));
+        if !visible {
+            continue;
+        }
         if hidden.is_dir() {
             push(&[&"--tmpfs", hidden]);
         } else if hidden.exists() {
@@ -77,23 +115,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mounts_writable_folders_over_a_read_only_root_and_hides_secrets() {
+    fn hides_the_home_folder_and_mounts_back_what_is_open() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let root = dir.path().canonicalize().expect("canonical");
-        let project = root.join("app");
-        let ssh = root.join(".ssh");
-        let token = root.join("token");
+        let home = dir.path().canonicalize().expect("canonical");
+        let project = home.join("app");
+        let gitconfig = home.join(".gitconfig");
+        let local = home.join(".local");
+        let pnpm = home.join(".local/share/pnpm");
+        let ssh = home.join(".ssh");
+        let token = home.join(".local/token");
         std::fs::create_dir_all(&project).expect("mkdir");
+        std::fs::create_dir_all(&pnpm).expect("mkdir");
         std::fs::create_dir_all(&ssh).expect("mkdir");
+        std::fs::write(&gitconfig, "").expect("write");
         std::fs::write(&token, "secret").expect("write");
         let policy = Policy {
             project: project.clone(),
+            private: vec![home.clone()],
+            readable: vec![
+                gitconfig.clone(),
+                local.clone(),
+                PathBuf::from("/opt/tools"),
+            ],
             writable: vec![
                 project.clone(),
-                root.join("missing-cache"),
+                pnpm.clone(),
+                home.join("missing-cache"),
                 PathBuf::from("/dev/shm"),
             ],
-            hidden: vec![ssh.clone(), token.clone(), root.join("missing")],
+            hidden: vec![ssh.clone(), token.clone()],
             network: Network::Off,
         };
         let args: Vec<String> = args(&policy)
@@ -112,11 +162,21 @@ mod tests {
             "/proc",
             "--die-with-parent",
             "--unshare-net",
+            "--tmpfs",
+            &p(&home),
             "--bind",
             &p(&project),
             &p(&project),
-            "--tmpfs",
-            &p(&ssh),
+            "--ro-bind",
+            &p(&gitconfig),
+            &p(&gitconfig),
+            "--ro-bind",
+            &p(&local),
+            &p(&local),
+            "--bind",
+            &p(&pnpm),
+            &p(&pnpm),
+            // ~/.ssh was not mounted back: nothing to hide.
             "--ro-bind",
             "/dev/null",
             &p(&token),

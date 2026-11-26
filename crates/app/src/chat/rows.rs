@@ -1342,17 +1342,24 @@ fn render_tool(key: BlockKey, tool: &ToolBlock, cx: &RowContext<'_>) -> AnyEleme
         .into_any_element()
 }
 
-/// Below a call the sandbox blocked: that it was, the folders it could be allowed to change and
-/// Settings → Security.
+/// Below a call the sandbox blocked: that it was, the folders it could be allowed to read or
+/// change, and Settings → Sandboxing & Security.
 fn sandbox_footer(tool: &ToolBlock, cx: &RowContext<'_>) -> Option<AnyElement> {
     if tool.status != ToolStatus::Failed || !sandbox::note::is_blocked(&tool.output) {
         return None;
     }
     let mut paths = sandbox::note::blocked_paths(&tool.output);
-    if matches!(tool.name.as_str(), "write" | "edit")
-        && let Some(path) = tool.args.get("path").and_then(serde_json::Value::as_str)
+    // A file tool's refusal: the path it was given.
+    if matches!(
+        tool.name.as_str(),
+        "read" | "write" | "edit" | "grep" | "find" | "ls"
+    ) && let Some(path) = tool.args.get("path").and_then(serde_json::Value::as_str)
     {
-        paths.push(std::path::PathBuf::from(path.trim_start_matches('@')));
+        let home = sandbox::paths::home();
+        paths.push(sandbox::paths::expand(
+            path.trim().trim_start_matches('@'),
+            home.as_deref(),
+        ));
     }
     let project = cx.session.read(cx.app).cwd().to_path_buf();
     let folders = crate::security::existing(cx.app)
@@ -1361,23 +1368,23 @@ fn sandbox_footer(tool: &ToolBlock, cx: &RowContext<'_>) -> Option<AnyElement> {
             crate::security::folders_to_allow(settings, &project, &paths)
         })
         .unwrap_or_default();
-    let allow = folders.into_iter().enumerate().map(|(index, folder)| {
-        let shown = crate::security::tilde(&folder);
+    let allow = folders.into_iter().enumerate().map(|(index, offer)| {
+        let label = if offer.write {
+            format!("Allow changes in {}", offer.path)
+        } else {
+            format!("Allow reading {}", offer.path)
+        };
         Button::new(SharedString::from(format!(
             "sandbox-allow-{}-{index}",
             tool.call_id
         )))
-        .label(format!("Allow changes in {shown}"))
+        .label(label)
         .xsmall()
         .outline()
         .on_click(move |_, _, cx| {
-            let shown = shown.clone();
+            let offer = offer.clone();
             crate::security::security(cx).update(cx, |security, cx| {
-                security.update(cx, |settings| {
-                    if !settings.writable.contains(&shown) {
-                        settings.writable.push(shown);
-                    }
-                });
+                security.update(cx, |settings| crate::security::allow(settings, offer));
             });
         })
     });
@@ -1400,7 +1407,7 @@ fn sandbox_footer(tool: &ToolBlock, cx: &RowContext<'_>) -> Option<AnyElement> {
                     "sandbox-settings-{}",
                     tool.call_id
                 )))
-                .label("Security settings…")
+                .label("Sandboxing & Security settings…")
                 .xsmall()
                 .ghost()
                 .on_click(|_, window, cx| {

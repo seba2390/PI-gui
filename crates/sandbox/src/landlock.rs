@@ -1,7 +1,8 @@
 //! Linux, where bubblewrap can't run: the helper restricts itself with Landlock, the kernel's
 //! sandbox for unprivileged processes, and then becomes the command, which keeps the
 //! restrictions. Landlock only allows (it can't deny a folder inside an allowed one), so a
-//! folder holding a hidden path is allowed entry by entry, without it ([`allowed_roots`]).
+//! folder holding a private or hidden path is allowed entry by entry, without it
+//! ([`allowed_roots`]).
 //! Network rules need Linux 6.7; older kernels only get the file rules.
 
 use std::path::{Path, PathBuf};
@@ -62,7 +63,11 @@ pub fn apply(policy: &crate::Policy) -> Result<Enforced, String> {
             .handle_access(AccessNet::from_all(abi))
             .map_err(error)?;
     }
-    let read = allowed_roots(&[PathBuf::from("/")], &policy.hidden);
+    // Everything but the private folders, and what is open in them.
+    let mut closed = policy.hidden.clone();
+    closed.extend(policy.private.iter().cloned());
+    let mut read = allowed_roots(&[PathBuf::from("/")], &closed);
+    read.extend(allowed_roots(&policy.open_in_private(), &policy.hidden));
     let mut writable: Vec<PathBuf> = policy.writable.clone();
     writable.push(PathBuf::from("/dev"));
     let writable = allowed_roots(&writable, &policy.hidden);

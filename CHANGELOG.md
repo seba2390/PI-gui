@@ -10,16 +10,17 @@ All notable changes to PI-gui are listed here. The format follows
 
 - A sandbox for the agent's commands in Code sessions on this computer, on by default (macOS and
   Linux). Commands run under Seatbelt on macOS and bubblewrap on Linux (Landlock where bubblewrap
-  can't run). They can change only the project, temporary folders, tool caches and folders you
-  allow, can't read keys and logins (`~/.ssh`, `~/.aws`, pi's `auth.json`, …) and don't get API
-  keys from the environment; the network can be turned off. pi's file tools keep to the same rules.
-  pi itself and its model requests run as before, so keys never enter the sandbox. Windows is
-  planned (#47).
-- Settings → Security: the sandbox's state and settings, a test of what it blocks, and which
+  can't run). Of your home folder they see only the project, folders you allow and the folders of
+  common tools; keys and logins (`~/.ssh`, `~/.aws`, pi's `auth.json`, …) never, and API keys in
+  the environment are removed. They can change only the project, temporary folders, tool caches
+  and folders you allow to change, and the network can be turned off. pi's file tools keep to the
+  same rules. pi itself and its model requests run as before, so keys never enter the sandbox.
+  Windows is planned (#47).
+- Settings → Sandboxing & Security: the sandbox's state and settings, a test of what it blocks, and which
   project files pi loads (its project trust default and saved decisions).
 - A shield next to the folder in Code sessions shows whether commands are sandboxed; its menu turns
   the sandbox off or on for the project. A command the sandbox blocked says so, with a button to
-  allow changes in that folder.
+  allow reading or changing that folder.
 
 ## [0.5.4] - 2026-11-25
 

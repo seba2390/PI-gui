@@ -1,4 +1,4 @@
-//! The sandbox's settings, `<dir>/settings.json` (Settings → Security), read by the app and by
+//! The sandbox's settings, `<dir>/settings.json` (Settings → Sandboxing & Security), read by the app and by
 //! every sandboxed command, so changes apply to the next command.
 //!
 //! Paths may start with `~/` (the home folder); they are stored as the user wrote them.
@@ -22,18 +22,28 @@ pub enum Network {
     Off,
 }
 
+/// A folder (or file) outside the project the agent may use.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Allowed {
+    pub path: String,
+    /// It may change it too, not only read it.
+    #[serde(default)]
+    pub write: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     /// Commands run in the sandbox (where it is available).
     pub enabled: bool,
     pub network: Network,
-    /// Commands may write to the caches of common tools ([`TOOL_CACHES`]).
-    pub tool_caches: bool,
-    /// More folders commands may write to.
-    pub writable: Vec<String>,
-    /// Files and folders commands may not read (or write).
-    pub hidden: Vec<String>,
+    /// Commands may use the folders where common tools keep their programs, settings and caches
+    /// ([`TOOL_PROGRAMS`], [`TOOL_CACHES`]).
+    #[serde(alias = "tool_caches")]
+    pub tool_folders: bool,
+    /// Folders and files outside the project the agent may use. The rest of the home folder is
+    /// hidden.
+    pub allowed: Vec<Allowed>,
     /// Project folders whose sessions run without the sandbox (also their subfolders).
     pub unsandboxed: Vec<String>,
 }
@@ -43,16 +53,16 @@ impl Default for Settings {
         Self {
             enabled: true,
             network: Network::On,
-            tool_caches: true,
-            writable: Vec::new(),
-            hidden: DEFAULT_HIDDEN.iter().map(|&path| path.to_owned()).collect(),
+            tool_folders: true,
+            allowed: Vec::new(),
             unsandboxed: Vec::new(),
         }
     }
 }
 
-/// Hidden from commands until the user says otherwise: keys, logins and credentials.
-pub const DEFAULT_HIDDEN: &[&str] = &[
+/// Keys, logins and credentials: hidden even inside a folder the user allowed (the home folder
+/// itself, say).
+pub const ALWAYS_HIDDEN: &[&str] = &[
     "~/.ssh",
     "~/.aws",
     "~/.azure",
@@ -63,12 +73,43 @@ pub const DEFAULT_HIDDEN: &[&str] = &[
     "~/.kube",
     "~/.netrc",
     "~/.git-credentials",
+    "~/.npmrc",
+    "~/.pypirc",
+    "~/.password-store",
+    "~/.local/share/keyrings",
     "~/.pi/agent/auth.json",
     #[cfg(target_os = "macos")]
     "~/Library/Keychains",
 ];
 
-/// The caches and package folders of common tools, writable while [`Settings::tool_caches`] is
+/// Where common tools keep their programs and settings in the home folder: readable while
+/// [`Settings::tool_folders`] is on, so that commands find their compilers and runtimes.
+pub const TOOL_PROGRAMS: &[&str] = &[
+    "~/.gitconfig",
+    "~/.gitignore_global",
+    "~/.config/git",
+    "~/.nvm",
+    "~/.volta",
+    "~/.fnm",
+    "~/.pyenv",
+    "~/.rbenv",
+    "~/.gem",
+    "~/.asdf",
+    "~/.sdkman",
+    "~/.jenv",
+    "~/.dotnet",
+    "~/.local",
+    "~/.config/mise",
+    "~/.conda",
+    "~/miniconda3",
+    "~/anaconda3",
+    "~/miniforge3",
+    "~/.swiftpm",
+    #[cfg(target_os = "macos")]
+    "~/Library/Developer",
+];
+
+/// The caches and package folders of common tools, writable while [`Settings::tool_folders`] is
 /// on, so that builds and installs work.
 pub const TOOL_CACHES: &[&str] = &[
     "~/.cargo",
@@ -133,7 +174,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         assert_eq!(Settings::load(dir.path()), Settings::default());
         assert!(Settings::default().enabled);
-        assert!(Settings::default().hidden.contains(&"~/.ssh".to_owned()));
+        assert_eq!(Settings::default().allowed, []);
     }
 
     #[test]
@@ -142,18 +183,25 @@ mod tests {
         let settings = Settings {
             enabled: false,
             network: Network::Off,
-            tool_caches: false,
-            writable: vec!["~/work/shared".into()],
-            hidden: vec!["~/.ssh".into()],
+            tool_folders: false,
+            allowed: vec![Allowed {
+                path: "~/work/shared".into(),
+                write: true,
+            }],
             unsandboxed: vec!["/srv/app".into()],
         };
         settings.save(dir.path()).expect("save");
         assert_eq!(Settings::load(dir.path()), settings);
-        std::fs::write(Settings::path(dir.path()), r#"{"network": "off"}"#).expect("write");
+        std::fs::write(
+            Settings::path(dir.path()),
+            r#"{"network": "off", "tool_caches": false, "allowed": [{"path": "~/docs"}]}"#,
+        )
+        .expect("write");
         let partial = Settings::load(dir.path());
         assert_eq!(partial.network, Network::Off);
         assert!(partial.enabled);
-        assert_eq!(partial.hidden, Settings::default().hidden);
+        assert!(!partial.tool_folders);
+        assert!(!partial.allowed[0].write);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! What Settings → Security shows and changes: the sandbox's settings ([`sandbox::Settings`]),
+//! What Settings → Sandboxing & Security shows and changes: the sandbox's settings ([`sandbox::Settings`]),
 //! which sandbox this computer has, the self-test, and pi's project trust (its default and the
 //! saved decisions in `trust.json`).
 //!
@@ -333,19 +333,24 @@ pub fn tilde(path: &Path) -> String {
     }
 }
 
-/// The folders to offer allowing for a call the sandbox blocked: for each path it was refused
-/// (`paths`, absolute or relative to `project`), the folder to write in, unless that is hidden,
-/// already allowed, the home folder or the root.
-pub fn folders_to_allow(settings: &Settings, project: &Path, paths: &[PathBuf]) -> Vec<PathBuf> {
+/// What to offer allowing for a call the sandbox blocked: for each path it was refused (`paths`,
+/// absolute or relative to `project`), the folder it is in, to read (when it can't be read) or to
+/// change. Nothing for keys and logins, the home folder itself, the root, or what is already
+/// allowed.
+pub fn folders_to_allow(
+    settings: &Settings,
+    project: &Path,
+    paths: &[PathBuf],
+) -> Vec<sandbox::Allowed> {
     let cx = sandbox::Context::current();
     let Some(policy) = sandbox::Policy::for_project(settings, project, &cx) else {
         return Vec::new();
     };
     let home = cx.home.as_deref().map(sandbox::paths::resolve);
-    let mut folders = Vec::new();
+    let mut offers: Vec<sandbox::Allowed> = Vec::new();
     for path in paths {
         let path = sandbox::paths::resolve(&project.join(path));
-        if !policy.may_read(&path) {
+        if policy.hidden.iter().any(|hidden| path.starts_with(hidden)) {
             continue;
         }
         let folder = if path.is_dir() {
@@ -356,15 +361,33 @@ pub fn folders_to_allow(settings: &Settings, project: &Path, paths: &[PathBuf]) 
                 None => continue,
             }
         };
+        let probe = folder.join(".pistachio-check");
+        let write = policy.may_read(&probe);
         let useless = folder.parent().is_none()
             || home.as_ref() == Some(&folder)
-            || policy.may_write(&folder.join(".pistachio-check"));
-        if !useless && !folders.contains(&folder) {
-            folders.push(folder);
+            || (write && policy.may_write(&probe));
+        let offer = sandbox::Allowed {
+            path: tilde(&folder),
+            write,
+        };
+        if !useless && !offers.contains(&offer) {
+            offers.push(offer);
         }
     }
-    folders.truncate(2);
-    folders
+    offers.truncate(2);
+    offers
+}
+
+/// Allows `offer`: adds it, or lets an entry for the same folder change it.
+pub fn allow(settings: &mut Settings, offer: sandbox::Allowed) {
+    match settings
+        .allowed
+        .iter_mut()
+        .find(|allowed| allowed.path == offer.path)
+    {
+        Some(allowed) => allowed.write |= offer.write,
+        None => settings.allowed.push(offer),
+    }
 }
 
 /// Runs the helper's `command` and reads its JSON reply.

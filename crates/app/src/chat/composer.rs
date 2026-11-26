@@ -1470,7 +1470,7 @@ impl Composer {
 
     /// The sandbox badge of a local Code session: a shield while its commands are sandboxed
     /// (with "No network" when that is off), a crossed-out one with "No sandbox" when they are
-    /// not; its menu turns the sandbox off or on for the project and opens Settings → Security.
+    /// not; its menu turns the sandbox off or on for the project and opens Settings → Sandboxing & Security.
     fn render_sandbox(&self, cwd: &Path, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         use crate::security::SessionSandbox;
         let security = crate::security::security(cx);
@@ -1497,7 +1497,7 @@ impl Composer {
             SessionSandbox::Unavailable => (
                 AppIcon::ShieldOff,
                 Some("No sandbox"),
-                "This computer has no sandbox the app can use (see Settings → Security)",
+                "This computer has no sandbox the app can use (see Settings → Sandboxing & Security)",
             ),
         };
         let warning = matches!(session, SessionSandbox::Off | SessionSandbox::Unavailable);
@@ -1543,9 +1543,14 @@ impl Composer {
                         .separator();
                 }
                 menu.item(
-                    PopupMenuItem::new("Security settings…").on_click(|_, window, cx| {
-                        window.dispatch_action(Box::new(crate::actions::OpenSecuritySettings), cx);
-                    }),
+                    PopupMenuItem::new("Sandboxing & Security settings…").on_click(
+                        |_, window, cx| {
+                            window.dispatch_action(
+                                Box::new(crate::actions::OpenSecuritySettings),
+                                cx,
+                            );
+                        },
+                    ),
                 )
             });
         // Small and always whole: the folder and device give way instead.
