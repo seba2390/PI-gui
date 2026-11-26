@@ -131,6 +131,14 @@ function reply(res: ServerResponse, status: number, message: string) {
 
 class TooLarge extends Error {}
 
+/** Why a connection failed, for the other computer: the system's code (`ECONNREFUSED`, …), never
+ * the error itself (which can carry a stack trace and this computer's paths). */
+function failure(error: unknown): string {
+	// biome-ignore lint/suspicious/noExplicitAny: an error's cause is untyped
+	const code = (error as any)?.cause?.code ?? (error as any)?.code;
+	return typeof code === "string" && /^[A-Z0-9_]+$/.test(code) ? code : "the connection failed";
+}
+
 async function readBody(req: IncomingMessage, limit = MAX_BODY): Promise<Buffer> {
 	const chunks: Buffer[] = [];
 	let size = 0;
@@ -434,7 +442,7 @@ async function handle(ctx: any, req: IncomingMessage, res: ServerResponse) {
 			signal: abort.signal,
 		});
 	} catch (error) {
-		return reply(res, 502, `Could not reach ${target} from the computer running Pistachio: ${error}`);
+		return reply(res, 502, `Could not reach ${target} from the computer running Pistachio: ${failure(error)}`);
 	}
 	const out: Record<string, string> = {};
 	response.headers.forEach((value, name) => {
@@ -453,7 +461,7 @@ async function handle(ctx: any, req: IncomingMessage, res: ServerResponse) {
 		try {
 			body = Buffer.from(await response.arrayBuffer());
 		} catch (error) {
-			return reply(res, 502, `Could not read the answer of ${target}: ${error}`);
+			return reply(res, 502, `Could not read the answer of ${target}: ${failure(error)}`);
 		}
 		res.writeHead(response.status, out);
 		res.end(redactBytes(body, secrets));
@@ -473,7 +481,12 @@ export default function (pi: any) {
 	pi.on("session_start", (_event: unknown, ctx: any) => {
 		if (server || !(SOCKET || PORT_FILE) || !KEY || !CONTROL_KEY) return;
 		const started = createServer((req, res) => {
-			handle(ctx, req, res).catch((error) => reply(res, error instanceof TooLarge ? 413 : 502, String(error)));
+			// What went wrong stays on this computer (its log); the other one gets a plain reason.
+			handle(ctx, req, res).catch((error) => {
+				if (error instanceof TooLarge) return reply(res, 413, error.message);
+				console.error("[pistachio relay]", error);
+				reply(res, 502, "The relay on the computer running Pistachio failed; its log says why.");
+			});
 		});
 		server = started;
 		// WebSockets are not relayed: pi here opens its own to the provider (see `messages`).
