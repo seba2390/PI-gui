@@ -18,6 +18,8 @@ All notable changes to PI-gui are listed here. The format follows
   Windows is planned (#47).
 - Settings → Sandboxing & Security: the sandbox's state and settings, a test of what it blocks, and which
   project files pi loads (its project trust default and saved decisions).
+- Dots at the left edge of the conversation, one per prompt, in Chat and Code. Hovering one shows
+  that prompt and the start of its answer; clicking it scrolls there.
 - A shield next to the folder in Code sessions shows whether commands are sandboxed; its menu turns
   the sandbox off or on for the project. A command the sandbox blocked says so, with a button to
   allow reading or changing that folder.

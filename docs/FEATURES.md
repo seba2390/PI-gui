@@ -231,6 +231,10 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   → Appearance → Working indicator picks the style, with a live preview.
 - **Transcript layout**: the model's text is the main voice. Tool calls and thinking sit on a
   thin rail on the left in a quieter style, with more room where they meet the text.
+- **Turn rail**: dots at the left edge of the conversation, one per prompt (Chat and Code, from two
+  prompts on). The turn being read has a longer dot in the accent color. Hovering a dot shows a
+  card with that prompt and the start of its answer; clicking it scrolls there. With many turns
+  the dots move closer together. A side chat's taken-over history has none.
 - **Find in chat** (⌘F): a search bar over the conversation. Every match is highlighted;
   Enter / Shift+Enter (or ⌘G / ⌘⇧G) go to the next / previous one with a "3 of 12" count, and
   Esc closes the bar. It searches prompts and replies as shown, thinking, tool output and the

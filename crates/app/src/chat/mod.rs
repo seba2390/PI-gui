@@ -23,6 +23,7 @@ pub mod session;
 #[cfg(all(test, unix))]
 mod session_tests;
 pub mod text_viewer;
+mod turn_rail;
 mod viewer_dialog;
 
 use std::collections::{HashMap, HashSet};
@@ -102,6 +103,8 @@ pub struct ChatView {
     session: Entity<PiSession>,
     composer: Entity<Composer>,
     scroller: Entity<MessageScrollerState>,
+    /// The dots at the left edge, one per prompt.
+    turn_rail: Entity<turn_rail::TurnRail>,
     /// Item version last synced into the scroller, per row.
     row_versions: Vec<u64>,
     /// Whether the trailing "Working…" row is present.
@@ -214,6 +217,10 @@ impl ChatView {
     ) -> Self {
         let composer = cx.new(|cx| Composer::new(session.clone(), window, cx));
         let scroller = cx.new(|cx| MessageScrollerState::new(0, cx));
+        let turn_rail = {
+            let (chat, session, scroller) = (cx.weak_entity(), session.clone(), scroller.clone());
+            cx.new(|cx| turn_rail::TurnRail::new(chat, session, scroller, cx))
+        };
 
         let subscriptions = vec![
             // The speech model download banner.
@@ -246,6 +253,7 @@ impl ChatView {
             session,
             composer,
             scroller,
+            turn_rail,
             row_versions: Vec::new(),
             working_row: false,
             markdown: HashMap::new(),
@@ -306,6 +314,8 @@ impl ChatView {
             inherited.expanded = !inherited.expanded;
             self.scroller
                 .update(cx, |scroller, cx| scroller.remeasure(cx));
+            self.turn_rail
+                .update(cx, |rail, cx| rail.folding_changed(cx));
             cx.notify();
         }
     }
@@ -1187,6 +1197,7 @@ impl Render for ChatView {
                         .with_bottom_fade(background)
                         .size_full(),
                     )
+                    .child(self.turn_rail.clone())
                     .children(find_bar)
                     .into_any_element()
             })
