@@ -339,12 +339,13 @@ impl SettingPage {
                                 let line = div()
                                     .w_full()
                                     .h(px(1.))
-                                    .bg(line.blend(foreground.opacity(line_glow)))
+                                    // Softer than the title's glow: a line is thin.
+                                    .bg(line.blend(foreground.opacity(0.45 * line_glow)))
                                     .when(line_glow > 0., |this| {
                                         this.shadow(vec![BoxShadow {
-                                            color: foreground.opacity(0.16 * line_glow),
+                                            color: foreground.opacity(0.06 * line_glow),
                                             offset: point(px(0.), px(0.)),
-                                            blur_radius: px(8.),
+                                            blur_radius: px(6.),
                                             spread_radius: px(0.),
                                             inset: false,
                                         }])
