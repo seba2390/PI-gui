@@ -134,7 +134,7 @@ pub struct ChatView {
     held_dialogs: Vec<(pi_rpc::protocol::ExtensionUiRequest, std::time::Instant)>,
     /// Questions with a few answers (the sandbox gate's "Allow / Don't allow"), docked above the
     /// composer in the order they came; the first is shown.
-    questions: Vec<Entity<question::Question>>,
+    questions: Vec<question::Docked>,
     /// pi stopped while the chat was hidden; shown so the user sees why (and any prompts
     /// returned to the composer) before the chat is let go.
     stopped_unseen: bool,
@@ -360,15 +360,16 @@ impl ChatView {
         let on_answer: question::OnAnswer = Rc::new(move |id, answer, window, cx| {
             let _ = weak.update(cx, |this, cx| this.answer(id, answer, window, cx));
         });
-        let question = cx.new(|cx| question::Question::new(request, on_answer, cx));
+        let question = question::Docked::new(request, on_answer, cx);
         // pi stops waiting after its timeout: the question goes then too.
-        if let Some(left) = question.read(cx).time_left() {
+        if let Some(at) = question.expires {
             let id = request.id.clone();
             cx.spawn(async move |this, cx| {
-                cx.background_executor().timer(left).await;
+                cx.background_executor()
+                    .timer(at.saturating_duration_since(std::time::Instant::now()))
+                    .await;
                 let _ = this.update(cx, |this, cx| {
-                    this.questions
-                        .retain(|question| question.read(cx).id() != id);
+                    this.questions.retain(|question| question.id != id);
                     cx.notify();
                 });
             })
@@ -394,11 +395,7 @@ impl ChatView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(index) = self
-            .questions
-            .iter()
-            .position(|question| question.read(cx).id() == id)
-        else {
+        let Some(index) = self.questions.iter().position(|question| question.id == id) else {
             return;
         };
         self.questions.remove(index);
@@ -415,8 +412,7 @@ impl ChatView {
 
     fn focus_question(&self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(question) = self.questions.first() {
-            let focus = question.read(cx).focus_handle(cx);
-            window.focus(&focus, cx);
+            window.focus(&question.focus, cx);
         }
     }
 
@@ -446,7 +442,7 @@ impl ChatView {
                 }
             }
             self.questions
-                .retain(|question| !stopped && !question.read(cx).expired());
+                .retain(|question| !stopped && !question.expired());
             self.focus_question(window, cx);
         }
     }
@@ -1297,7 +1293,7 @@ impl Render for ChatView {
                         .max_w(CONTENT_MAX_WIDTH + px(32.))
                         .children(self.render_reconnect(cx))
                         // Behind the composer (painted first), its bottom tucked under it.
-                        .children(self.questions.first().cloned())
+                        .children(self.questions.first().map(|question| question.card.clone()))
                         .child(self.composer.clone()),
                 ),
             )

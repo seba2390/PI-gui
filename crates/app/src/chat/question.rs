@@ -62,14 +62,42 @@ enum Line {
 
 pub type OnAnswer = Rc<dyn Fn(&str, &ExtensionUiAnswer, &mut Window, &mut App)>;
 
+/// A question as the chat keeps it: what it needs without reading the card, which may be in the
+/// middle of handling a click when the chat looks.
+pub struct Docked {
+    pub id: String,
+    pub focus: FocusHandle,
+    /// When pi stops waiting for the answer.
+    pub expires: Option<std::time::Instant>,
+    pub card: Entity<Question>,
+}
+
+impl Docked {
+    pub fn new(request: &ExtensionUiRequest, on_answer: OnAnswer, cx: &mut App) -> Self {
+        let card = cx.new(|cx| Question::new(request, on_answer, cx));
+        let focus = card.read(cx).focus.clone();
+        Self {
+            id: request.id.clone(),
+            focus,
+            expires: request
+                .timeout_ms()
+                .map(|ms| std::time::Instant::now() + Duration::from_millis(ms)),
+            card,
+        }
+    }
+
+    pub fn expired(&self) -> bool {
+        self.expires
+            .is_some_and(|at| std::time::Instant::now() >= at)
+    }
+}
+
 pub struct Question {
     id: SharedString,
     heading: SharedString,
     lines: Vec<Line>,
     choices: Vec<Choice>,
     focus: FocusHandle,
-    asked: std::time::Instant,
-    timeout_ms: Option<u64>,
     on_answer: OnAnswer,
 }
 
@@ -134,26 +162,8 @@ impl Question {
             lines,
             choices,
             focus: cx.focus_handle(),
-            asked: std::time::Instant::now(),
-            timeout_ms: request.timeout_ms(),
             on_answer,
         }
-    }
-
-    pub fn id(&self) -> &str {
-        &self.id
-    }
-
-    /// Whether pi has stopped waiting for the answer.
-    pub fn expired(&self) -> bool {
-        self.timeout_ms
-            .is_some_and(|ms| self.asked.elapsed().as_millis() >= u128::from(ms))
-    }
-
-    /// How long pi still waits, if it gives up at all.
-    pub fn time_left(&self) -> Option<Duration> {
-        self.timeout_ms
-            .map(|ms| Duration::from_millis(ms).saturating_sub(self.asked.elapsed()))
     }
 
     /// The answer Esc gives: the declining one, else "cancelled".
@@ -164,8 +174,10 @@ impl Question {
             .map_or(ExtensionUiAnswer::Cancelled, |choice| choice.answer.clone())
     }
 
+    /// Hands the answer over once this card's own update is done (the chat then drops the card).
     fn answer(&self, answer: &ExtensionUiAnswer, window: &mut Window, cx: &mut App) {
-        (self.on_answer)(&self.id, answer, window, cx);
+        let (on_answer, id, answer) = (self.on_answer.clone(), self.id.clone(), answer.clone());
+        window.defer(cx, move |window, cx| on_answer(&id, &answer, window, cx));
     }
 
     fn focused(&self, window: &Window) -> Option<usize> {
@@ -327,7 +339,115 @@ impl Render for Question {
 
 #[cfg(test)]
 mod tests {
-    use super::Kind;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use gpui_kit::component::Root;
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{
+        AppContext as _, Context, IntoElement, ParentElement as _, Render, Styled as _,
+        TestAppContext, VisualTestContext, Window, div,
+    };
+    use pi_rpc::protocol::{ExtensionUiAnswer, ExtensionUiMethod, ExtensionUiRequest};
+    use pretty_assertions::assert_eq;
+
+    use super::{Docked, Kind, OnAnswer};
+    use crate::ui::dialog::testing::{draw, press};
+
+    /// Holds a docked question the way the chat does, and like the chat looks at it again when
+    /// the answer comes (which crashed while the card was still handling the click).
+    struct Holder {
+        docked: Option<Docked>,
+    }
+
+    impl Render for Holder {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .children(self.docked.as_ref().map(|docked| docked.card.clone()))
+        }
+    }
+
+    type Answers = Rc<RefCell<Vec<ExtensionUiAnswer>>>;
+
+    fn gate_question(cx: &mut TestAppContext) -> (&mut VisualTestContext, Answers) {
+        cx.update(|cx| {
+            gpui_kit::component::init(cx);
+            cx.set_reduce_motion(true);
+        });
+        let answers = Answers::default();
+        let sent = answers.clone();
+        let (_, cx) = cx.add_window_view(move |window, cx| {
+            let holder = cx.new(|cx| {
+                let weak = cx.weak_entity();
+                let on_answer: OnAnswer = Rc::new(move |id, answer, _, cx| {
+                    let sent = sent.clone();
+                    let _ = weak.update(cx, |this: &mut Holder, cx| {
+                        let docked = this.docked.take().expect("asked");
+                        assert_eq!(docked.id, id);
+                        let _ = docked.card.read(cx).heading.clone();
+                        sent.borrow_mut().push(answer.clone());
+                        cx.notify();
+                    });
+                });
+                let request = ExtensionUiRequest {
+                    id: "q1".into(),
+                    method: ExtensionUiMethod::Select {
+                        title: "Read issues on github.com/a/b\n· one\n⚠ careful".into(),
+                        options: ["Allow", "Always for this project", "Don't allow"]
+                            .map(str::to_owned)
+                            .to_vec(),
+                        timeout: None,
+                    },
+                };
+                let docked = Docked::new(&request, on_answer, cx);
+                window.focus(&docked.focus, cx);
+                Holder {
+                    docked: Some(docked),
+                }
+            });
+            Root::new(holder, window, cx)
+        });
+        draw(cx);
+        (cx, answers)
+    }
+
+    #[gpui_kit::test]
+    #[allow(clippy::unused_async)] // gpui tests take an async body
+    async fn clicking_an_answer_sends_it(cx: &mut TestAppContext) {
+        let (cx, answers) = gate_question(cx);
+        cx.update(|window, cx| window.click(("question-answer", 0usize), cx));
+        draw(cx);
+        assert_eq!(
+            *answers.borrow(),
+            [ExtensionUiAnswer::Value("Allow".into())]
+        );
+    }
+
+    #[gpui_kit::test]
+    #[allow(clippy::unused_async)]
+    async fn the_keyboard_answers_and_esc_declines(cx: &mut TestAppContext) {
+        let (cx, answers) = gate_question(cx);
+        // Nothing is chosen by an Enter meant for something else.
+        press("enter space", cx);
+        assert_eq!(*answers.borrow(), []);
+        press("escape", cx);
+        assert_eq!(
+            *answers.borrow(),
+            [ExtensionUiAnswer::Value("Don't allow".into())]
+        );
+    }
+
+    #[gpui_kit::test]
+    #[allow(clippy::unused_async)]
+    async fn the_arrows_move_between_answers(cx: &mut TestAppContext) {
+        let (cx, answers) = gate_question(cx);
+        press("right right enter", cx);
+        assert_eq!(
+            *answers.borrow(),
+            [ExtensionUiAnswer::Value("Always for this project".into())]
+        );
+    }
 
     #[test]
     fn answers_are_told_apart_by_their_words() {
