@@ -242,6 +242,23 @@ impl SettingPage {
             }
         }
 
+        // Pistachio: the line under the header is the one above the first group, so it glows
+        // when that group is picked (like the lines between groups, see below).
+        let header_glow = state
+            .read(cx)
+            .flash
+            .filter(|flash| flash.page_ix == ix && group_indices.first() == Some(&flash.group_ix))
+            .map(|flash| flash.at.elapsed().as_secs_f32() / GroupFlash::DURATION.as_secs_f32())
+            .filter(|progress| *progress < 1.)
+            .map_or(0., |progress| {
+                window.request_animation_frame();
+                glow(progress)
+            });
+        let header_line = cx
+            .theme()
+            .border
+            .blend(cx.theme().foreground.opacity(0.45 * header_glow));
+
         v_flex()
             .id(ix)
             .size_full()
@@ -250,7 +267,7 @@ impl SettingPage {
                     .p_4()
                     .gap_3()
                     .border_b_1()
-                    .border_color(cx.theme().border)
+                    .border_color(header_line)
                     .refine_style(&self.header_style)
                     .child(
                         h_flex()
