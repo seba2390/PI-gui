@@ -18,6 +18,7 @@ pub mod models_dialog;
 pub mod pdf_viewer;
 mod question;
 mod queued;
+pub mod recall;
 mod report;
 mod rows;
 pub mod session;

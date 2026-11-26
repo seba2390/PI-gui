@@ -113,6 +113,9 @@ fn main() {
         cx.set_global(ui_state::UiState::load(
             ui_state::UiState::path().as_deref(),
         ));
+        cx.set_global(chat::recall::Recall::load(
+            chat::recall::Recall::path().as_deref(),
+        ));
         window::init(cx);
         perf::phase("app_init");
         window::open_main_window(cx);

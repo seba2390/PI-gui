@@ -550,6 +550,12 @@ impl MainWindow {
                         settings.update(cx, |settings, _| settings.start_on_security());
                     }
                 }
+                "settings-tools" => {
+                    self.open_settings(&OpenSettings, window, cx);
+                    if let Some(settings) = self.settings.as_ref().map(|s| s.0.clone()) {
+                        settings.update(cx, |settings, _| settings.start_on_tools());
+                    }
+                }
                 // The sandbox gate's question, docked above the composer: with a warning (open
                 // at first) or without (one line).
                 "question" | "question-plain" => {
@@ -2413,6 +2419,7 @@ impl MainWindow {
             .detach();
             return;
         }
+        crate::chat::recall::Recall::update(cx, |recall| recall.forget(&summary.path));
         let path = summary.path.clone();
         let task = self.sidebar.update(cx, |sidebar, cx| {
             sidebar.trash_sessions(vec![path.clone()], cx)

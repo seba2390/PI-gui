@@ -123,3 +123,15 @@ for project in ["webshop", "compiler", "dotfiles", "ml-notebooks"]:
         rng += 1
         write_session(folder, f"Refactor the {project} module {index}", 30 if index == 0 else 4,
                       NOW - timedelta(hours=7 * index + len(project)), rng)
+
+# The model the sessions used, so pi restores it and the composer shows it (pi never calls
+# it: the benchmark sends nothing).
+with open(os.path.join(AGENT, "models.json"), "w") as handle:
+    json.dump({"providers": {"bench": {
+        "baseUrl": "http://127.0.0.1:9/v1", "api": "openai-completions", "apiKey": "bench",
+        "models": [{"id": "bench-model", "name": "Bench Model", "reasoning": True, "input": ["text"],
+                    "contextWindow": 128000, "maxTokens": 8192}],
+    }}}, handle, indent=2)
+with open(os.path.join(AGENT, "settings.json"), "w") as handle:
+    json.dump({"defaultProvider": "bench", "defaultModel": "bench-model",
+               "defaultThinkingLevel": "medium"}, handle, indent=2)

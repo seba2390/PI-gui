@@ -192,6 +192,30 @@ impl Bench {
         let start = self
             .click_mark(&row_mark(summary), "open session: click", cx)
             .await?;
+        // A click that lands while the sidebar lists its sessions again (pi resuming the
+        // previous one writes to its file) can miss: click once more, timed from the first.
+        let shown = |this: &MainWindow, cx: &App, path: &std::path::Path| {
+            this.visible_chat()
+                .read(cx)
+                .session()
+                .read(cx)
+                .session_file()
+                .as_deref()
+                == Some(path)
+        };
+        let waited = Instant::now();
+        while !self
+            .this
+            .read_with(cx, |this, cx| shown(this, cx, &summary.path))?
+        {
+            if waited.elapsed() > Duration::from_secs(1) {
+                log::warn!("bench: clicking {} again", summary.path.display());
+                self.click_mark(&row_mark(summary), "open session: click again", cx)
+                    .await?;
+                break;
+            }
+            sleep(cx, Duration::from_millis(2)).await;
+        }
         let path = summary.path.clone();
         let what = format!("the history of {}", summary.path.display());
         self.wait_until(&what, cx, move |this, cx| {
@@ -201,6 +225,16 @@ impl Bench {
         })
         .await?;
         cx.update(|window, _| super::frame_since("open session: history shown", start, window))?;
+        // The composer's model, and in a chat the web search button.
+        self.wait_until("the composer", cx, |this, cx| {
+            let session = this.visible_chat().read(cx).session().read(cx);
+            session.model().is_some()
+                && (session.mode() != Mode::Chat || session.web_search_available())
+        })
+        .await?;
+        cx.update(|window, _| {
+            super::frame_since("open session: composer shown", start, window);
+        })?;
         sleep(cx, SETTLE).await;
         Ok(())
     }
