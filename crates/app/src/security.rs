@@ -322,6 +322,51 @@ impl Security {
     }
 }
 
+/// `path` with the home folder written `~`.
+pub fn tilde(path: &Path) -> String {
+    match sandbox::paths::home()
+        .and_then(|home| path.strip_prefix(home).ok().map(Path::to_path_buf))
+    {
+        Some(rest) if rest.as_os_str().is_empty() => "~".into(),
+        Some(rest) => format!("~/{}", rest.display()),
+        None => path.display().to_string(),
+    }
+}
+
+/// The folders to offer allowing for a call the sandbox blocked: for each path it was refused
+/// (`paths`, absolute or relative to `project`), the folder to write in, unless that is hidden,
+/// already allowed, the home folder or the root.
+pub fn folders_to_allow(settings: &Settings, project: &Path, paths: &[PathBuf]) -> Vec<PathBuf> {
+    let cx = sandbox::Context::current();
+    let Some(policy) = sandbox::Policy::for_project(settings, project, &cx) else {
+        return Vec::new();
+    };
+    let home = cx.home.as_deref().map(sandbox::paths::resolve);
+    let mut folders = Vec::new();
+    for path in paths {
+        let path = sandbox::paths::resolve(&project.join(path));
+        if !policy.may_read(&path) {
+            continue;
+        }
+        let folder = if path.is_dir() {
+            path.clone()
+        } else {
+            match path.parent() {
+                Some(parent) => parent.to_path_buf(),
+                None => continue,
+            }
+        };
+        let useless = folder.parent().is_none()
+            || home.as_ref() == Some(&folder)
+            || policy.may_write(&folder.join(".pistachio-check"));
+        if !useless && !folders.contains(&folder) {
+            folders.push(folder);
+        }
+    }
+    folders.truncate(2);
+    folders
+}
+
 /// Runs the helper's `command` and reads its JSON reply.
 fn helper<T: serde::de::DeserializeOwned>(
     exe: Option<&Path>,

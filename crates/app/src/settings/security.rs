@@ -10,7 +10,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sandbox::{Backend, Network};
 
-use crate::security::{Security, Test, TrustDefault, security};
+use crate::security::{Security, Test, TrustDefault, security, tilde};
 use crate::theme::palette;
 use crate::ui::AppIcon;
 
@@ -381,17 +381,6 @@ fn pick(
         }
     })
     .detach();
-}
-
-/// `path` with the home folder written `~`.
-fn tilde(path: &Path) -> String {
-    match sandbox::paths::home()
-        .and_then(|home| path.strip_prefix(home).ok().map(Path::to_path_buf))
-    {
-        Some(rest) if rest.as_os_str().is_empty() => "~".into(),
-        Some(rest) => format!("~/{}", rest.display()),
-        None => path.display().to_string(),
-    }
 }
 
 fn writable(cx: &mut App) -> AnyElement {

@@ -16,6 +16,7 @@ pub mod backend;
 mod bwrap;
 pub mod cli;
 pub mod landlock;
+pub mod note;
 pub mod paths;
 pub mod policy;
 pub mod seatbelt;
