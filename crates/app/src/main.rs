@@ -25,6 +25,7 @@ mod pi_place;
 mod relay;
 mod remote_ui;
 mod search_server;
+mod security;
 mod settings;
 mod shell_env;
 mod sidebar;

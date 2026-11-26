@@ -25,6 +25,7 @@ actions!(
         Minimize,
         Zoom,
         OpenSettings,
+        OpenSecuritySettings,
         CheckForUpdates,
         FindInChat,
         OpenSideChat,

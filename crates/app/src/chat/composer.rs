@@ -262,6 +262,9 @@ impl Composer {
                 // Repaint the device button's status dot.
                 cx.observe(&crate::hosts::hosts(cx), |_, _, cx| cx.notify()),
             ];
+        // Repaint the sandbox badge.
+        let security = crate::security::security(cx);
+        subscriptions.push(cx.observe(&security, |_, _, cx| cx.notify()));
         subscriptions.push(cx.subscribe_in(
             &speech,
             window,
@@ -1259,8 +1262,14 @@ impl Composer {
                 } else {
                     format!("{} (choose another working folder)", cwd.display())
                 })
-                .dropdown_menu_with_anchor(Anchor::BottomLeft, folder_menu(cx.weak_entity(), cwd)),
-            ));
+                .dropdown_menu_with_anchor(
+                    Anchor::BottomLeft,
+                    folder_menu(cx.weak_entity(), cwd.clone()),
+                ),
+            ))
+            .when(sandbox::SUPPORTED, |left| {
+                left.child(self.render_sandbox(&cwd, cx))
+            });
 
         self.toolbar_layout(left, cx).into_any_element()
     }
@@ -1457,6 +1466,90 @@ impl Composer {
                 device_menu(cx.weak_entity(), current.cloned()),
             );
         shrinking("composer-device", 1., button)
+    }
+
+    /// The sandbox badge of a local Code session: a shield while its commands are sandboxed
+    /// (with "No network" when that is off), a crossed-out one with "No sandbox" when they are
+    /// not; its menu turns the sandbox off or on for the project and opens Settings → Security.
+    fn render_sandbox(&self, cwd: &Path, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        use crate::security::SessionSandbox;
+        let security = crate::security::security(cx);
+        let state = security.read(cx);
+        let session = state.session(cwd);
+        let all_off = !state.settings.enabled;
+        let (icon, label, tooltip): (AppIcon, Option<&str>, &str) = match session {
+            SessionSandbox::Sandboxed { network: true } | SessionSandbox::Checking => (
+                AppIcon::ShieldCheck,
+                None,
+                "Sandboxed: commands can change only this project and can't read your keys",
+            ),
+            SessionSandbox::Sandboxed { network: false } => (
+                AppIcon::ShieldCheck,
+                Some("No network"),
+                "Sandboxed: commands can change only this project, can't read your keys and \
+                 have no network",
+            ),
+            SessionSandbox::Off => (
+                AppIcon::ShieldOff,
+                Some("No sandbox"),
+                "Commands run as you, without a sandbox",
+            ),
+            SessionSandbox::Unavailable => (
+                AppIcon::ShieldOff,
+                Some("No sandbox"),
+                "This computer has no sandbox the app can use (see Settings → Security)",
+            ),
+        };
+        let warning = matches!(session, SessionSandbox::Off | SessionSandbox::Unavailable);
+        let color = if warning {
+            palette(cx).warning
+        } else {
+            cx.theme().muted_foreground
+        };
+        let project = cwd.to_path_buf();
+        let button = Button::new(menu_id("sandbox", &(format!("{session:?}"), all_off)))
+            .quiet(cx)
+            .small()
+            .child(
+                h_flex()
+                    .gap_1()
+                    .text_color(color)
+                    .child(Icon::from(icon).small())
+                    .when_some(label, |row, label| row.child(label)),
+            )
+            .accessibility_label(tooltip)
+            .tooltip(tooltip)
+            .dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, cx| {
+                let security = crate::security::security(cx);
+                let toggle = match session {
+                    SessionSandbox::Off if all_off => Some(("Turn the sandbox on", None)),
+                    SessionSandbox::Off => Some(("Use the sandbox in this project", Some(false))),
+                    SessionSandbox::Sandboxed { .. } | SessionSandbox::Checking => {
+                        Some(("Run this project without a sandbox", Some(true)))
+                    }
+                    SessionSandbox::Unavailable => None,
+                };
+                if let Some((label, off)) = toggle {
+                    let project = project.clone();
+                    let security = security.clone();
+                    menu = menu
+                        .item(PopupMenuItem::new(label).on_click(move |_, _, cx| {
+                            let project = project.clone();
+                            security.update(cx, |security, cx| match off {
+                                Some(off) => security.set_project_unsandboxed(&project, off, cx),
+                                None => security.update(cx, |settings| settings.enabled = true),
+                            });
+                        }))
+                        .separator();
+                }
+                menu.item(
+                    PopupMenuItem::new("Security settings…").on_click(|_, window, cx| {
+                        window.dispatch_action(Box::new(crate::actions::OpenSecuritySettings), cx);
+                    }),
+                )
+            });
+        // Small and always whole: the folder and device give way instead.
+        shrinking("composer-sandbox", 0., button)
     }
 
     /// The composer's bottom bar: `left` controls, then model, thinking, context and send.
@@ -3118,7 +3211,9 @@ mod toolbar_tests {
         let ([device, whole], cx) = buttons(name, px(2000.), cx);
         assert!(whole.left() >= device.right());
 
-        let [same, less] = at(px(520.), cx);
+        // Room for the model, a shortened folder and the sandbox badge at its widest ("No
+        // sandbox": the tests' app has none).
+        let [same, less] = at(px(680.), cx);
         assert_eq!(
             same.size.width, device.size.width,
             "the device gave way first"

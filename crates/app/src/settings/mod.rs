@@ -7,6 +7,7 @@
 mod documents;
 mod local_search;
 mod models;
+mod security;
 pub mod view;
 mod web_advanced;
 

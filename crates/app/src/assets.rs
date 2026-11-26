@@ -46,6 +46,7 @@ static EMBEDDED: &[(&str, &[u8])] = embedded![
     "icons/rocket.svg",
     "icons/server.svg",
     "icons/shield-check.svg",
+    "icons/shield-off.svg",
     "icons/trash.svg",
     "themes/pi.json",
 ];

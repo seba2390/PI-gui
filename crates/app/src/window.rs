@@ -537,6 +537,12 @@ impl MainWindow {
                         settings.update(cx, |settings, _| settings.start_on_documents());
                     }
                 }
+                "settings-security" => {
+                    self.open_settings(&OpenSettings, window, cx);
+                    if let Some(settings) = self.settings.as_ref().map(|s| s.0.clone()) {
+                        settings.update(cx, |settings, _| settings.start_on_security());
+                    }
+                }
                 "speech-download" => crate::stt::ui::open_download_dialog(window, cx),
                 "dictate" => {
                     let composer = self.chat.read(cx).composer().clone();
@@ -1898,6 +1904,21 @@ impl MainWindow {
     fn open_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
         if self.settings.is_none() {
             self.toggle_settings(window, cx);
+        }
+    }
+
+    /// Settings → Security (from a session's sandbox badge).
+    fn open_security_settings(
+        &mut self,
+        _: &crate::actions::OpenSecuritySettings,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.settings.is_none() {
+            self.toggle_settings(window, cx);
+            if let Some(settings) = self.settings.as_ref().map(|s| s.0.clone()) {
+                settings.update(cx, |settings, _| settings.start_on_security());
+            }
         }
     }
 
@@ -3429,6 +3450,7 @@ impl Render for MainWindow {
             .on_action(cx.listener(Self::reload_session))
             .on_action(cx.listener(Self::open_login))
             .on_action(cx.listener(Self::open_settings))
+            .on_action(cx.listener(Self::open_security_settings))
             .on_action(cx.listener(|this, _: &CheckForUpdates, window, cx| {
                 this.check_for_updates(true, window, cx);
             }))

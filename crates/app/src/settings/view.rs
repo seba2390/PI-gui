@@ -168,6 +168,11 @@ impl SettingsView {
             }),
         ];
         check_searxng(true, cx);
+        // Settings → Security: read again what may have changed elsewhere (/trust, the file).
+        let security = crate::security::security(cx);
+        security.update(cx, crate::security::Security::refresh);
+        let mut subscriptions = subscriptions;
+        subscriptions.push(cx.observe(&security, |_, _, cx| cx.notify()));
         let connected =
             super::models::Connected::load(session_models.iter().map(|model| &*model.0), cx);
         let mut this = Self {
@@ -822,6 +827,11 @@ impl SettingsView {
         self.start_page = 6;
     }
 
+    /// Opens on the Security page (before the first render).
+    pub fn start_on_security(&mut self) {
+        self.start_page = 7;
+    }
+
     fn speech_page(&self) -> SettingPage {
         use crate::stt::{AutoStop, catalog};
         SettingPage::new("Speech to text")
@@ -903,6 +913,7 @@ impl Render for SettingsView {
                     self.speech_page(),
                     naming_page(cx),
                     super::documents::page(),
+                    super::security::page(),
                 ]),
         )
     }
@@ -990,7 +1001,7 @@ fn naming_page(cx: &App) -> SettingPage {
 }
 
 /// An on/off setting: gpui-kit's switch with a hover ring, so it reads as clickable.
-fn hover_switch(
+pub(super) fn hover_switch(
     id: &'static str,
     value: impl Fn(&App) -> bool + 'static,
     set_value: impl Fn(bool, &mut App) + 'static,
