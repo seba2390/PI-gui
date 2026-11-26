@@ -168,17 +168,34 @@ function startGate(project: () => string, ui: () => any): string | undefined {
           return finish(1, `[Pistachio] This needs the user's OK, and no one can be asked: ${plan.title}.`);
         }
         const text = [plan.title, ...plan.details.map((line: string) => `· ${line}`), ...plan.warnings.map((line: string) => `⚠ ${line}`)].join("\n");
-        const choices = plan.rememberable ? [ALLOW, ALWAYS, DENY] : [ALLOW, DENY];
+        // With several GitHub accounts, each answer says which one it acts as.
+        const accounts: string[] = plan.accounts ?? [];
+        const several = accounts.length > 1;
+        const choices: { label: string; always: boolean; account?: string }[] = several
+          ? [
+              ...accounts.map((account) => ({ label: `${ALLOW} as ${account}`, always: false, account })),
+              ...(plan.rememberable ? accounts.map((account) => ({ label: `${ALWAYS} as ${account}`, always: true, account })) : []),
+            ]
+          : [
+              { label: ALLOW, always: false, account: accounts[0] },
+              ...(plan.rememberable ? [{ label: ALWAYS, always: true, account: accounts[0] }] : []),
+            ];
         let answer: string | undefined;
         try {
-          answer = await dialog.select(text, choices);
+          answer = await dialog.select(text, [...choices.map((choice) => choice.label), DENY]);
         } catch {
           answer = undefined;
         }
-        if (answer !== ALLOW && answer !== ALWAYS) {
+        const chosen = choices.find((choice) => choice.label === answer);
+        if (!chosen) {
           return finish(1, `[Pistachio] The user didn't allow this: ${plan.title}. Don't try another way; ask them if it is needed.`);
         }
-        if (answer === ALWAYS) gateHelper("allow", { project: request.project, target: plan.target, class: plan.class });
+        request.account = chosen.account;
+        if (chosen.always) {
+          gateHelper("allow", { project: request.project, target: plan.target, class: plan.class, account: chosen.account });
+        }
+      } else if (plan.account) {
+        request.account = plan.account;
       }
       const child = spawn(BIN!, ["--sandbox-tool", "gate", "run"], { stdio: ["pipe", "pipe", "pipe"] });
       child.stdout.setEncoding("utf8").on("data", (text: string) => send({ stdout: text }));

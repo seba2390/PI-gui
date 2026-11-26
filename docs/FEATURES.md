@@ -307,7 +307,11 @@ Linux; Windows is planned, #47).
     `pull` and `push`;
   - `gh` for a repository: reading pull requests, issues, runs and releases; opening, commenting
     on, closing or merging pull requests and issues; creating a repository. `gh api`, logins and
-    secrets are not run;
+    secrets are not run. With several GitHub accounts (a personal one and a company one), the
+    dialog offers each: the command runs with that account's token only, and your active account
+    stays as it is. A repository for an owner (`gh repo create acme/tool`) is offered only as
+    accounts that are that owner or members of it, else refused. "Always" remembers the account;
+
   - signing a commit or tag with your GPG or SSH key (git's own signing call, in git's namespace).
 
   The gate reads the request itself: only these commands and a list of their options, only in the

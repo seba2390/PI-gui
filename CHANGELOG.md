@@ -31,7 +31,9 @@ All notable changes to PI-gui are listed here. The format follows
   key now work: a dialog says exactly what will happen (the commits, the branch, the remote's real
   address, force pushes and the default branch called out) and offers Allow, Always for this
   project or Don't allow. Your keys never enter the sandbox. Repositories whose git settings
-  could start a program are refused, and hooks are off.
+  could start a program are refused, and hooks are off. With several GitHub accounts, you pick
+  which one each command acts as (a company repository only as a member of that company), and
+  "Always" remembers it.
 - Settings → Sandboxing & Security → Git and GitHub: what the agent may do with your logins
   without asking, each removable.
 - Dots at the left edge of the conversation, one per prompt, in Chat and Code. Hovering one shows

@@ -859,7 +859,12 @@ fn key_uses(cx: &mut App) -> AnyElement {
                         .truncate()
                         .text_xs()
                         .text_color(muted)
-                        .child(format!("{} · in {}", kinds.join(", "), rule.project)),
+                        .child(match &rule.account {
+                            Some(account) => {
+                                format!("{} as {account} · in {}", kinds.join(", "), rule.project)
+                            }
+                            None => format!("{} · in {}", kinds.join(", "), rule.project),
+                        }),
                 )
                 .child(
                     remove_button(

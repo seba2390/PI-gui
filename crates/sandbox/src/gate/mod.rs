@@ -45,6 +45,9 @@ pub struct Request {
     /// What the command was given on standard input (what to sign).
     #[serde(default)]
     pub stdin: Option<String>,
+    /// The `gh` account the user chose (set by the extension).
+    #[serde(default)]
+    pub account: Option<String>,
 }
 
 /// What kind of thing a request does; the user allows each kind separately.
@@ -101,6 +104,9 @@ pub struct Rule {
     /// The remote's address as [`config::normalize_url`] gives it, or the signing key.
     pub target: String,
     pub allow: Vec<Class>,
+    /// For GitHub (`gh`): the account it acts as.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
 }
 
 /// What the gate will do for a request, once the user agrees.
@@ -124,6 +130,12 @@ pub struct Plan {
     pub cwd: PathBuf,
     #[serde(default)]
     pub stdin: Option<String>,
+    /// For `gh`: the accounts it may act as (the active one first); the user picks one.
+    #[serde(default)]
+    pub accounts: Vec<String>,
+    /// The account a rule chose.
+    #[serde(default)]
+    pub account: Option<String>,
 }
 
 /// The gate's answer to a wrapper: run it in the sandbox as usual, ask the user, or refuse.
@@ -148,8 +160,12 @@ pub fn decide(request: &Request, settings: &Settings, home: Option<&Path>) -> De
     };
     match planned {
         Ok(None) => Decision::Local,
-        Ok(Some(plan)) => {
-            let approved = allowed_by_rules(&plan, request, settings, home);
+        Ok(Some(mut plan)) => {
+            let rule = matching_rule(&plan, request, settings, home);
+            let approved = rule.is_some();
+            if let Some(rule) = rule {
+                plan.account.clone_from(&rule.account);
+            }
             Decision::Gate {
                 plan: Box::new(plan),
                 approved,
@@ -168,6 +184,32 @@ fn project_of(request: &Request) -> PathBuf {
     crate::paths::resolve(&project)
 }
 
+/// The rule that allows `plan` without asking, if any. For `gh` it must name an account that
+/// is still logged in.
+pub fn matching_rule<'a>(
+    plan: &Plan,
+    request: &Request,
+    settings: &'a Settings,
+    home: Option<&Path>,
+) -> Option<&'a Rule> {
+    let project = project_of(request);
+    if !plan.rememberable {
+        return None;
+    }
+    settings.gate.iter().find(|rule| {
+        let folder = crate::paths::resolve(&crate::paths::expand(&rule.project, home));
+        let account_ok = plan.accounts.is_empty()
+            || rule
+                .account
+                .as_ref()
+                .is_some_and(|account| plan.accounts.contains(account));
+        project == folder
+            && rule.target == plan.target
+            && rule.allow.contains(&plan.class)
+            && account_ok
+    })
+}
+
 /// Whether a rule allows `plan` without asking.
 pub fn allowed_by_rules(
     plan: &Plan,
@@ -175,22 +217,21 @@ pub fn allowed_by_rules(
     settings: &Settings,
     home: Option<&Path>,
 ) -> bool {
-    let project = project_of(request);
-    plan.rememberable
-        && settings.gate.iter().any(|rule| {
-            let folder = crate::paths::resolve(&crate::paths::expand(&rule.project, home));
-            project == folder && rule.target == plan.target && rule.allow.contains(&plan.class)
-        })
+    matching_rule(plan, request, settings, home).is_some()
 }
 
-/// Adds `class` for `target` in `project` to the rules.
-pub fn allow(settings: &mut Settings, project: &Path, target: &str, class: Class) {
+/// Adds `class` for `target` in `project` (as `account`, for `gh`) to the rules.
+pub fn allow(
+    settings: &mut Settings,
+    project: &Path,
+    target: &str,
+    class: Class,
+    account: Option<&str>,
+) {
     let project = crate::paths::tilde(project);
-    match settings
-        .gate
-        .iter_mut()
-        .find(|rule| rule.project == project && rule.target == target)
-    {
+    match settings.gate.iter_mut().find(|rule| {
+        rule.project == project && rule.target == target && rule.account.as_deref() == account
+    }) {
         Some(rule) => {
             if !rule.allow.contains(&class) {
                 rule.allow.push(class);
@@ -200,6 +241,7 @@ pub fn allow(settings: &mut Settings, project: &Path, target: &str, class: Class
             project,
             target: target.to_owned(),
             allow: vec![class],
+            account: account.map(str::to_owned),
         }),
     }
 }
@@ -260,6 +302,8 @@ pub(crate) fn git_output(repo: &Path, args: &[&str], hooks: &Path) -> Option<Str
         args: args.iter().map(|&arg| arg.to_owned()).collect(),
         cwd: repo.to_path_buf(),
         stdin: None,
+        accounts: Vec::new(),
+        account: None,
     };
     let output = command(&plan, hooks)
         .stdin(std::process::Stdio::null())
@@ -379,9 +423,15 @@ mod tests {
     fn rules_allow_a_kind_for_a_project_and_target() {
         let mut settings = Settings::default();
         let project = PathBuf::from("/work/app");
-        allow(&mut settings, &project, "github.com/a/b", Class::Push);
-        allow(&mut settings, &project, "github.com/a/b", Class::Push);
-        allow(&mut settings, &project, "github.com/a/b", Class::Fetch);
+        allow(&mut settings, &project, "github.com/a/b", Class::Push, None);
+        allow(&mut settings, &project, "github.com/a/b", Class::Push, None);
+        allow(
+            &mut settings,
+            &project,
+            "github.com/a/b",
+            Class::Fetch,
+            None,
+        );
         assert_eq!(settings.gate.len(), 1);
         assert_eq!(settings.gate[0].allow, [Class::Push, Class::Fetch]);
         let plan = Plan {
@@ -395,6 +445,8 @@ mod tests {
             args: Vec::new(),
             cwd: project.clone(),
             stdin: None,
+            accounts: Vec::new(),
+            account: None,
         };
         let request = Request {
             tool: "git".into(),
@@ -402,6 +454,7 @@ mod tests {
             cwd: project.join("src"),
             project: Some(project.clone()),
             stdin: None,
+            account: None,
         };
         assert!(allowed_by_rules(&plan, &request, &settings, None));
         let other = Plan {
@@ -424,6 +477,49 @@ mod tests {
             ..plan
         };
         assert!(!allowed_by_rules(&once, &request, &settings, None));
+    }
+
+    #[test]
+    fn github_rules_keep_their_account() {
+        let mut settings = Settings::default();
+        let project = PathBuf::from("/work/app");
+        allow(
+            &mut settings,
+            &project,
+            "github.com/acme/app",
+            Class::GhWrite,
+            Some("me-at-work"),
+        );
+        let request = Request {
+            tool: "gh".into(),
+            args: Vec::new(),
+            cwd: project.clone(),
+            project: Some(project.clone()),
+            stdin: None,
+            account: None,
+        };
+        let plan = Plan {
+            title: String::new(),
+            details: Vec::new(),
+            warnings: Vec::new(),
+            class: Class::GhWrite,
+            target: "github.com/acme/app".into(),
+            rememberable: true,
+            program: "gh".into(),
+            args: Vec::new(),
+            cwd: project.clone(),
+            stdin: None,
+            accounts: vec!["me".into(), "me-at-work".into()],
+            account: None,
+        };
+        let rule = matching_rule(&plan, &request, &settings, None).expect("allowed");
+        assert_eq!(rule.account.as_deref(), Some("me-at-work"));
+        // That account logged out: asked again.
+        let gone = Plan {
+            accounts: vec!["me".into()],
+            ..plan
+        };
+        assert!(matching_rule(&gone, &request, &settings, None).is_none());
     }
 
     #[test]

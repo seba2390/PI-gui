@@ -39,6 +39,8 @@ fn gpg(request: &Request) -> Result<Option<Plan>, String> {
         args: request.args.clone(),
         cwd: request.cwd.clone(),
         stdin: Some(payload),
+        accounts: Vec::new(),
+        account: None,
     }))
 }
 
@@ -108,6 +110,8 @@ fn ssh(request: &Request) -> Result<Option<Plan>, String> {
         args: args.clone(),
         cwd: request.cwd.clone(),
         stdin: None,
+        accounts: Vec::new(),
+        account: None,
     }))
 }
 
@@ -180,6 +184,7 @@ mod tests {
             cwd: PathBuf::from("/work/app"),
             project: Some(PathBuf::from("/work/app")),
             stdin: stdin.map(str::to_owned),
+            account: None,
         }
     }
 

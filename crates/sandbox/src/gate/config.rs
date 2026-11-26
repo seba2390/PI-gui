@@ -277,6 +277,8 @@ fn allowed(entry: &Entry) -> bool {
             name,
             "postbuffer" | "version" | "lowspeedlimit" | "lowspeedtime" | "maxrequests"
         ),
+        // Which account to log in as for a remote (not a helper program).
+        ("credential", _) => matches!(name, "username" | "usehttppath"),
         // An alias that starts a shell; the gate runs no aliases, but a reader might.
         ("alias", false) => !value.starts_with('!'),
         _ => false,
@@ -498,6 +500,7 @@ mod tests {
 	pager = evil
 [credential]
 	helper = !evil
+	username = work-account
 [url "https://evil.example/"]
 	insteadOf = https://github.com/
 [filter "lfs"]

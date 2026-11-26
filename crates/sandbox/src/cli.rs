@@ -366,13 +366,21 @@ fn gate(dir: &Path, args: &[OsString]) -> i32 {
                 project: PathBuf,
                 target: String,
                 class: crate::gate::Class,
+                #[serde(default)]
+                account: Option<String>,
             }
             let Ok(allow) = serde_json::from_str::<Allow>(&input) else {
                 eprintln!("{FLAG} gate allow: not a rule");
                 return 2;
             };
             let mut settings = Settings::load(dir);
-            crate::gate::allow(&mut settings, &allow.project, &allow.target, allow.class);
+            crate::gate::allow(
+                &mut settings,
+                &allow.project,
+                &allow.target,
+                allow.class,
+                allow.account.as_deref(),
+            );
             match settings.save(dir) {
                 Ok(()) => 0,
                 Err(error) => {
@@ -395,6 +403,33 @@ fn gate(dir: &Path, args: &[OsString]) -> i32 {
                 return 2;
             };
             let mut command = crate::gate::command(&plan, &crate::gate::hooks_dir());
+            // gh as the account the user chose, for this command only.
+            if !plan.accounts.is_empty() {
+                let chosen = request
+                    .account
+                    .clone()
+                    .or_else(|| plan.account.clone())
+                    .or_else(|| (plan.accounts.len() == 1).then(|| plan.accounts[0].clone()));
+                let Some(account) = chosen.filter(|account| plan.accounts.contains(account)) else {
+                    eprintln!(
+                        "[Pistachio] Which GitHub account to use wasn't chosen ({}).",
+                        plan.accounts.join(", ")
+                    );
+                    return 2;
+                };
+                let host = plan.target.split('/').next().unwrap_or("github.com");
+                let Some(token) = crate::gate::gh::token(host, &account) else {
+                    eprintln!("[Pistachio] gh has no login for {account} on {host}.");
+                    return 1;
+                };
+                if host == "github.com" {
+                    command.env("GH_TOKEN", token);
+                } else {
+                    command
+                        .env("GH_HOST", host)
+                        .env("GH_ENTERPRISE_TOKEN", token);
+                }
+            }
             match &plan.stdin {
                 None => exec(command, &OsString::from(&plan.program)),
                 Some(text) => {

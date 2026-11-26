@@ -132,6 +132,8 @@ impl Cx<'_> {
             args: self.request.args.clone(),
             cwd: self.request.cwd.clone(),
             stdin: None,
+            accounts: Vec::new(),
+            account: None,
         }
     }
 
@@ -920,6 +922,7 @@ mod tests {
             cwd: work.to_path_buf(),
             project: Some(work.to_path_buf()),
             stdin: None,
+            account: None,
         }
     }
 
