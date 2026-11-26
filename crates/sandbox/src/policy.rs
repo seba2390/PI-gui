@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::paths::{expand, resolve};
-use crate::settings::{ALWAYS_HIDDEN, Network, Settings};
+use crate::settings::{ALWAYS_HIDDEN, GIT_SETTINGS, Network, Settings};
 
 /// The rules for commands in one project. Paths are resolved (see [`resolve`]) and may not
 /// exist yet.
@@ -115,6 +115,7 @@ impl Policy {
             }
         }
         readable.push(at("~/.agents"));
+        readable.extend(GIT_SETTINGS.iter().map(|path| at(path)));
         let tools = if settings.tool_folders {
             settings.tool_list(cx, false)
         } else {
@@ -322,6 +323,7 @@ mod tests {
         assert!(policy.may_write(&home.join(".cargo/registry/x")));
         assert!(policy.may_read(&home.join(".gitconfig")));
         assert!(!policy.may_write(&home.join(".gitconfig")));
+        assert!(policy.may_read(&home.join(".config/git/ignore")));
         assert!(policy.may_read(&home.join(".nvm/versions/node/v24/lib/node_modules")));
         assert!(policy.may_read(&home.join("bin/tool")));
         assert!(policy.may_read(&home.join(".pi/agent/skills/review/SKILL.md")));
@@ -353,6 +355,9 @@ mod tests {
         };
         let policy = Policy::for_project(&no_tools, &project, &context(&home)).expect("policy");
         assert!(!policy.may_read(&home.join(".cargo/registry/x")));
+        // git stops on a settings file it can't read: those stay readable.
+        assert!(policy.may_read(&home.join(".gitconfig")));
+        assert!(!policy.may_write(&home.join(".gitconfig")));
     }
 
     #[test]

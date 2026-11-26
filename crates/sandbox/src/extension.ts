@@ -115,6 +115,15 @@ function gateHelper(command: string, input: unknown): any {
   }
 }
 
+// Added to the system prompt in sandboxed sessions.
+const GATE_NOTE = [
+  "Git and GitHub in Pistachio's sandbox:",
+  "- Local git (commit, branch, merge, rebase, log) works as usual, with the user's own git settings and identity.",
+  "- `git push`, `pull`, `fetch`, `clone` and `ls-remote`, and `gh` for pull requests, issues, runs, releases and `gh repo create`, run outside the sandbox with the user's logins. Pistachio shows the user a question for each; just run the command and wait for its result. Don't ask the user first yourself, and don't retry a command the user declined: ask them instead.",
+  "- `gh auth status` says which GitHub accounts are logged in and the git identity commits use.",
+  "- Don't set GIT_CONFIG_* or other git variables to get around an error, and don't invent a commit author: if git has no identity, ask the user.",
+].join("\n");
+
 const ALLOW = "Allow";
 const ALWAYS = "Always for this project";
 const DENY = "Don't allow";
@@ -161,6 +170,10 @@ function startGate(project: () => string, ui: () => any): string | undefined {
         return conn.end();
       }
       if (decision.kind === "refused") return finish(1, `[Pistachio] ${decision.reason}`);
+      if (decision.kind === "answer") {
+        send({ stdout: decision.text });
+        return finish(0);
+      }
       const plan = decision.plan;
       if (!decision.approved) {
         const dialog = ui();
@@ -292,16 +305,25 @@ export default async function (pi: any) {
     }
   });
 
-  // A command that failed on what the sandbox blocks gets a note, so the model doesn't guess.
+  // The model learns how git and GitHub work here before it tries, instead of from refusals.
+  pi.on("before_agent_start", async (event: any, ctx: any) => {
+    if (!gate) return;
+    const policy = policyFor(ctx?.cwd ?? process.cwd());
+    if (!policy?.sandboxed) return;
+    return { systemPrompt: `${event.systemPrompt}\n\n${GATE_NOTE}` };
+  });
+
+  // A command that ran into what the sandbox blocks gets a note, so the model doesn't guess. Also
+  // when it exited 0: a chain (`a && b || echo …`) hides the failure but not the message.
   pi.on("tool_result", async (event: any, ctx: any) => {
-    if (event.toolName !== "bash" || !event.isError) return;
+    if (event.toolName !== "bash") return;
     const text = (event.content ?? []).map((part: any) => (part.type === "text" ? part.text : "")).join("\n");
-    if (
-      !/Operation not permitted|Read-only file system|Permission denied|Network is unreachable|Could not resolve host|Temporary failure in name resolution|not an allowed site|CONNECT tunnel failed|403 Forbidden/i.test(
-        text,
-      )
-    )
-      return;
+    const blocked = event.isError
+      ? /Operation not permitted|Read-only file system|Permission denied|Network is unreachable|Could not resolve host|Temporary failure in name resolution|not an allowed site|CONNECT tunnel failed|403 Forbidden/i.test(
+          text,
+        )
+      : /: Operation not permitted|: Read-only file system|not an allowed site|CONNECT tunnel failed/i.test(text);
+    if (!blocked) return;
     const policy = policyFor(ctx?.cwd ?? process.cwd());
     if (!policy?.sandboxed) return;
     const network =
@@ -310,10 +332,13 @@ export default async function (pi: any) {
         : policy.network === "custom"
           ? " It reaches only the sites the user allowed, through a proxy (HTTPS_PROXY); other sites answer 403."
           : "";
+    const git = /unable to access '[^']*(\.gitconfig|\/git\/[^']*)': Operation not permitted/.test(text)
+      ? " git's settings file was blocked: tell the user, and don't work around it (no GIT_CONFIG_GLOBAL, no made-up user.name or user.email)."
+      : "";
     const note =
       `\n\n[Pistachio] This command ran in a sandbox: it can write only in ${where(policy)}, and of the home folder ` +
       `it sees only the project, folders the user allowed and tools' folders (keys and logins never).${network} If the sandbox blocked ` +
-      `what the task needs, say so and ask the user instead of working around it (Settings → Sandboxing & Security).`;
+      `what the task needs, say so and ask the user instead of working around it (Settings → Sandboxing & Security).${git}`;
     return { content: [...(event.content ?? []), { type: "text", text: note }] };
   });
 }

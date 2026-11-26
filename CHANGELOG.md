@@ -37,6 +37,11 @@ All notable changes to PI-gui are listed here. The format follows
 - Extensions' questions with a few answers (the gate's Allow / Always / Don't allow, and other
   extensions' choices and confirmations) are docked above the message box instead of a dialog in
   the middle of the window, with an icon on each answer. ←/→ choose, Enter answers, Esc declines.
+- In the sandbox, git always reads its own settings (`~/.gitconfig`, `~/.config/git`), whatever
+  the tool folders are, so commits are made as you instead of failing or under a made-up author.
+  Sandboxed sessions tell the model up front how git and GitHub work there (run the command; you
+  are asked), `gh auth status` is answered by the gate (the accounts and git identity, never a
+  token), and a command that ran into the sandbox gets its note even when a chain hid the failure.
 - Settings → Sandboxing & Security → Git and GitHub: what the agent may do with your logins
   without asking, each removable.
 - Dots at the left edge of the conversation, one per prompt, in Chat and Code. Hovering one shows

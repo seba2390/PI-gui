@@ -7,6 +7,7 @@
 //! (`GH_TOKEN`), without switching the active account. A repository created for an owner is
 //! offered only as accounts that are that owner or members of it.
 
+use std::fmt::Write as _;
 use std::path::Path;
 
 use super::config::{Repo, normalize_url};
@@ -127,6 +128,47 @@ pub fn token(host: &str, login: &str) -> Option<String> {
     (output.status.success() && !token.is_empty()).then_some(token)
 }
 
+/// Whether `args` asks `gh auth status`, which the gate answers itself ([`auth_status`]).
+pub fn is_auth_status(args: &[String]) -> bool {
+    let words: Vec<&str> = args
+        .iter()
+        .filter(|arg| !arg.starts_with('-'))
+        .map(String::as_str)
+        .take(2)
+        .collect();
+    words == ["auth", "status"]
+}
+
+/// The answer to `gh auth status`: which accounts are logged in to github.com (never a token),
+/// and the identity git's commits use (`user.name` and `user.email`, if set).
+pub fn auth_status(accounts: &dyn Accounts, identity: (Option<String>, Option<String>)) -> String {
+    let logins = accounts.logins("github.com");
+    let mut text = String::from("github.com\n");
+    if logins.is_empty() {
+        text.push_str("  Not logged in (the user can run `gh auth login`).\n");
+    }
+    for (index, login) in logins.iter().enumerate() {
+        let active = if index == 0 { " (active)" } else { "" };
+        let _ = writeln!(text, "  Logged in as {login}{active}");
+    }
+    if logins.len() > 1 {
+        text.push_str(
+            "  For each command the user picks the account it acts as; the active one stays.\n",
+        );
+    }
+    match identity {
+        (Some(name), Some(email)) => {
+            let _ = writeln!(text, "\nGit commits are made as {name} <{email}>.");
+        }
+        _ => text.push_str(
+            "\nGit has no user.name and user.email set: ask the user what commits should be made \
+             as; don't make one up.\n",
+        ),
+    }
+    text.push_str("Tokens are never shown here; they stay outside the sandbox.\n");
+    text
+}
+
 /// The plan for a `gh` request, `None` for help and version (run in the sandbox), or why it is
 /// refused.
 pub fn plan(request: &Request) -> Result<Option<Plan>, String> {
@@ -177,8 +219,8 @@ pub fn plan_with(request: &Request, accounts: &dyn Accounts) -> Result<Option<Pl
     let Some(class) = class_of(group, command) else {
         return Err(format!(
             "Pistachio doesn't run `gh {group} {command}` outside the sandbox. It runs reading and \
-             changing pull requests, issues, runs and releases, and creating a repository; ask the \
-             user for anything else."
+             changing pull requests, issues, runs and releases, creating a repository, and \
+             `gh auth status` (the accounts and git identity); ask the user for anything else."
         ));
     };
     let project = project_of(request);
@@ -293,8 +335,9 @@ fn repo_create(request: &Request, project: &Path, accounts: &dyn Accounts) -> Re
             || arg.starts_with("--clone=")
     }) {
         return Err(format!(
-            "Pistachio runs `gh repo create` outside the sandbox without `{option}`: create it, then \
-             `git push` (which asks the user separately)."
+            "Pistachio runs `gh repo create` outside the sandbox without `{option}`. Run it again \
+             without that option, then run `git push`: Pistachio shows the user a question for \
+             each, so don't ask them yourself first."
         ));
     }
     if let Some(source) = value_of(args, &["--source", "-s"])
@@ -441,6 +484,21 @@ mod tests {
 
     fn plan(request: &Request) -> Result<Option<Plan>, String> {
         plan_with(request, &Fake)
+    }
+
+    #[test]
+    fn auth_status_names_accounts_and_identity_but_no_token() {
+        let args = |list: &[&str]| list.iter().map(|&arg| arg.to_owned()).collect::<Vec<_>>();
+        assert!(is_auth_status(&args(&["auth", "status"])));
+        assert!(is_auth_status(&args(&["auth", "status", "--show-token"])));
+        assert!(!is_auth_status(&args(&["auth", "token"])));
+        assert!(!is_auth_status(&args(&["pr", "status"])));
+        let text = auth_status(&Fake, (Some("Ana".into()), Some("ana@example.com".into())));
+        assert!(text.contains("Logged in as me (active)"), "{text}");
+        assert!(text.contains("Logged in as me-at-work\n"), "{text}");
+        assert!(text.contains("Ana <ana@example.com>"), "{text}");
+        let text = auth_status(&Single, (None, None));
+        assert!(text.contains("don't make one up"), "{text}");
     }
 
     fn request(cwd: &Path, args: &[&str]) -> Request {

@@ -148,10 +148,17 @@ pub enum Decision {
     Gate { plan: Box<Plan>, approved: bool },
     /// Needs the user's keys but can't be done safely; why, for the model and the user.
     Refused { reason: String },
+    /// Answered by the gate itself, without asking (`gh auth status`): what to print.
+    Answer { text: String },
 }
 
 /// What `request` needs, with `settings`' rules.
 pub fn decide(request: &Request, settings: &Settings, home: Option<&Path>) -> Decision {
+    if request.tool == "gh" && gh::is_auth_status(&request.args) {
+        return Decision::Answer {
+            text: gh::auth_status(&gh::Installed, git_identity(request)),
+        };
+    }
     let planned = match request.tool.as_str() {
         "git" => git::plan(request),
         "gh" => gh::plan(request),
@@ -173,6 +180,22 @@ pub fn decide(request: &Request, settings: &Settings, home: Option<&Path>) -> De
         }
         Err(reason) => Decision::Refused { reason },
     }
+}
+
+/// The `user.name` and `user.email` git uses in the request's folder (the session's folder when it
+/// ran elsewhere), read outside the sandbox.
+fn git_identity(request: &Request) -> (Option<String>, Option<String>) {
+    let project = project_of(request);
+    let folder = if inside(&request.cwd, &project) {
+        request.cwd.clone()
+    } else {
+        project
+    };
+    let hooks = hooks_dir();
+    let get = |key: &str| {
+        git_output(&folder, &["config", "--get", key], &hooks).filter(|value| !value.is_empty())
+    };
+    (get("user.name"), get("user.email"))
 }
 
 /// The project a request belongs to: the session's folder, else where it ran.

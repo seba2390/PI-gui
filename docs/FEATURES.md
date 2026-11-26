@@ -323,7 +323,10 @@ Linux; Windows is planned, #47).
   this project** (that project, that remote, that kind of thing: fetch, push, push to the default
   branch, force push, sign, read or change on GitHub) or **Don't allow**. Your keys never enter the
   sandbox; the command's output comes back to the agent. What you allowed is listed in
-  Settings → Sandboxing & Security → Git and GitHub, each removable.
+  Settings → Sandboxing & Security → Git and GitHub, each removable. git's own settings
+  (`~/.gitconfig`, `~/.config/git`) are always readable in the sandbox, so commits are made as you.
+  Sandboxed sessions tell the model how this works before it starts, and `gh auth status` is
+  answered by the gate: the accounts logged in and the git identity, never a token.
 - **Allowed websites:** None, All, or Custom (the default): only the websites listed, which start
   as where code and packages come from (GitHub, npm, PyPI, crates.io, Go, RubyGems, Maven). A site is allowed as a
   whole (HTTPS doesn't show pages): `github.com`, or `github.com/*` with its subdomains. The field

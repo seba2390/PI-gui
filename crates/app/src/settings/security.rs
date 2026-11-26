@@ -577,7 +577,7 @@ fn tool_folders(cx: &mut App) -> AnyElement {
         "sandbox-tools",
         "Tool folders",
         "Found on this computer. Caches can be written, so builds and installs work; programs and \
-         settings only read.",
+         settings only read. git's settings (~/.gitconfig, ~/.config/git) are always readable.",
         rows,
         "No tool folders",
         add_folders(Folders::Tools, "tools-add"),

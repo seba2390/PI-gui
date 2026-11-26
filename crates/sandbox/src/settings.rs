@@ -132,12 +132,13 @@ pub const ALWAYS_HIDDEN: &[&str] = &[
     "~/Library/Keychains",
 ];
 
+/// git's own settings: always readable (also with the tool folders off or changed), since git
+/// stops on a settings file it can't read, and without them commits get a made-up author.
+pub const GIT_SETTINGS: &[&str] = &["~/.gitconfig", "~/.gitignore_global", "~/.config/git"];
+
 /// Where common tools keep their programs and settings in the home folder: readable while
 /// [`Settings::tool_folders`] is on, so that commands find their compilers and runtimes.
 pub const TOOL_PROGRAMS: &[&str] = &[
-    "~/.gitconfig",
-    "~/.gitignore_global",
-    "~/.config/git",
     "~/.nvm",
     "~/.volta",
     "~/.fnm",
@@ -340,7 +341,6 @@ mod tests {
             shown,
             [
                 ("~/.cargo", true),
-                ("~/.gitconfig", false),
                 ("~/.nvm", false),
                 ("~/.local", false),
                 // `~/bin`'s folder is the home folder, so it stays itself; `~` is never one.
