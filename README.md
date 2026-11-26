@@ -36,6 +36,8 @@ when idle.
 - **Web search** for chats: quick lookups or multi-step deep research.
 - **Speech to text.** Dictate with the microphone button. A model you download once (Parakeet,
   Whisper or Moonshine) transcribes on your computer, so nothing you say leaves it.
+- **A sandbox for the agent.** In Code sessions its commands can change only the project and
+  can't read your keys (Seatbelt on macOS, bubblewrap or Landlock on Linux). Settings → Security.
 - **Background sessions.** Chats keep working while you switch, plus branching, model and
   skill management.
 - **Settings and updates.** A Settings page (⌘,) for look, models, web search and SSH. When a

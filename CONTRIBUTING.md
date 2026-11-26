@@ -93,7 +93,7 @@ checks scriptable:
 - Dialogs: `add-host`, `manage-hosts`, `models`, `models-provider:<id>`, `models-server:<address>`,
   `edit-models`.
 - Skills page: `skills`, `new-skill`, `open-skill:<path>`; the Settings page: `settings`
-  (`settings-web`, `settings-speech`, `settings-names` and `settings-documents` open those pages; after `settings-web`,
+  (`settings-web`, `settings-speech`, `settings-names`, `settings-documents` and `settings-security` open those pages; after `settings-web`,
   `web-advanced` opens its advanced sections,
   `searxng-setup` asks whether to download SearXNG and `searxng-get` downloads and runs it); `type-name:<text>` plays the
   sidebar's typing animation for the open session 2.5 s after start (nothing is saved).
@@ -140,6 +140,10 @@ These tests are all `#[ignore]`d. Run them with `PISTACHIO_SSH_TEST_HOST=<alias>
 `PISTACHIO_PREVIEW_CHECK=<folder of session copies> cargo test -p pistachio preview_matches_pi --
 --ignored` runs real pi on each session file and checks that the history Pistachio previews
 from the file matches pi's (use copies: pi may migrate files it opens).
+
+`script/test-sandbox.py` runs the sandbox's extension in real pi with a scripted model, in a
+made-up home folder: commands and file tools that should be allowed or blocked (`cargo build`
+first).
 
 `script/test-deepsearch.py` runs deep search's extension in real pi, with a scripted model, search
 service and pages on this computer (`cargo build` first). It covers what no unit test can: sending

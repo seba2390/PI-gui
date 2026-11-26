@@ -16,6 +16,8 @@ crates/
                 passage ranking, checking reports, settings, and the pi extension that runs them via the app
   documents/    PDF and Office files as Markdown: the built-in reader, the parsers that can be downloaded
                 (pinned and checked), running one per document, and the pi extension for `read` in Code
+  sandbox/      the sandbox for the agent's tools in local Code sessions: settings, rules per project,
+                Seatbelt (macOS), bubblewrap and Landlock (Linux), the helper and its pi extension
   searxng/      a private SearXNG for web search: downloading it on request (pinned and checked), running it,
                 checking one at an address
   python-env/   what both download with: uv, a private Python and locked packages

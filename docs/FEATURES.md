@@ -257,6 +257,36 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
 - macOS and Linux (Wayland and X11), plus an experimental Windows build. GPU-rendered with [GPUI](https://gpui.rs) via
   [gpui-kit](https://gpui-kit.com).
 
+## Sandbox
+
+In Code sessions on this computer, the agent's commands run in a sandbox (on by default, macOS and
+Linux; Windows is planned, #47).
+
+- **What is sandboxed:** every `bash` command runs through the app's helper
+  (`pistachio --sandbox-tool run`), which starts it under **Seatbelt** on macOS, **bubblewrap** on
+  Linux, or **Landlock** where bubblewrap is missing or not allowed to run (Ubuntu's AppArmor,
+  containers). pi's file tools (`read`, `write`, `edit`, `grep`, `find`, `ls`) keep to the same
+  rules, checked by a small pi extension. pi itself, its logins and model requests, MCP servers,
+  other extensions and your own `!` commands are not sandboxed.
+- **Files:** commands can read everything except what is hidden, and change only the session's
+  folder, temporary folders, the git folder its commits need (also from a subfolder or a
+  worktree), the caches of common tools (`~/.cargo`, `~/.npm`, `~/.cache`, …; can be turned off)
+  and folders you allow.
+- **Hidden:** `~/.ssh`, `~/.aws`, `~/.azure`, `~/.config/gcloud`, `~/.gnupg`, `~/.config/gh`,
+  `~/.docker/config.json`, `~/.kube`, `~/.netrc`, `~/.git-credentials`, the macOS keychains and
+  pi's `auth.json` (always). Environment variables that hold keys and tokens (names ending in
+  `_API_KEY`, `_TOKEN`, `_SECRET`, …) are removed from commands. pi keeps them for its model
+  requests, so keys never reach the sandbox.
+- **Network:** on by default; with it off, commands can't connect to the Internet (on Linux,
+  Landlock needs Linux 6.7 for this).
+- **In a session:** a shield next to the folder in the message box ("No network" or "No sandbox"
+  when that applies); its menu runs the project without a sandbox (or with one again) and opens
+  Settings → Security. A call the sandbox blocked says so under it, with a button that allows
+  changes in the folder it tried to write.
+- Settings are `~/.pi/agent/pistachio/sandbox/settings.json`, read by every command, so changes
+  apply from the next one, also in running sessions. `script/test-sandbox.py` checks it end to end
+  with real pi and a scripted model.
+
 ## Documents
 
 Documents are read as Markdown: the ones you attach to a chat, PDF files that chats find on the web,
@@ -408,6 +438,11 @@ mouse.
   (download, use, remove).
 - **Document parsing:** what reads PDF files, and the parsers that can be downloaded (size, license,
   download, use, update, remove).
+- **Security:** the sandbox (see [Sandbox](#sandbox)): which one this computer has (with the
+  command that installs bubblewrap where it is missing), on or off, the caches of tools, more
+  writable folders, the hidden paths, the network, the projects without a sandbox, and a test of
+  what it blocks. Also which project files pi loads: pi's `defaultProjectTrust` and the saved
+  decisions in its `trust.json`, which can be removed.
 
 The app's own settings live in `~/.pi/agent/pistachio/settings.json`.
 
