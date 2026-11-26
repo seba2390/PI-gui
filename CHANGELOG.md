@@ -6,21 +6,6 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
-### Changed
-
-- Allowed websites: None is the default, and now asks instead of blocking. The first time a
-  conversation's commands reach a site (curl, pip, npm, cargo, git over HTTPS, …), a question
-  above the message box asks Allow (for that conversation), Always for this project, or Don't
-  allow; connections made at once share one question. Custom lets its listed sites through and
-  asks about others. Sites allowed always are listed under Internet, each removable. The model is
-  told how this works, so it runs the command and waits instead of looking for a way around.
-
-- The question above the message box (the gate's Allow / Always / Don't allow) is a see-through
-  pill of one line: the question, then ✕ (don't allow, Esc), ✓✓ (always, named in its tooltip)
-  and ✓ Allow. A small button on its top edge shows the details (the commits, addresses and
-  warnings); a question with something that needs care opens with them shown. The arrow keys go
-  along the answers in the order they are shown.
-
 ## [0.5.5] - 2026-11-26
 
 ### Added
@@ -38,22 +23,30 @@ All notable changes to PI-gui are listed here. The format follows
   same rules. pi itself and its model requests run as before, so keys never enter the sandbox.
   Windows is planned (#47).
 - Settings → Sandboxing & Security: the sandbox's state and settings, the tool folders and allowed
-  folders (each to read, or read and write), the allowed websites (None, All, or Custom: only the
-  websites listed, checked as you type them; Custom with GitHub and the package registries is the
-  default), and which
-  project files pi loads (its project trust default and saved decisions).
+  folders (each to read, or read and write), the allowed websites (None, the default: each site
+  is asked about; All; or Custom: the websites listed, checked as you type them, and others asked
+  about), and which project files pi loads (its project trust default and saved decisions).
 - The sandbox's gate: what needs your keys is asked about and done outside the sandbox. In Code
   sessions `git push`, `pull`, `fetch`, `clone`, `ls-remote`, submodules and git-lfs, GitHub's `gh`
   (pull requests, issues, runs, creating a repository) and signing commits with your GPG or SSH
-  key now work: a card that slides up above the message box says exactly what will happen (the commits, the branch, the remote's real
-  address, force pushes and the default branch called out) and offers Allow, Always for this
-  project or Don't allow. Your keys never enter the sandbox. Repositories whose git settings
+  key now work: a question above the message box says exactly what will happen (the commits, the
+  branch, the remote's real address, force pushes and the default branch called out) and offers
+  Allow, Always for this project or Don't allow. Your keys never enter the sandbox. Repositories whose git settings
   could start a program are refused, and hooks are off. With several GitHub accounts, you pick
   which one each command acts as (a company repository only as a member of that company), and
   "Always" remembers it.
-- Extensions' questions with a few answers (the gate's Allow / Always / Don't allow, and other
-  extensions' choices and confirmations) are docked above the message box instead of a dialog in
-  the middle of the window, with an icon on each answer. ←/→ choose, Enter answers, Esc declines.
+- Websites are asked about: with None (the default), the first time a conversation's commands
+  reach a site (curl, pip, npm, cargo, git over HTTPS, …), a question asks Allow (for that
+  conversation), Always for this project, or Don't allow; connections made at once share one
+  question. Custom lets its listed sites through and asks about the others. Sites allowed always
+  are listed under Internet, each removable. The model is told how this works, so it runs the
+  command and waits instead of looking for a way around.
+- Extensions' questions with a few answers (the gate's and the websites' Allow / Always / Don't
+  allow, and other extensions' choices and confirmations) are a see-through pill of one line above
+  the message box instead of a dialog in the middle of the window: the question, then ✕ (don't
+  allow, Esc), ✓✓ (always) and ✓ Allow. A small button on its top edge shows the details (the
+  commits, addresses and warnings); a question with something that needs care opens with them
+  shown. ←/→ choose, Enter answers.
 - In the sandbox, git always reads its own settings (`~/.gitconfig`, `~/.config/git`), whatever
   the tool folders are, so commits are made as you instead of failing or under a made-up author.
   Sandboxed sessions tell the model up front how git and GitHub work there (run the command; you
@@ -84,6 +77,9 @@ All notable changes to PI-gui are listed here. The format follows
 
 ### Fixed
 
+- The models relay no longer sends error details to the other computer: errors could carry a
+  stack trace and this computer's paths (code scanning alert 6). A failed connection says only its
+  code (ECONNREFUSED, …); the rest goes to the relay's log here.
 - A message you send is shown exactly as typed: "log(2.6778)" was drawn as a formula, since the
   escapes that kept it literal looked like math delimiters.
 
