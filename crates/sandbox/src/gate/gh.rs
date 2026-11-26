@@ -30,7 +30,7 @@ fn class_of(group: &str, command: &str) -> Option<Class> {
             "pr",
             "create" | "comment" | "edit" | "ready" | "close" | "reopen" | "merge" | "review"
         ) | ("issue", "create" | "comment" | "edit" | "close" | "reopen")
-            | ("repo", "create")
+            | ("repo", "create" | "delete")
             | ("run", "rerun" | "cancel")
             | ("workflow", "run")
     );
@@ -219,7 +219,8 @@ pub fn plan_with(request: &Request, accounts: &dyn Accounts) -> Result<Option<Pl
     let Some(class) = class_of(group, command) else {
         return Err(format!(
             "Pistachio doesn't run `gh {group} {command}` outside the sandbox. It runs reading and \
-             changing pull requests, issues, runs and releases, creating a repository, and \
+             changing pull requests, issues, runs and releases, creating or deleting a repository, \
+             and \
              `gh auth status` (the accounts and git identity); ask the user for anything else."
         ));
     };
@@ -243,6 +244,9 @@ pub fn plan_with(request: &Request, accounts: &dyn Accounts) -> Result<Option<Pl
                 found.join(", ")
             ));
         }
+    }
+    if (group, command) == ("repo", "delete") {
+        return repo_delete(request, repo.as_ref(), accounts).map(Some);
     }
     let target = match repo_option {
         Some(name) if name.matches('/').count() >= 2 => name.to_lowercase(),
@@ -419,6 +423,70 @@ fn repo_create(request: &Request, project: &Path, accounts: &dyn Accounts) -> Re
     Ok(plan)
 }
 
+/// `gh repo delete`: asked about each time (never "always"), with the repository named in full;
+/// the question is the confirmation, so `--yes` is added.
+fn repo_delete(
+    request: &Request,
+    repo: Option<&Repo>,
+    accounts: &dyn Accounts,
+) -> Result<Plan, String> {
+    let rest: Vec<&String> = request
+        .args
+        .iter()
+        .skip_while(|arg| *arg != "delete")
+        .skip(1)
+        .collect();
+    if let Some(option) = rest
+        .iter()
+        .find(|arg| arg.starts_with('-') && arg.as_str() != "--yes")
+    {
+        return Err(format!(
+            "Pistachio runs `gh repo delete` outside the sandbox without `{option}`."
+        ));
+    }
+    let target = match rest.iter().find(|arg| !arg.starts_with('-')) {
+        Some(name) if name.matches('/').count() >= 2 => name.to_lowercase(),
+        Some(name) if name.contains('/') => format!("github.com/{}", name.to_lowercase()),
+        Some(name) => {
+            return Err(format!(
+                "Name the repository to delete in full: `gh repo delete <owner>/{name}`."
+            ));
+        }
+        None => repo
+            .and_then(|repo| repo.get("remote", Some("origin"), "url"))
+            .map(|url| normalize_url(&url))
+            .ok_or_else(|| {
+                "Name the repository to delete: `gh repo delete <owner>/<name>`.".to_owned()
+            })?,
+    };
+    let (host, name) = target.split_once('/').unwrap_or(("github.com", &target));
+    let shown = if host == "github.com" {
+        name.to_owned()
+    } else {
+        target.clone()
+    };
+    let mut plan = gh_plan(
+        request,
+        format!("Delete the repository {target}"),
+        Class::GhWrite,
+        target.clone(),
+    );
+    plan.rememberable = false;
+    plan.args = ["repo", "delete", shown.as_str(), "--yes"]
+        .map(str::to_owned)
+        .to_vec();
+    plan.warnings.push(
+        "Deletes it on GitHub for good, with its issues, pull requests and releases. This can't \
+         be undone."
+            .to_owned(),
+    );
+    plan.details
+        .push("The files in this folder stay as they are.".to_owned());
+    plan.accounts = logged_in(accounts, host)?;
+    name_the_account(&mut plan);
+    Ok(plan)
+}
+
 /// A file `gh` would read and send: only one in the session's folder.
 fn check_file(value: Option<&str>, request: &Request) -> Result<(), String> {
     let project = project_of(request);
@@ -484,6 +552,26 @@ mod tests {
 
     fn plan(request: &Request) -> Result<Option<Plan>, String> {
         plan_with(request, &Fake)
+    }
+
+    #[test]
+    fn deleting_a_repository_is_asked_each_time_and_named_in_full() {
+        let (_dir, work) = work();
+        let deleted = plan(&request(&work, &["repo", "delete", "A/App"]))
+            .expect("allowed")
+            .expect("gated");
+        assert_eq!(deleted.target, "github.com/a/app");
+        assert_eq!(deleted.class, Class::GhWrite);
+        assert!(!deleted.rememberable);
+        assert_eq!(deleted.args, ["repo", "delete", "a/app", "--yes"]);
+        assert!(deleted.warnings[0].contains("can't be undone"));
+        // This folder's repository, from its remote.
+        let here = plan(&request(&work, &["repo", "delete", "--yes"]))
+            .expect("allowed")
+            .expect("gated");
+        assert_eq!(here.target, "github.com/a/app");
+        assert!(plan(&request(&work, &["repo", "delete", "app"])).is_err());
+        assert!(plan(&request(&work, &["repo", "delete", "a/app", "--force"])).is_err());
     }
 
     #[test]

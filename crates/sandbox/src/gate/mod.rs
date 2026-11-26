@@ -67,7 +67,7 @@ pub enum Class {
     /// Reading from GitHub: pull requests, issues, runs.
     GhRead,
     /// Changing things on GitHub: opening, commenting on, closing or merging pull requests and
-    /// issues, creating repositories.
+    /// issues, creating and deleting repositories (those two never without asking).
     GhWrite,
 }
 

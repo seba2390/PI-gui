@@ -42,6 +42,9 @@ All notable changes to PI-gui are listed here. The format follows
   Sandboxed sessions tell the model up front how git and GitHub work there (run the command; you
   are asked), `gh auth status` is answered by the gate (the accounts and git identity, never a
   token), and a command that ran into the sandbox gets its note even when a chain hid the failure.
+- The gate runs `gh repo delete` too: asked every time (never "always"), with the repository named
+  in full and a warning that it can't be undone. GitHub needs the `delete_repo` permission for it
+  (`gh auth refresh -h github.com -s delete_repo`).
 - Settings → Sandboxing & Security → Git and GitHub: what the agent may do with your logins
   without asking, each removable.
 - Dots at the left edge of the conversation, one per prompt, in Chat and Code. Hovering one shows

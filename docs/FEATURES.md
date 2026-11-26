@@ -306,8 +306,9 @@ Linux; Windows is planned, #47).
     `ls-remote`, `submodule update` (each submodule's address is listed) and git-lfs's `fetch`,
     `pull` and `push`;
   - `gh` for a repository: reading pull requests, issues, runs and releases; opening, commenting
-    on, closing or merging pull requests and issues; creating a repository. `gh api`, logins and
-    secrets are not run. With several GitHub accounts (a personal one and a company one), the
+    on, closing or merging pull requests and issues; creating a repository; deleting one (asked
+    every time, with a warning that it can't be undone; GitHub needs the `delete_repo`
+    permission). `gh api`, logins and secrets are not run. With several GitHub accounts (a personal one and a company one), the
     dialog offers each: the command runs with that account's token only, and your active account
     stays as it is. A repository for an owner (`gh repo create acme/tool`) is offered only as
     accounts that are that owner or members of it, else refused. "Always" remembers the account;
