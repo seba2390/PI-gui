@@ -10,6 +10,7 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::component::input::{Input, InputState, Textarea, TextareaState};
 use gpui_kit::component::{ActiveTheme as _, WindowExt as _, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use pi_rpc::protocol::{ExtensionUiAnswer, ExtensionUiMethod, ExtensionUiRequest};
 
@@ -169,10 +170,27 @@ fn open_select(
         })
     });
     let focus = list.focus_handle(cx);
-    open_form_dialog(Some(focus), window, cx, move |dialog, _, _| {
+    // A question over several lines: the first is the title, the rest what it is about (the
+    // sandbox's gate lists the commits and what needs care that way).
+    let (heading, about) = match title.split_once('\n') {
+        Some((heading, about)) => (heading.to_owned(), Some(about.to_owned())),
+        None => (title, None),
+    };
+    open_form_dialog(Some(focus), window, cx, move |dialog, _, cx| {
         let on_close = responder.clone();
+        let muted = cx.theme().muted_foreground;
         dialog
-            .title(title.clone())
+            .title(heading.clone())
+            .when_some(about.clone(), |this, about| {
+                this.child(
+                    v_flex()
+                        .gap_0p5()
+                        .pb_2()
+                        .text_sm()
+                        .text_color(muted)
+                        .children(about.lines().map(|line| div().child(line.to_owned()))),
+                )
+            })
             .child(list.clone())
             .on_close(move |_, _, cx| on_close.send(&ExtensionUiAnswer::Cancelled, cx))
     });

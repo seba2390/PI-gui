@@ -90,6 +90,12 @@ pub struct Settings {
     pub sites: Vec<String>,
     /// Project folders whose sessions run without the sandbox (also their subfolders).
     pub unsandboxed: Vec<String>,
+    /// What the gate may do with the user's keys without asking: per project and remote
+    /// ([`crate::gate`]).
+    pub gate: Vec<crate::gate::Rule>,
+    /// Files with secrets in projects (`.env`, private keys) can't be read by commands and file
+    /// tools ([`crate::secret_files`]).
+    pub secret_files: bool,
 }
 
 impl Default for Settings {
@@ -102,6 +108,8 @@ impl Default for Settings {
             allowed: Vec::new(),
             sites: DEFAULT_SITES.iter().map(|&site| site.to_owned()).collect(),
             unsandboxed: Vec::new(),
+            gate: Vec::new(),
+            secret_files: true,
         }
     }
 }
@@ -291,6 +299,8 @@ mod tests {
             allowed: vec![Allowed::new("~/work/shared", true)],
             sites: vec!["github.com/*".into()],
             unsandboxed: vec!["/srv/app".into()],
+            gate: Vec::new(),
+            secret_files: false,
         };
         settings.save(dir.path()).expect("save");
         assert_eq!(Settings::load(dir.path()), settings);

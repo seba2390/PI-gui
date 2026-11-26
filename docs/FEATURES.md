@@ -299,6 +299,33 @@ Linux; Windows is planned, #47).
   `auth.json`. Environment variables that hold keys and tokens (names ending in `_API_KEY`,
   `_TOKEN`, `_SECRET`, …) are removed from commands. pi keeps them for its model requests, so keys
   never reach the sandbox.
+- **Files with secrets in projects** (on by default): `.env` files and private keys (`*.pem`,
+  `*.key`, `*.p12`, `id_ed25519`, `credentials.json`, …) in the project and the allowed folders
+  can't be read by commands or by `read` and `edit`, and `grep` leaves out lines from them;
+  examples and templates (`.env.example`, `.sample`, `.template`) can. On macOS Seatbelt hides them
+  by name, also ones made later; bubblewrap hides those there when a command starts; with Landlock
+  only the file tools keep to it. Settings → Sandboxing & Security → Keys and secrets.
+- **The gate: what needs your keys.** In the sandbox, `git`, `gh`, `gpg` and `ssh-keygen` are small
+  wrappers. Local git (commit, branches, merge, rebase, log, …) runs in the sandbox as usual. What
+  needs your logins goes to a socket the sandbox extension listens on, outside the sandbox:
+  - git's `clone`, `fetch`, `pull`, `push` (tags, deletes and force pushes are pointed out),
+    `ls-remote`, `submodule update` (each submodule's address is listed) and git-lfs's `fetch`,
+    `pull` and `push`;
+  - `gh` for a repository: reading pull requests, issues, runs and releases; opening, commenting
+    on, closing or merging pull requests and issues; creating a repository. `gh api`, logins and
+    secrets are not run;
+  - signing a commit or tag with your GPG or SSH key (git's own signing call, in git's namespace).
+
+  The gate reads the request itself: only these commands and a list of their options, only in the
+  session's folder, only from remote servers (no local folders or helper programs as addresses),
+  and only in repositories whose `.git/config` starts no program (`core.sshCommand`,
+  `credential.helper`, filters, `url.*.insteadOf`, …; those it names and refuses). It runs git
+  with hooks off. You are asked in a dialog that says exactly what will happen (the commits, the
+  branch, the remote's real address, a force push or the default branch): **Allow**, **Always for
+  this project** (that project, that remote, that kind of thing: fetch, push, push to the default
+  branch, force push, sign, read or change on GitHub) or **Don't allow**. Your keys never enter the
+  sandbox; the command's output comes back to the agent. What you allowed is listed under Allowed
+  with your keys, each removable.
 - **Allowed websites:** None, All, or Custom (the default): only the websites listed, which start
   as where code and packages come from (GitHub, npm, PyPI, crates.io, Go, RubyGems, Maven). A site is allowed as a
   whole (HTTPS doesn't show pages): `github.com`, or `github.com/*` with its subdomains. The field
@@ -472,8 +499,10 @@ the Sandboxing & Security page light up under the pointer and scroll by themselv
   download, use, update, remove).
 - **Sandboxing & Security:** the sandbox (see [Sandbox](#sandbox)): which one this computer has (with the
   command that installs bubblewrap where it is missing), on or off, the tools' folders, the
-  allowed folders (read-only or to change), and the network (None, All, or Custom with the allowed
-  sites). Also which project files pi loads: pi's `defaultProjectTrust` and the saved
+  allowed folders (read-only or to change), the network (None, All, or Custom with the allowed
+  sites), and keys and secrets: hiding files with secrets in projects, what the agent may do with
+  your git and GitHub logins without asking, what is always hidden and which environment
+  variables commands don't get. Also which project files pi loads: pi's `defaultProjectTrust` and the saved
   decisions in its `trust.json`, which can be removed.
 
 The app's own settings live in `~/.pi/agent/pistachio/settings.json`.

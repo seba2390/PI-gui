@@ -15,12 +15,14 @@
 pub mod backend;
 mod bwrap;
 pub mod cli;
+pub mod gate;
 pub mod landlock;
 pub mod note;
 pub mod paths;
 pub mod policy;
 pub mod proxy;
 pub mod seatbelt;
+pub mod secret_files;
 pub mod secrets;
 pub mod settings;
 pub mod sites;

@@ -49,6 +49,23 @@ pub fn profile(policy: &Policy) -> String {
         }
         out.push_str(")\n");
     }
+    // Files with secrets in the project and allowed folders: not read, whatever their folder
+    // (also ones made later). Examples and templates stay readable.
+    if !policy.secret_roots.is_empty() {
+        let names = crate::secret_files::names_regex();
+        let examples: Vec<String> = crate::secret_files::EXAMPLES
+            .iter()
+            .map(|ending| crate::secret_files::escape(ending))
+            .collect();
+        for root in &policy.secret_roots {
+            let root = crate::secret_files::escape(&root.to_string_lossy());
+            let _ = writeln!(
+                out,
+                "(deny file-read-data\n  (require-all\n    (regex #\"^{root}/(.*/)?{names}$\")\n    (require-not (regex #\"({})$\"))))",
+                examples.join("|")
+            );
+        }
+    }
     if policy.network != Network::On {
         // Local (Unix) sockets stay allowed: system services answer on them.
         out.push_str("(deny network-outbound (remote ip \"*:*\"))\n");
@@ -93,6 +110,7 @@ mod tests {
             writable: vec![PathBuf::from("/Users/ana/code/app"), PathBuf::from("/tmp")],
             hidden: vec![PathBuf::from("/Users/ana/.ssh"), PathBuf::from("/x/\"q\"")],
             network,
+            secret_roots: Vec::new(),
             proxy: None,
         }
     }
@@ -167,6 +185,7 @@ mod tests {
             writable: vec![project.clone()],
             hidden: vec![keys.clone()],
             network: Network::Off,
+            secret_roots: Vec::new(),
             proxy: None,
         };
         let sh = |script: String| {

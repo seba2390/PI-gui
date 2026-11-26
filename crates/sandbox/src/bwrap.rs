@@ -76,6 +76,10 @@ pub fn args(policy: &Policy, extra: &[(PathBuf, bool)]) -> Vec<OsString> {
             push(&[&"--ro-bind", &"/dev/null", hidden]);
         }
     }
+    // Files with secrets there now (bubblewrap can't hide by name).
+    for file in crate::secret_files::find(&policy.secret_roots, 500) {
+        push(&[&"--ro-bind", &"/dev/null", &file]);
+    }
     for (path, write) in extra.iter().filter(|(path, _)| path.exists()) {
         push(&[if *write { &"--bind" } else { &"--ro-bind" }, path, path]);
     }
@@ -150,6 +154,7 @@ mod tests {
             ],
             hidden: vec![ssh.clone(), token.clone()],
             network: Network::Off,
+            secret_roots: Vec::new(),
             proxy: None,
         };
         let args: Vec<String> = args(&policy, &[])

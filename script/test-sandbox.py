@@ -5,7 +5,8 @@ this computer, in a made-up home folder. Nothing leaves it.
   cargo build && script/test-sandbox.py
 
 Needs pi on PATH. The model calls tools that the sandbox should allow or block, and the test
-checks what each call returned.
+checks what each call returned. The gate's steps need the network (they list a public GitHub
+repository's branches outside the sandbox); the test answers the gate's questions itself.
 """
 import http.server
 import json
@@ -42,8 +43,28 @@ def steps(home, project):
         # The home folder's names can be listed on macOS (getcwd needs it), not what is in them.
         ("bash", {"command": f"ls {home}/.ssh"}, False, ""),
         ("bash", {"command": "git --version && pwd"}, True, "git version"),
+        # Files with secrets in the project: not for commands or file tools; examples are.
+        ("bash", {"command": "printf 'TOKEN=abc123\\n' > .env && printf 'TOKEN=\\n' > .env.example && cat .env"}, False, ""),
+        ("bash", {"command": "cat .env.example"}, True, "TOKEN="),
+        ("read", {"path": ".env"}, False, "secrets"),
+        ("grep", {"pattern": "TOKEN", "path": "."}, True, ".env.example"),
         ("ls", {"path": "."}, True, "inside.txt"),
+        # The gate: git's local work stays in the sandbox; what needs the network or keys is
+        # asked about (the answers are in ANSWERS, in order) and done outside it.
+        ("bash", {"command": "git init -q -b main && git -c user.name=a -c user.email=a@b commit -q --allow-empty -m one && git log --format=%s"}, True, "one"),
+        ("bash", {"command": f"git ls-remote --heads {PUBLIC}"}, True, "refs/heads/"),
+        ("bash", {"command": f"git ls-remote --heads {PUBLIC}"}, False, "didn't allow"),
+        ("bash", {"command": f"git ls-remote --heads {PUBLIC}"}, True, "refs/heads/"),
+        # Remembered: not asked again.
+        ("bash", {"command": f"git ls-remote --heads {PUBLIC}"}, True, "refs/heads/"),
+        ("bash", {"command": "git push --receive-pack=evil origin main"}, False, "Pistachio"),
+        ("bash", {"command": f"git config core.fsmonitor evil && git fetch {PUBLIC}"}, False, "core.fsmonitor"),
     ]
+
+
+PUBLIC = "https://github.com/octocat/Hello-World.git"
+# The answers to the gate's questions, in order.
+ANSWERS = ["Allow", "Don't allow", "Always for this project"]
 
 
 class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
@@ -123,11 +144,18 @@ def main():
     pi.stdin.flush()
     results = []
     failed = 0
+    asked = 0
     try:
         while True:
             event = events.get(timeout=60)
             if event["type"] == "extension_error":
                 raise AssertionError(f"extension error: {event.get('error')}")
+            if event["type"] == "extension_ui_request" and event.get("method") == "select":
+                answer = ANSWERS[asked] if asked < len(ANSWERS) else "Don't allow"
+                asked += 1
+                print(f"      asked: {event['title'].splitlines()[0]} → {answer}")
+                pi.stdin.write(json.dumps({"type": "extension_ui_response", "id": event["id"], "value": answer}) + "\n")
+                pi.stdin.flush()
             if event["type"] == "tool_execution_end":
                 result = event.get("result") or {}
                 text = "\n".join(part.get("text", "") for part in result.get("content", []))
@@ -142,6 +170,9 @@ def main():
         failed += not good
         line = text.strip().splitlines()[0] if text.strip() else ""
         print(f"{'ok  ' if good else 'FAIL'}  {name:5} {json.dumps(args)[:70]:72} → {line[:90]}")
+    if asked != len(ANSWERS):
+        failed += 1
+        print(f"FAIL  the gate asked {asked} times, not {len(ANSWERS)}")
     if len(results) != len(plan["steps"]):
         failed += 1
         print(f"FAIL  {len(results)} results for {len(plan['steps'])} calls")

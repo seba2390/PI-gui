@@ -7,6 +7,10 @@
 //!   extension checks the file tools' paths against them.
 //! - `status` checks again which sandbox works here and prints it ([`Status`]).
 //! - `proxy` runs the proxy of a limited network by itself (the app runs it otherwise).
+//! - `gate decide|allow|run` (JSON on stdin): what the gate does for a wrapper's request, saving
+//!   "always for this project", and doing it outside the sandbox ([`crate::gate`]). The
+//!   extension runs these; they are never run in the sandbox.
+//! - `shim <tool> <args…>`: a wrapper in the sandbox ([`crate::gate::shim`]).
 //!
 //! The settings come from `$PISTACHIO_SANDBOX_DIR` (see [`crate::default_dir`]).
 
@@ -42,6 +46,14 @@ pub struct PolicyReply {
     /// Hidden wherever they are.
     pub hidden: Vec<PathBuf>,
     pub network: Network,
+    /// Where files with secrets can't be read ([`crate::secret_files`]).
+    #[serde(default)]
+    pub secret_roots: Vec<PathBuf>,
+    /// Those files' names (globs), and the endings of examples that stay readable.
+    #[serde(default)]
+    pub secret_names: Vec<String>,
+    #[serde(default)]
+    pub secret_examples: Vec<String>,
 }
 
 /// Runs the helper when the process was started with [`FLAG`], returning its exit code.
@@ -60,6 +72,12 @@ pub fn run_if_requested() -> Option<i32> {
         Some("status") => print_json(&backend::detect(&dir, &exe)),
         Some(LANDLOCK_PROBE) => landlock_probe(),
         Some(BRIDGE) => bridge(&rest),
+        Some("gate") => gate(&dir, &rest),
+        Some("shim") => {
+            let mut words = rest.iter().map(|arg| arg.to_string_lossy().into_owned());
+            let tool = words.next().unwrap_or_default();
+            crate::gate::shim::run(&tool, words.collect(), &dir)
+        }
         Some("proxy") => match crate::proxy::start(&dir) {
             // The app runs it; this runs it alone, to try it.
             Ok(endpoint) => {
@@ -121,6 +139,15 @@ pub fn policy_reply(dir: &Path, exe: &Path, cwd: &Path) -> PolicyReply {
             writable: policy.writable,
             hidden: policy.hidden,
             network: policy.network,
+            secret_roots: policy.secret_roots,
+            secret_names: crate::secret_files::NAMES
+                .iter()
+                .map(|&name| name.to_owned())
+                .collect(),
+            secret_examples: crate::secret_files::EXAMPLES
+                .iter()
+                .map(|&name| name.to_owned())
+                .collect(),
         },
         None => PolicyReply {
             sandboxed: false,
@@ -132,6 +159,9 @@ pub fn policy_reply(dir: &Path, exe: &Path, cwd: &Path) -> PolicyReply {
             writable: Vec::new(),
             hidden: Vec::new(),
             network: settings.network,
+            secret_roots: Vec::new(),
+            secret_names: Vec::new(),
+            secret_examples: Vec::new(),
         },
     }
 }
@@ -169,9 +199,42 @@ fn run(dir: &Path, exe: &Path, args: &[OsString]) -> i32 {
             None => policy.network = Network::Off,
         }
     }
+    // The gate's wrappers (`git`, `gh`, …) first on `$PATH`, when the extension listens for them.
+    let mut extra: Vec<(PathBuf, bool)> = Vec::new();
+    let mut wrappers = None;
+    if let (Some(policy), Some(socket)) = (
+        policy.as_mut(),
+        std::env::var_os(crate::gate::shim::SOCKET_ENV).map(PathBuf::from),
+    ) {
+        match crate::gate::shim::install(dir, exe) {
+            Ok(bin) => {
+                let socket_dir = socket.parent().map_or_default(Path::to_path_buf);
+                for path in [bin.clone(), exe.to_path_buf(), socket_dir] {
+                    policy.readable.push(crate::paths::resolve(&path));
+                }
+                extra.extend([
+                    (socket, true),
+                    (bin.clone(), false),
+                    (exe.to_path_buf(), false),
+                ]);
+                wrappers = Some(bin);
+            }
+            Err(error) => {
+                eprintln!("Pistachio's sandbox: git's wrappers could not be written: {error}");
+            }
+        }
+    }
     let mut command = match &policy {
         None => plain(program, program_args),
-        Some(policy) => match sandboxed(policy, proxy.as_ref(), dir, exe, program, program_args) {
+        Some(policy) => match sandboxed(
+            policy,
+            proxy.as_ref(),
+            &extra,
+            dir,
+            exe,
+            program,
+            program_args,
+        ) {
             Ok(command) => command,
             Err(error) => {
                 eprintln!("Pistachio's sandbox: {error}");
@@ -190,6 +253,13 @@ fn run(dir: &Path, exe: &Path, args: &[OsString]) -> i32 {
     if let Some(endpoint) = &proxy {
         command.envs(endpoint.env());
     }
+    if let Some(bin) = wrappers {
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let joined = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(&path)));
+        if let Ok(joined) = joined {
+            command.env("PATH", joined);
+        }
+    }
     exec(command, program)
 }
 
@@ -204,6 +274,7 @@ fn plain(program: &OsString, args: &[OsString]) -> Command {
 fn sandboxed(
     policy: &Policy,
     proxy: Option<&crate::proxy::Endpoint>,
+    extra: &[(PathBuf, bool)],
     dir: &Path,
     exe: &Path,
     program: &OsString,
@@ -236,9 +307,10 @@ fn sandboxed(
             };
             match bridge {
                 Some((socket, port)) => {
-                    let extra = [(socket.clone(), true), (exe.to_path_buf(), false)];
+                    let mut mounts = vec![(socket.clone(), true), (exe.to_path_buf(), false)];
+                    mounts.extend(extra.iter().cloned());
                     command
-                        .args(crate::bwrap::args(policy, &extra))
+                        .args(crate::bwrap::args(policy, &mounts))
                         .arg(exe)
                         .args([FLAG, BRIDGE])
                         .arg(&socket)
@@ -249,7 +321,7 @@ fn sandboxed(
                 }
                 None => {
                     command
-                        .args(crate::bwrap::args(policy, &[]))
+                        .args(crate::bwrap::args(policy, extra))
                         .arg(program)
                         .args(args);
                 }
@@ -293,6 +365,82 @@ fn exec(mut command: Command, program: &OsString) -> i32 {
     }
 }
 
+/// `gate decide|allow|run`, with JSON on stdin (see [`crate::gate`]).
+fn gate(dir: &Path, args: &[OsString]) -> i32 {
+    use std::io::Read as _;
+    let mut input = String::new();
+    let _ = std::io::stdin().read_to_string(&mut input);
+    let home = crate::paths::home();
+    match args.first().and_then(|arg| arg.to_str()) {
+        Some("decide") => {
+            let Ok(request) = serde_json::from_str::<crate::gate::Request>(&input) else {
+                eprintln!("{FLAG} gate decide: not a request");
+                return 2;
+            };
+            let settings = Settings::load(dir);
+            print_json(&crate::gate::decide(&request, &settings, home.as_deref()))
+        }
+        Some("allow") => {
+            #[derive(Deserialize)]
+            struct Allow {
+                project: PathBuf,
+                target: String,
+                class: crate::gate::Class,
+            }
+            let Ok(allow) = serde_json::from_str::<Allow>(&input) else {
+                eprintln!("{FLAG} gate allow: not a rule");
+                return 2;
+            };
+            let mut settings = Settings::load(dir);
+            crate::gate::allow(&mut settings, &allow.project, &allow.target, allow.class);
+            match settings.save(dir) {
+                Ok(()) => 0,
+                Err(error) => {
+                    eprintln!("could not save the sandbox's settings: {error}");
+                    1
+                }
+            }
+        }
+        Some("run") => {
+            let Ok(request) = serde_json::from_str::<crate::gate::Request>(&input) else {
+                eprintln!("{FLAG} gate run: not a request");
+                return 2;
+            };
+            // Read again here: what runs is what the gate itself makes of the request.
+            let settings = Settings::load(dir);
+            let crate::gate::Decision::Gate { plan, .. } =
+                crate::gate::decide(&request, &settings, home.as_deref())
+            else {
+                eprintln!("[Pistachio] This isn't something the gate runs.");
+                return 2;
+            };
+            let mut command = crate::gate::command(&plan, &crate::gate::hooks_dir());
+            match &plan.stdin {
+                None => exec(command, &OsString::from(&plan.program)),
+                Some(text) => {
+                    use std::io::Write as _;
+                    command.stdin(std::process::Stdio::piped());
+                    let mut child = match command.spawn() {
+                        Ok(child) => child,
+                        Err(error) => {
+                            eprintln!("{}: {error}", plan.program);
+                            return 127;
+                        }
+                    };
+                    if let Some(mut stdin) = child.stdin.take() {
+                        let _ = stdin.write_all(text.as_bytes());
+                    }
+                    child.wait().map_or(1, |status| status.code().unwrap_or(1))
+                }
+            }
+        }
+        _ => {
+            eprintln!("usage: {FLAG} gate decide|allow|run");
+            2
+        }
+    }
+}
+
 /// Applies Landlock to this process with a policy that hides nothing and blocks the network,
 /// and says what was enforced: `{"network": bool}` or `{"error": …}`.
 fn landlock_probe() -> i32 {
@@ -305,6 +453,7 @@ fn landlock_probe() -> i32 {
             writable: vec![std::env::temp_dir()],
             hidden: Vec::new(),
             network: Network::Off,
+            secret_roots: Vec::new(),
             proxy: None,
         };
         match crate::landlock::apply(&probe) {

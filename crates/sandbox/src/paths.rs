@@ -18,6 +18,15 @@ pub fn expand(path: &str, home: Option<&Path>) -> PathBuf {
     }
 }
 
+/// `path` with the home folder written as `~` (for settings people read).
+pub fn tilde(path: &Path) -> String {
+    match home().and_then(|home| path.strip_prefix(home).ok().map(Path::to_path_buf)) {
+        Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
+        Some(rest) => format!("~/{}", rest.display()),
+        None => path.display().to_string(),
+    }
+}
+
 /// `path` with every link resolved, as the kernel checks it: the part that exists is
 /// canonicalized and the rest appended (without `.` and `..`). A relative path stays relative.
 pub fn resolve(path: &Path) -> PathBuf {

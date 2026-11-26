@@ -103,6 +103,40 @@ pub(super) fn page(site_input: Entity<InputState>) -> SettingPage {
         )
         .group(
             SettingGroup::new()
+                .title("Keys and secrets")
+                .description(
+                    "Your keys and logins never enter the sandbox. What needs them (git push, pull \
+                     and clone, GitHub's gh, signing commits) is asked about first and done \
+                     outside it; the agent sees only what it prints.",
+                )
+                .item(
+                    SettingItem::new(
+                        "Hide files with secrets in projects",
+                        super::view::hover_switch(
+                            "sandbox-secret-files",
+                            |cx| read(cx, |s| s.settings.secret_files),
+                            |on, cx| change(cx, |settings| settings.secret_files = on),
+                        ),
+                    )
+                    .description(
+                        ".env files and private keys (*.pem, *.key, id_ed25519, …) in the project \
+                         and allowed folders can't be read; examples like .env.example can. With \
+                         Landlock (Linux) only pi's file tools keep to this.",
+                    )
+                    .keywords(["secrets", "env", "dotenv", "pem", "private key"]),
+                )
+                .item(SettingItem::render(|_, _, cx| key_uses(cx)).keywords([
+                    "git", "push", "pull", "clone", "github", "gh", "sign", "keys", "approve",
+                ]))
+                .item(SettingItem::render(|_, _, cx| always_hidden(cx)).keywords([
+                    "ssh", "aws", "gnupg", "keychain", "hidden", "logins",
+                ]))
+                .item(SettingItem::render(|_, _, cx| removed_variables(cx)).keywords([
+                    "environment", "variables", "token", "api key",
+                ])),
+        )
+        .group(
+            SettingGroup::new()
                 .title("Project files")
                 .description(
                     "A project's .pi folder can bring its own extensions (code that runs inside \
@@ -814,6 +848,172 @@ pub(super) fn add_site(input: &Entity<InputState>, window: &mut Window, cx: &mut
     if added.is_ok() {
         input.update(cx, |input, cx| input.set_value("", window, cx));
     }
+}
+
+/// What the user allowed to be done with their keys without asking: per project and remote, the
+/// kinds (push, fetch, …); each can be removed.
+fn key_uses(cx: &mut App) -> AnyElement {
+    let rules = read(cx, |s| s.settings.gate.clone());
+    let theme = cx.theme();
+    let (muted, mono) = (theme.muted_foreground, theme.mono_font_family.clone());
+    let rows = rules
+        .iter()
+        .enumerate()
+        .map(|(index, rule)| {
+            let kinds: Vec<&str> = rule.allow.iter().map(|class| class.label()).collect();
+            h_flex()
+                .w_full()
+                .gap_2()
+                .child(Icon::from(AppIcon::GitBranch).small().text_color(muted))
+                .child(
+                    div()
+                        .flex_none()
+                        .max_w(px(260.))
+                        .truncate()
+                        .text_sm()
+                        .font_family(mono.clone())
+                        .child(rule.target.clone()),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(format!("{} · in {}", kinds.join(", "), rule.project)),
+                )
+                .child(
+                    remove_button(
+                        SharedString::from(format!("gate-remove-{index}")),
+                        format!("what {} may do without asking", rule.target),
+                        cx,
+                    )
+                    .on_click(move |_, _, cx| {
+                        change(cx, |settings| {
+                            if index < settings.gate.len() {
+                                settings.gate.remove(index);
+                            }
+                        });
+                    }),
+                )
+                .into_any_element()
+        })
+        .collect();
+    let footer = div()
+        .w_full()
+        .text_xs()
+        .text_color(muted)
+        .child(
+            "Asked the first time; \u{201c}Always for this project\u{201d} adds it here. Force \
+             pushes, the default branch and signing are asked about separately.",
+        )
+        .into_any_element();
+    list_card(
+        "sandbox-key-uses",
+        "Allowed with your keys",
+        "What the agent may do with your git and GitHub logins without asking, per project and \
+         remote.",
+        rows,
+        "Nothing yet: the agent asks the first time it needs your keys",
+        footer,
+        cx,
+    )
+}
+
+/// The keys and logins hidden wherever they are, also inside allowed folders.
+fn always_hidden(cx: &mut App) -> AnyElement {
+    let theme = cx.theme();
+    let (muted, mono, chip_bg) = (
+        theme.muted_foreground,
+        theme.mono_font_family.clone(),
+        theme.secondary,
+    );
+    v_flex()
+        .w_full()
+        .gap_1p5()
+        .py_1()
+        .child(
+            div()
+                .text_sm()
+                .font_weight(FontWeight::MEDIUM)
+                .child("Always hidden"),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(muted)
+                .child("Keys and logins: hidden from commands and file tools wherever they are, also inside an allowed folder."),
+        )
+        .child(
+            h_flex()
+                .w_full()
+                .flex_wrap()
+                .gap_1()
+                .children(sandbox::ALWAYS_HIDDEN.iter().map(|path| {
+                    h_flex()
+                        .gap_1()
+                        .px_1p5()
+                        .py_0p5()
+                        .rounded_md()
+                        .bg(chip_bg)
+                        .text_xs()
+                        .font_family(mono.clone())
+                        .child(Icon::from(AppIcon::Key).xsmall().text_color(muted))
+                        .child(*path)
+                })),
+        )
+        .into_any_element()
+}
+
+/// The environment variables with keys and tokens that commands don't get, by name.
+fn removed_variables(cx: &mut App) -> AnyElement {
+    let config = cx.global::<crate::config::AppConfig>();
+    let mut names: Vec<String> = match config.child_env.ready() {
+        Some(vars) => vars
+            .iter()
+            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .collect(),
+        None => std::env::vars_os()
+            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .collect(),
+    };
+    names.retain(|name| sandbox::secrets::is_secret(name));
+    names.sort();
+    names.dedup();
+    let theme = cx.theme();
+    let (muted, mono) = (theme.muted_foreground, theme.mono_font_family.clone());
+    v_flex()
+        .w_full()
+        .gap_1p5()
+        .py_1()
+        .child(
+            div()
+                .text_sm()
+                .font_weight(FontWeight::MEDIUM)
+                .child("Removed from commands"),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(muted)
+                .child("Environment variables that hold keys and tokens (names ending in _API_KEY, _TOKEN, _SECRET, …): commands in the sandbox don't get them; pi keeps them for its model requests."),
+        )
+        .child(if names.is_empty() {
+            div()
+                .text_xs()
+                .italic()
+                .text_color(muted)
+                .child("None of your environment variables look like keys.")
+                .into_any_element()
+        } else {
+            div()
+                .text_xs()
+                .font_family(mono)
+                .child(names.join(" \u{b7} "))
+                .into_any_element()
+        })
+        .into_any_element()
 }
 
 /// Which sandbox this computer has, and what to do when it has none.

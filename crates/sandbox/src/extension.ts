@@ -8,11 +8,17 @@
 //   folders can be read, keys and logins never, and changes only where they are allowed.
 // - pi itself, its logins and model requests, MCP servers, other extensions and your own `!`
 //   commands are not sandboxed.
+// - The gate: in the sandbox, `git`, `gh`, `gpg` and `ssh-keygen` are wrappers. What needs the
+//   user's keys (pushing, fetching private repositories, GitHub, signing) comes to a socket this
+//   extension listens on; the helper says what it would do (`gate decide`), the user is asked
+//   (once, or always for this project and remote), and the helper does it outside the sandbox
+//   (`gate run`). Only what the command prints goes back.
 //
 // The rules are read again whenever the settings change, so changes apply to the next tool call.
 // Pistachio writes this file on start; edits here are overwritten.
-import { spawnSync } from "node:child_process";
-import { realpathSync, statSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { mkdirSync, realpathSync, statSync, unlinkSync } from "node:fs";
+import { createServer } from "node:net";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 
@@ -29,6 +35,9 @@ type Policy = {
   writable: string[];
   hidden: string[];
   network: "on" | "off" | "custom";
+  secret_roots?: string[];
+  secret_names?: string[];
+  secret_examples?: string[];
 };
 
 let cached: { key: string; policy: Policy | null } | undefined;
@@ -90,13 +99,142 @@ function mayRead(policy: Policy, path: string): boolean {
   return [...policy.readable, ...policy.writable].some((root) => under(root, inside) && under(path, root));
 }
 
+// A file with secrets (`.env`, a private key) in the project or an allowed folder.
+function isSecret(policy: Policy, path: string): boolean {
+  if (!policy.secret_roots?.some((root) => under(path, root))) return false;
+  const name = basename(path);
+  if ((policy.secret_examples ?? []).some((ending) => name.endsWith(ending))) return false;
+  return (policy.secret_names ?? []).some((glob) => {
+    const star = glob.indexOf("*");
+    if (star < 0) return glob === name;
+    const [start, end] = [glob.slice(0, star), glob.slice(star + 1)];
+    return name.length >= start.length + end.length && name.startsWith(start) && name.endsWith(end);
+  });
+}
+
+const SECRET_NOTE =
+  "looks like a file with secrets (.env, a private key), which Pistachio's sandbox keeps from the agent. Don't try " +
+  "to get at it another way; if the task needs a value from it, ask the user (Settings → Sandboxing & Security → Keys and secrets).";
+
 function where(policy: Policy): string {
   const others = policy.writable.filter((path) => path !== policy.project).length;
   return `${policy.project ?? "the project"}${others ? ` (and ${others} more folders such as temporary files and tool caches)` : ""}`;
 }
 
+// The helper's answer to `gate <command>` with `input` on stdin, as JSON (or null).
+function gateHelper(command: string, input: unknown): any {
+  try {
+    const out = spawnSync(BIN!, ["--sandbox-tool", "gate", command], {
+      encoding: "utf8",
+      input: JSON.stringify(input),
+      timeout: 30000,
+    });
+    return JSON.parse(out.stdout.trim().split("\n").pop() ?? "null");
+  } catch {
+    return null;
+  }
+}
+
+const ALLOW = "Allow";
+const ALWAYS = "Always for this project";
+const DENY = "Don't allow";
+
+// Listens for the wrappers in the sandbox. Returns the socket's path, or undefined.
+function startGate(project: () => string, ui: () => any): string | undefined {
+  // A socket's path has room for about 100 bytes (104 on macOS); a short folder of this user's
+  // otherwise.
+  let dir = join(DIR!, "gate");
+  if (Buffer.byteLength(join(dir, `${process.pid}.sock`)) > 100) dir = join("/tmp", `pistachio-gate-${process.getuid?.() ?? "user"}`);
+  const path = join(dir, `${process.pid}.sock`);
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    try {
+      unlinkSync(path);
+    } catch {}
+  } catch {
+    return undefined;
+  }
+  const server = createServer((conn) => {
+    let buffer = "";
+    const send = (frame: unknown) => conn.write(JSON.stringify(frame) + "\n");
+    const finish = (code: number, text?: string) => {
+      if (text) send({ stderr: text.endsWith("\n") ? text : text + "\n" });
+      send({ exit: code });
+      conn.end();
+    };
+    const onData = async (chunk: string) => {
+      buffer += chunk;
+      const end = buffer.indexOf("\n");
+      if (end < 0) return;
+      conn.off("data", onData);
+      let request: any;
+      try {
+        request = JSON.parse(buffer.slice(0, end));
+      } catch {
+        return finish(2, "[Pistachio] The wrapper's request couldn't be read.");
+      }
+      request.project = project();
+      const decision = gateHelper("decide", request);
+      if (!decision) return finish(1, "[Pistachio] The gate couldn't read the request.");
+      if (decision.kind === "local") {
+        send({ local: true });
+        return conn.end();
+      }
+      if (decision.kind === "refused") return finish(1, `[Pistachio] ${decision.reason}`);
+      const plan = decision.plan;
+      if (!decision.approved) {
+        const dialog = ui();
+        if (!dialog?.select) {
+          return finish(1, `[Pistachio] This needs the user's OK, and no one can be asked: ${plan.title}.`);
+        }
+        const text = [plan.title, ...plan.details.map((line: string) => `· ${line}`), ...plan.warnings.map((line: string) => `⚠ ${line}`)].join("\n");
+        const choices = plan.rememberable ? [ALLOW, ALWAYS, DENY] : [ALLOW, DENY];
+        let answer: string | undefined;
+        try {
+          answer = await dialog.select(text, choices);
+        } catch {
+          answer = undefined;
+        }
+        if (answer !== ALLOW && answer !== ALWAYS) {
+          return finish(1, `[Pistachio] The user didn't allow this: ${plan.title}. Don't try another way; ask them if it is needed.`);
+        }
+        if (answer === ALWAYS) gateHelper("allow", { project: request.project, target: plan.target, class: plan.class });
+      }
+      const child = spawn(BIN!, ["--sandbox-tool", "gate", "run"], { stdio: ["pipe", "pipe", "pipe"] });
+      child.stdout.setEncoding("utf8").on("data", (text: string) => send({ stdout: text }));
+      child.stderr.setEncoding("utf8").on("data", (text: string) => send({ stderr: text }));
+      child.on("error", (error) => finish(127, `[Pistachio] ${error}`));
+      child.on("close", (code) => finish(code ?? 1));
+      conn.on("close", () => child.kill());
+      child.stdin.on("error", () => {});
+      child.stdin.end(JSON.stringify(request));
+    };
+    conn.setEncoding("utf8");
+    conn.on("data", onData);
+    conn.on("error", () => {});
+  });
+  server.on("error", () => {});
+  server.listen(path);
+  server.unref();
+  process.on("exit", () => {
+    try {
+      unlinkSync(path);
+    } catch {}
+  });
+  return path;
+}
+
 export default async function (pi: any) {
   if (!BIN || !DIR) return;
+  // The latest context, for asking the user and knowing the session's folder.
+  let latest: any;
+  pi.on("session_start", async (_event: unknown, ctx: any) => {
+    latest = ctx;
+  });
+  const gate = startGate(
+    () => latest?.cwd ?? process.cwd(),
+    () => (latest?.hasUI === false ? undefined : latest?.ui),
+  );
   const agent = await import("@earendil-works/pi-coding-agent");
   const shell = (() => {
     try {
@@ -112,13 +250,14 @@ export default async function (pi: any) {
       spawnHook: ({ command, cwd, env }: { command: string; cwd: string; env: Record<string, string> }) => ({
         command: `exec ${quote(BIN)} --sandbox-tool run --cwd ${quote(cwd)} -- ${quote(shell)} -c ${quote(command)}`,
         cwd,
-        env: { ...env, PISTACHIO_SANDBOX_DIR: DIR },
+        env: { ...env, PISTACHIO_SANDBOX_DIR: DIR, ...(gate ? { PISTACHIO_GATE_SOCKET: gate } : {}) },
       }),
     });
     pi.registerTool(bash);
   }
 
   pi.on("tool_call", async (event: any, ctx: any) => {
+    if (ctx) latest = ctx;
     const tool = event.toolName;
     if (!READS.has(tool) && !WRITES.has(tool)) return;
     const cwd = ctx?.cwd ?? process.cwd();
@@ -148,6 +287,9 @@ export default async function (pi: any) {
         };
       }
     }
+    if ((tool === "read" || tool === "edit") && isSecret(policy, path)) {
+      return { block: true, reason: `${given} ${SECRET_NOTE}` };
+    }
     if (WRITES.has(tool) && !policy.writable.some((root) => under(path, root))) {
       return {
         block: true,
@@ -157,7 +299,32 @@ export default async function (pi: any) {
   });
 
   // A command that failed on what the sandbox blocks gets a note, so the model doesn't guess.
+  // grep's matches in files with secrets are left out.
   pi.on("tool_result", async (event: any, ctx: any) => {
+    if (event.toolName === "grep" && !event.isError) {
+      const cwd = ctx?.cwd ?? process.cwd();
+      const policy = policyFor(cwd);
+      if (!policy?.enforced || !policy.secret_roots?.length) return;
+      const base = typeof event.input?.path === "string" && event.input.path.trim() ? realPath(event.input.path, cwd) : cwd;
+      const left = new Set<string>();
+      const content = (event.content ?? []).map((part: any) => {
+        if (part.type !== "text") return part;
+        const kept = String(part.text)
+          .split("\n")
+          .filter((line: string) => {
+            const match = /^(.+?)[:-]\d+[:-]/.exec(line);
+            if (!match) return true;
+            const file = realPath(match[1], base);
+            if (!isSecret(policy, file)) return true;
+            left.add(match[1]);
+            return false;
+          });
+        return { ...part, text: kept.join("\n") };
+      });
+      if (!left.size) return;
+      content.push({ type: "text", text: `\n[Pistachio] Matches in ${left.size} file(s) with secrets left out (${[...left].join(", ")}).` });
+      return { content };
+    }
     if (event.toolName !== "bash" || !event.isError) return;
     const text = (event.content ?? []).map((part: any) => (part.type === "text" ? part.text : "")).join("\n");
     if (

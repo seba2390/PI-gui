@@ -25,6 +25,18 @@ All notable changes to PI-gui are listed here. The format follows
   websites listed, checked as you type them; Custom with GitHub and the package registries is the
   default), and which
   project files pi loads (its project trust default and saved decisions).
+- The sandbox's gate: what needs your keys is asked about and done outside the sandbox. In Code
+  sessions `git push`, `pull`, `fetch`, `clone`, `ls-remote`, submodules and git-lfs, GitHub's `gh`
+  (pull requests, issues, runs, creating a repository) and signing commits with your GPG or SSH
+  key now work: a dialog says exactly what will happen (the commits, the branch, the remote's real
+  address, force pushes and the default branch called out) and offers Allow, Always for this
+  project or Don't allow. Your keys never enter the sandbox. Repositories whose git settings
+  could start a program are refused, and hooks are off.
+- Files with secrets in projects (`.env`, private keys) can't be read by the agent's commands and
+  file tools; `.env.example` and the like can. On by default.
+- Settings → Sandboxing & Security → Keys and secrets: that switch, what the agent may do with
+  your logins without asking (removable), what is always hidden, and which environment variables
+  commands don't get.
 - Dots at the left edge of the conversation, one per prompt, in Chat and Code. Hovering one shows
   that prompt and the start of its answer; clicking it scrolls there.
 - A shield next to the folder in Code sessions shows whether commands are sandboxed; its menu turns
