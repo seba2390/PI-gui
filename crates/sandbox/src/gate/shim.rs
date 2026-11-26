@@ -6,9 +6,11 @@
 //! (`$PISTACHIO_GATE_SOCKET`) and passes on what comes back: lines of JSON, `{"stdout": …}`,
 //! `{"stderr": …}` and last `{"exit": n}` (or `{"local": true}`: run the real program after all).
 
+#[cfg(unix)]
 use std::io::{BufRead as _, BufReader, Read as _, Write as _};
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
 use super::Request;
 
 /// The environment variable with the gate's socket, set for sandboxed commands.

@@ -18,7 +18,7 @@
 //! [`Network::Custom`]: crate::Network::Custom
 
 use std::collections::HashMap;
-use std::io::{self, BufRead as _, BufReader, Read, Write};
+use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream, ToSocketAddrs as _};
 use std::path::{Path, PathBuf};
 use std::sync::{Condvar, Mutex, OnceLock};
@@ -30,6 +30,7 @@ use crate::settings::Settings;
 
 /// Where the running proxy listens, in the sandbox's folder.
 const ENDPOINT_FILE: &str = "proxy.json";
+#[cfg(unix)]
 const SOCKET_FILE: &str = "proxy.sock";
 /// The longest request head read before it is refused.
 const HEAD_LIMIT: usize = 32 * 1024;
@@ -398,6 +399,7 @@ fn ask(dir: &Path, session: Option<&str>, host: &str, port: u16) -> Result<(), S
 
 /// The gate sockets `session` (`pi-<pid>`) may listen on: in `dir`, or (for a long `dir`) in a
 /// short folder of this user's, as the sandbox extension chooses.
+#[cfg(unix)]
 fn gate_sockets(dir: &Path, session: &str) -> Vec<PathBuf> {
     let Some(pid) = session
         .strip_prefix("pi-")
@@ -407,7 +409,6 @@ fn gate_sockets(dir: &Path, session: &str) -> Vec<PathBuf> {
     };
     let name = format!("{pid}.sock");
     let mut sockets = vec![dir.join("gate").join(&name)];
-    #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;
         if let Ok(meta) = std::fs::metadata(dir) {
@@ -424,6 +425,7 @@ fn gate_sockets(dir: &Path, session: &str) -> Vec<PathBuf> {
 /// Asks the session's gate (and through it the user) about `host`.
 #[cfg(unix)]
 fn ask_gate(dir: &Path, session: &str, host: &str, port: u16) -> Result<(), String> {
+    use std::io::{BufRead as _, BufReader};
     use std::os::unix::net::UnixStream;
     let Some(mut stream) = gate_sockets(dir, session)
         .iter()
@@ -653,6 +655,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn unlisted_sites_are_asked_in_their_conversation() {
+        use std::io::{BufRead as _, BufReader};
         use std::os::unix::net::UnixListener;
         use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};

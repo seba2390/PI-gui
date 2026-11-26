@@ -3,6 +3,7 @@
 //! is kept (`backend.json` in the sandbox's folder) until bubblewrap or the kernel changes.
 
 use std::path::{Path, PathBuf};
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::process::{Command, Stdio};
 
 use serde::{Deserialize, Serialize};

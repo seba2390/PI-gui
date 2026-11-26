@@ -258,7 +258,8 @@ mod tests {
     fn context(home: &Path) -> Context {
         Context {
             home: Some(home.to_path_buf()),
-            temp: vec![PathBuf::from("/tmp")],
+            // Not `/tmp`: on Linux the test's home folder is in it.
+            temp: vec![PathBuf::from("/system-temp")],
             agent_dir: Some(home.join(".pi/agent")),
             path: vec![
                 home.join(".nvm/versions/node/v24/bin"),
@@ -311,7 +312,7 @@ mod tests {
         };
         let policy = Policy::for_project(&settings, &project, &context(&home)).expect("policy");
         assert!(policy.may_write(&project.join("src/main.rs")));
-        assert!(policy.may_write(&resolve(Path::new("/tmp")).join("x")));
+        assert!(policy.may_write(&resolve(Path::new("/system-temp")).join("x")));
         assert!(policy.may_read(Path::new("/usr/bin/git")));
         assert!(!policy.may_write(Path::new("/usr/bin/git")));
         // Other projects, documents and dotfiles are hidden.
