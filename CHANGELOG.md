@@ -6,6 +6,14 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The question above the message box (the gate's Allow / Always / Don't allow) is a see-through
+  pill of one line: the question, then ✕ (don't allow, Esc), ✓✓ (always, named in its tooltip)
+  and ✓ Allow. A small button on its top edge shows the details (the commits, addresses and
+  warnings); a question with something that needs care opens with them shown. The arrow keys go
+  along the answers in the order they are shown.
+
 ## [0.5.5] - 2026-11-26
 
 ### Added

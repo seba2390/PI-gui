@@ -316,17 +316,18 @@ Linux; Windows is planned, #47).
   - signing a commit or tag with your GPG or SSH key (git's own signing call, in git's namespace).
 
   The gate reads the request itself: only these commands and a list of their options, only in the
-  session's folder, only from remote servers (no local folders or helper programs as addresses),
-  and only in repositories whose `.git/config` starts no program (`core.sshCommand`,
-  `credential.helper`, filters, `url.*.insteadOf`, …; those it names and refuses). It runs git
-  with hooks off. You are asked in a card that slides up above the message box and says exactly
-  what will happen (the commits, the branch, the remote's real address, a force push or the default branch): **Allow**, **Always for
-  this project** (that project, that remote, that kind of thing: fetch, push, push to the default
-  branch, force push, sign, read or change on GitHub) or **Don't allow**. Your keys never enter the
-  sandbox; the command's output comes back to the agent. What you allowed is listed in
-  Settings → Sandboxing & Security → Git and GitHub, each removable. git's own settings
-  (`~/.gitconfig`, `~/.config/git`) are always readable in the sandbox, so commits are made as you.
-  Sandboxed sessions tell the model how this works before it starts, and `gh auth status` is
+  session's folder, only from remote servers (no local folders or helper programs as addresses), and
+  only in repositories whose `.git/config` starts no program (`core.sshCommand`,
+  `credential.helper`, filters, `url.*.insteadOf`, …; those it names and refuses). It runs git with
+  hooks off. You are asked in a see-through card that slides up above the message box (one line; a
+  button on its edge shows the details, open at first when something needs care) and says exactly
+  what will happen (the commits, the branch, the remote's real address, a force push or the default
+  branch): **Allow**, **Always for this project** (that project, that remote, that kind of thing:
+  fetch, push, push to the default branch, force push, sign, read or change on GitHub) or **Don't
+  allow**. Your keys never enter the sandbox; the command's output comes back to the agent. What you
+  allowed is listed in Settings → Sandboxing & Security → Git and GitHub, each removable. git's own
+  settings (`~/.gitconfig`, `~/.config/git`) are always readable in the sandbox, so commits are made
+  as you. Sandboxed sessions tell the model how this works before it starts, and `gh auth status` is
   answered by the gate: the accounts logged in and the git identity, never a token.
 - **Allowed websites:** None, All, or Custom (the default): only the websites listed, which start
   as where code and packages come from (GitHub, npm, PyPI, crates.io, Go, RubyGems, Maven). A site is allowed as a

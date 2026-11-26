@@ -465,6 +465,7 @@ impl MainWindow {
                         | "attach"
                         | "context"
                         | "question"
+                        | "question-plain"
                 )
                 && let Ok(folder) = std::env::current_dir()
             {
@@ -549,15 +550,21 @@ impl MainWindow {
                         settings.update(cx, |settings, _| settings.start_on_security());
                     }
                 }
-                // The sandbox gate's question, docked above the composer.
-                "question" => {
+                // The sandbox gate's question, docked above the composer: with a warning (open
+                // at first) or without (one line).
+                "question" | "question-plain" => {
+                    let warning = if panel == "question" {
+                        "\n⚠ main is the remote's default branch"
+                    } else {
+                        ""
+                    };
                     let request = pi_rpc::protocol::ExtensionUiRequest {
                         id: "layout-check".into(),
                         method: pi_rpc::protocol::ExtensionUiMethod::Select {
-                            title: "Push 1 commit on main to github.com/acme/fibonacci as ana\n\
-                                    · 1e6145f Initial commit: Fibonacci sequence printer\n\
-                                    ⚠ main is the remote's default branch"
-                                .into(),
+                            title: format!(
+                                "Push 1 commit on feature to github.com/acme/fibonacci as ana\n\
+                                 · 1e6145f Initial commit: Fibonacci sequence printer{warning}"
+                            ),
                             options: ["Allow", "Always for this project", "Don't allow"]
                                 .map(str::to_owned)
                                 .to_vec(),
