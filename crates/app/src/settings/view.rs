@@ -1593,6 +1593,73 @@ mod tests {
         cx
     }
 
+    /// Scrolling over a long list on the Sandboxing page moves the list, not the page.
+    #[gpui_kit::test]
+    fn a_long_list_scrolls_by_itself(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let settings = sandbox::Settings {
+            tool_folders: false,
+            allowed: (0..8)
+                .map(|n| sandbox::Allowed::new(format!("~/folder-{n}"), false))
+                .collect(),
+            ..sandbox::Settings::default()
+        };
+        settings.save(dir.path()).expect("save");
+        cx.executor().allow_parking();
+        cx.update(|cx| {
+            gpui_kit::component::init(cx);
+            cx.set_reduce_motion(true);
+            let mut config = AppConfig::for_tests("/nonexistent/pi".into());
+            config.deepsearch_dir = dir.path().to_path_buf();
+            config.sandbox_dir = dir.path().to_path_buf();
+            cx.set_global(config);
+            cx.set_global(AppSettings::default());
+            crate::search_server::init(cx);
+            crate::stt::init(cx);
+            crate::naming::init(cx);
+            let hosts = cx.new(|_| crate::hosts::Hosts::for_tests(Vec::new()));
+            cx.set_global(crate::hosts::HostsHandle(hosts));
+        });
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|cx| {
+                let mut view = SettingsView::new(Vec::new(), window, cx);
+                view.start_on_security();
+                view
+            });
+            Root::new(view, window, cx)
+        });
+        // Short enough that the page scrolls too, tall enough to show the whole list.
+        cx.simulate_resize(gpui_kit::size(gpui_kit::px(1100.), gpui_kit::px(950.)));
+        cx.run_until_parked();
+        let bounds = cx
+            .debug_bounds("sandbox-allowed")
+            .expect("the list is drawn");
+        let over = gpui_kit::point(bounds.center().x, bounds.bottom() - gpui_kit::px(80.));
+        let top = |cx: &mut VisualTestContext| {
+            cx.update(|_, cx| {
+                crate::security::existing(cx)
+                    .and_then(|s| s.read(cx).list_tops.get("sandbox-allowed").copied())
+                    .unwrap_or(0)
+            })
+        };
+        for _ in 0..3 {
+            cx.simulate_event(gpui_kit::ScrollEvent {
+                position: over,
+                delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
+                    gpui_kit::px(0.),
+                    gpui_kit::px(-40.),
+                )),
+                ..Default::default()
+            });
+            cx.run_until_parked();
+        }
+        assert_eq!(top(cx), 3, "scrolling down moved the list three rows");
+        let after = cx
+            .debug_bounds("sandbox-allowed")
+            .expect("the list is drawn");
+        assert_eq!(after.origin, bounds.origin, "the page stayed where it was");
+    }
+
     /// Every model pi has can be the startup model, also when there is no session.
     #[cfg(unix)]
     #[gpui_kit::test]

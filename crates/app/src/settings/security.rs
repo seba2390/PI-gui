@@ -238,19 +238,8 @@ fn list_card(
                 .overflow_hidden()
                 .child(
                     div()
-                        .id(id)
                         .relative()
                         .w_full()
-                        .on_scroll(move |event, window, cx| {
-                            let delta = event.delta.pixel_delta(window.line_height()).y;
-                            let rows = (count, LIST_ROWS_SHOWN);
-                            let moved = security(cx).update(cx, |s, cx| {
-                                s.scroll_list(id, f32::from(delta), rows, LIST_ROW_SCROLL, cx)
-                            });
-                            if moved {
-                                cx.stop_propagation();
-                            }
-                        })
                         .when(count == 0, |this| {
                             this.child(
                                 h_flex()
@@ -264,7 +253,10 @@ fn list_card(
                         })
                         .children(shown)
                         .children(peek)
-                        .children(scrollbar),
+                        .children(scrollbar)
+                        .when(count > LIST_ROWS_SHOWN, |this| {
+                            this.child(scroll_catcher(id, count))
+                        }),
                 )
                 .child(
                     div()
@@ -278,6 +270,37 @@ fn list_card(
                 ),
         )
         .into_any_element()
+}
+
+/// Takes scrolling over a list before the Settings page does (in the capture phase: the page's
+/// own scrolling would get it first otherwise), so the list moves a row at a time; at its ends
+/// the page scrolls as usual.
+fn scroll_catcher(id: &'static str, count: usize) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |bounds, (), window, _| {
+            // Only where the list can be seen (the page clips it while scrolling).
+            let visible = window.content_mask().bounds.intersect(&bounds);
+            window.on_mouse_event(move |event: &ScrollEvent, phase, window, cx| {
+                if phase != DispatchPhase::Capture || !visible.contains(&event.position) {
+                    return;
+                }
+                let delta = event.delta.pixel_delta(window.line_height()).y;
+                let rows = (count, LIST_ROWS_SHOWN);
+                let moved = security(cx).update(cx, |s, cx| {
+                    s.scroll_list(id, f32::from(delta), rows, LIST_ROW_SCROLL, cx)
+                });
+                if moved {
+                    cx.stop_propagation();
+                    window.refresh();
+                }
+            });
+        },
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
 }
 
 /// The round "+" in the middle of a list's footer.
