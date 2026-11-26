@@ -249,13 +249,9 @@ impl Settings {
                                                     };
                                                     state.deferred_scroll_group_ix = Some(group_ix);
                                                     // Pistachio: the title glows, to show where the page went.
-                                                    let count = state
-                                                        .flash
-                                                        .map_or(1, |flash| flash.count + 1);
                                                     state.flash = Some(GroupFlash {
                                                         page_ix,
                                                         group_ix,
-                                                        count,
                                                         at: std::time::Instant::now(),
                                                     });
                                                     cx.notify();
@@ -339,13 +335,11 @@ pub(super) struct SettingsState {
 pub(super) struct GroupFlash {
     pub(super) page_ix: usize,
     pub(super) group_ix: usize,
-    /// Counts the picks, so picking the same group again starts the glow again.
-    pub(super) count: u64,
     pub(super) at: std::time::Instant,
 }
 
 impl GroupFlash {
-    pub(super) const DURATION: std::time::Duration = std::time::Duration::from_millis(1600);
+    pub(super) const DURATION: std::time::Duration = std::time::Duration::from_millis(1800);
 }
 
 /// Options for rendering setting item.
@@ -366,8 +360,8 @@ pub struct RenderOptions {
     group_variant: GroupBoxVariant,
     layout: Axis,
     disabled: bool,
-    // Pistachio: the glow of a group's title (its pick count) and its colour.
-    flash: Option<u64>,
+    // Pistachio: how far into its glow a group's title is (0 to 1), and the glow's colour.
+    flash: Option<f32>,
     flash_color: Option<Hsla>,
 }
 
@@ -386,9 +380,9 @@ impl RenderOptions {
         }
     }
 
-    /// Pistachio: the group's title glows (`count` restarts it).
-    pub fn with_flash(mut self, count: Option<u64>) -> Self {
-        self.flash = count;
+    /// Pistachio: the group's title glows, `progress` (0 to 1) into the glow.
+    pub fn with_flash(mut self, progress: Option<f32>) -> Self {
+        self.flash = progress;
         self
     }
 
@@ -398,7 +392,7 @@ impl RenderOptions {
         self
     }
 
-    pub fn flash(&self) -> Option<u64> {
+    pub fn flash(&self) -> Option<f32> {
         self.flash
     }
 

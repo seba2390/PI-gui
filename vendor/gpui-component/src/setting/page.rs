@@ -303,28 +303,40 @@ impl SettingPage {
                             let flash = state.read(cx).flash;
                             move |visible_ix, window, cx| {
                                 let (group_ix, group) = groups[visible_ix].clone();
-                                // Pistachio: the group just picked in the sidebar glows.
+                                // Pistachio: the group just picked in the sidebar glows. Driven by
+                                // the clock, not an animation, which would be skipped when motion
+                                // is reduced (it fades; nothing moves).
                                 let flash = flash
-                                    .filter(|flash| {
-                                        flash.page_ix == ix
-                                            && flash.group_ix == group_ix
-                                            && flash.at.elapsed() < GroupFlash::DURATION
+                                    .filter(|flash| flash.page_ix == ix && flash.group_ix == group_ix)
+                                    .map(|flash| {
+                                        flash.at.elapsed().as_secs_f32()
+                                            / GroupFlash::DURATION.as_secs_f32()
                                     })
-                                    .map(|flash| flash.count);
-                                // Keep horizontal padding inside the list's clip bounds
-                                // so focus rings can extend beyond the group's edges.
+                                    .filter(|progress| *progress < 1.);
+                                if flash.is_some() {
+                                    window.request_animation_frame();
+                                }
+                                // Pistachio: a thin line above every group but the first.
+                                let line = cx.theme().border.opacity(0.7);
                                 div()
                                     .w_full()
                                     .px_4()
-                                    .child(group.py_4().render(
-                                        &query,
-                                        &options
-                                            .with_page_ix(ix)
-                                            .with_group_ix(group_ix)
-                                            .with_flash(flash),
-                                        window,
-                                        cx,
-                                    ))
+                                    .child(
+                                        div()
+                                            .w_full()
+                                            .when(visible_ix > 0, |this| {
+                                                this.border_t_1().border_color(line)
+                                            })
+                                            .child(group.py_4().render(
+                                                &query,
+                                                &options
+                                                    .with_page_ix(ix)
+                                                    .with_group_ix(group_ix)
+                                                    .with_flash(flash),
+                                                window,
+                                                cx,
+                                            )),
+                                    )
                                     .into_any_element()
                             }
                         })

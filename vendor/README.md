@@ -68,7 +68,10 @@ gpui-kit's `gpui-component` (Apache-2.0). Changed in `src/setting/` only (search
 `Pistachio:`):
 
 - **Group titles are centred**, and the one picked in the Settings sidebar glows for a moment
-  (`GroupFlash`; its colour is `Settings::flash_color`), to show where the page went.
+  (`GroupFlash`; its colour is `Settings::flash_color`), to show where the page went. The glow
+  follows the clock and asks for frames itself: GPUI's animations jump to their end when the
+  system reduces motion, and this one only fades.
+- **A thin line between groups** of a page.
 - **A description runs up to its field.** Upstream stops a setting's text at three fifths of the
   row (`max_w_3_5`), so next to a switch it wrapped halfway across.
 

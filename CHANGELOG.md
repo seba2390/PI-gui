@@ -31,9 +31,10 @@ All notable changes to PI-gui are listed here. The format follows
 
 - A new Code session asks which folder to open (the welcome screen's recent folders, another folder
   or an SSH host) instead of taking the current or most recent one, which could be the home folder.
-- Settings: section headings are centred, and a section picked in the sidebar has its heading
-  glow for a moment. Descriptions next to a switch run up to it instead of wrapping halfway.
-- Lists on the Sandboxing & Security page scroll smoothly and light up under the pointer.
+- Settings: section headings are centred, with a thin line between sections, and a section
+  picked in the sidebar has its heading glow for a moment (also with reduced motion). Descriptions next to a switch run up to it instead of wrapping halfway.
+- Lists on the Sandboxing & Security page scroll smoothly and their border lights up under the
+  pointer.
 
 ## [0.5.4] - 2026-11-25
 

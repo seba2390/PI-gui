@@ -153,7 +153,8 @@ fn list_card(
     cx: &App,
 ) -> AnyElement {
     let theme = cx.theme();
-    let accent = palette(cx).accent;
+    // Under the pointer: grey-white, not the accent.
+    let lit = theme.foreground;
     let count = rows.len();
     let scrolls = count > LIST_ROWS_SHOWN;
     #[allow(clippy::cast_precision_loss)] // a short list
@@ -195,7 +196,7 @@ fn list_card(
                     .h(relative(viewport / total))
                     .rounded_full()
                     .bg(theme.muted_foreground.opacity(0.5))
-                    .group_hover(group.clone(), move |style| style.bg(accent.opacity(0.85))),
+                    .group_hover(group.clone(), move |style| style.bg(lit.opacity(0.7))),
             )
     });
     // Fades where rows go on out of sight.
@@ -272,15 +273,13 @@ fn list_card(
                 .bg(theme.background.opacity(0.6))
                 .overflow_hidden()
                 .hover(move |style| {
-                    style
-                        .border_color(accent.opacity(0.6))
-                        .shadow(vec![BoxShadow {
-                            color: accent.opacity(0.18),
-                            offset: point(px(0.), px(0.)),
-                            blur_radius: px(10.),
-                            spread_radius: px(0.),
-                            inset: false,
-                        }])
+                    style.border_color(lit.opacity(0.4)).shadow(vec![BoxShadow {
+                        color: lit.opacity(0.08),
+                        offset: point(px(0.), px(0.)),
+                        blur_radius: px(10.),
+                        spread_radius: px(0.),
+                        inset: false,
+                    }])
                 })
                 .child(list)
                 .child(

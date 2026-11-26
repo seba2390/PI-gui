@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use gpui::{
-    Animation, AnimationExt as _, AnyElement, App, BoxShadow, ElementId, IntoElement,
+    AnyElement, App, BoxShadow, IntoElement,
     ParentElement as _, SharedString, StyleRefinement, Styled, Window, div, point,
     prelude::FluentBuilder as _, px,
 };
@@ -11,18 +11,18 @@ use crate::{
     group_box::{GroupBox, GroupBoxVariant, GroupBoxVariants},
     h_flex,
     label::Label,
-    setting::{RenderOptions, SettingItem, settings::GroupFlash},
+    setting::{RenderOptions, SettingItem},
     v_flex,
 };
 
-/// Pistachio: how strong the glow of a picked group's title is, `delta` into it: it comes up
-/// quickly and fades out slowly.
+/// Pistachio: how strong the glow of a picked group's title is, `delta` into it: full at once,
+/// held for a moment, then fading out.
 fn glow(delta: f32) -> f32 {
-    const RISE: f32 = 0.12;
-    if delta < RISE {
-        delta / RISE
+    const HOLD: f32 = 0.3;
+    if delta < HOLD {
+        1.
     } else {
-        (1. - (delta - RISE) / (1. - RISE)).powi(2)
+        (1. - (delta - HOLD) / (1. - HOLD)).powf(1.5)
     }
 }
 
@@ -139,31 +139,27 @@ impl SettingGroup {
                 // in the sidebar.
                 let color = options.flash_color().unwrap_or(cx.theme().primary);
                 let muted = cx.theme().muted_foreground;
+                let foreground = cx.theme().foreground;
                 let heading = div()
-                    .px_3()
-                    .py_0p5()
+                    .px_4()
+                    .py_1()
                     .rounded(cx.theme().radius)
                     .child(title);
                 let heading = match options.flash() {
-                    Some(count) if !cx.reduce_motion() => heading
-                        .with_animation(
-                            ElementId::NamedInteger("group-flash".into(), count),
-                            Animation::new(GroupFlash::DURATION),
-                            move |this, delta| {
-                                let glow = glow(delta);
-                                this.bg(color.opacity(0.22 * glow))
-                                    .text_color(muted.blend(color.opacity(glow)))
-                                    .shadow(vec![BoxShadow {
-                                        color: color.opacity(0.45 * glow),
-                                        offset: point(px(0.), px(0.)),
-                                        blur_radius: px(14.),
-                                        spread_radius: px(1.),
-                                        inset: false,
-                                    }])
-                            },
-                        )
-                        .into_any_element(),
-                    _ => heading.into_any_element(),
+                    Some(progress) => {
+                        let glow = glow(progress);
+                        heading
+                            .bg(color.opacity(0.4 * glow))
+                            .text_color(muted.blend(foreground.opacity(glow)))
+                            .shadow(vec![BoxShadow {
+                                color: color.opacity(0.75 * glow),
+                                offset: point(px(0.), px(0.)),
+                                blur_radius: px(22.),
+                                spread_radius: px(3.),
+                                inset: false,
+                            }])
+                    }
+                    None => heading,
                 };
                 this.title(v_flex().gap_1().child(h_flex().w_full().justify_center().child(heading)).when_some(
                     self.description.clone(),
