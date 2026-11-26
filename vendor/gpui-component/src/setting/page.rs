@@ -322,7 +322,7 @@ impl SettingPage {
                             move |visible_ix, window, cx| {
                                 let (group_ix, group) = groups[visible_ix].clone();
                                 // Pistachio: the group just picked in the sidebar glows: its title
-                                // and the lines above and below it. Driven by the clock, not an
+                                // and the line above it. Driven by the clock, not an
                                 // animation, which would be skipped when motion is reduced (it
                                 // fades; nothing moves).
                                 let progress = |group_ix: usize| {
@@ -337,18 +337,12 @@ impl SettingPage {
                                         .filter(|progress| *progress < 1.)
                                 };
                                 let own = progress(group_ix);
-                                // The line above this group is the one below the group before it.
-                                let above = visible_ix
-                                    .checked_sub(1)
-                                    .and_then(|previous| progress(groups[previous].0));
-                                if own.is_some() || above.is_some() {
+                                if own.is_some() {
                                     window.request_animation_frame();
                                 }
-                                let line_glow = own
-                                    .into_iter()
-                                    .chain(above)
-                                    .map(glow)
-                                    .fold(0., f32::max);
+                                // Only the line above the group glows (for the first group, the
+                                // header's; see above).
+                                let line_glow = own.map_or(0., glow);
                                 // Pistachio: a thin line above every group but the first.
                                 let theme = cx.theme();
                                 let (line, foreground) =
