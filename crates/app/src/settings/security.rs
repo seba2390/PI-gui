@@ -109,6 +109,7 @@ pub(super) fn page(site_input: Entity<InputState>) -> SettingPage {
                      (push, pull, clone, gh, signing commits), you're asked, and it's done outside \
                      the sandbox; the agent sees only what it prints.",
                 )
+                .item(SettingItem::render(|_, _, cx| gate_diagram(cx)))
                 .item(SettingItem::render(|_, _, cx| key_uses(cx)).keywords([
                     "git", "push", "pull", "clone", "github", "gh", "sign", "keys", "approve",
                 ])),
@@ -826,6 +827,80 @@ pub(super) fn add_site(input: &Entity<InputState>, window: &mut Window, cx: &mut
     if added.is_ok() {
         input.update(cx, |input, cx| input.set_value("", window, cx));
     }
+}
+
+/// How the gate works, drawn: the agent's `git push` in the sandbox goes to Pistachio's gate,
+/// which asks the user and does it with their keys (which never leave it) at the remote.
+fn gate_diagram(cx: &mut App) -> AnyElement {
+    let muted = cx.theme().muted_foreground;
+    let (sandbox, gate, remote) = (palette(cx).warning, palette(cx).accent, muted);
+    let node = |title, about, color| diagram_node(title, about, color, muted);
+    let region = |title, about, color| diagram_region(title, about, color, muted);
+    let arrow = |icon: IconName| Icon::new(icon).small().text_color(muted);
+    h_flex()
+        .w_full()
+        .justify_center()
+        .items_center()
+        .gap_2()
+        .py_2()
+        .debug_selector(|| "gate-diagram".into())
+        .child(
+            region("Sandbox", "The agent's commands", sandbox)
+                .child(node("git push", "Handed over", sandbox))
+                .child(node("No keys here", "Gets the result only", sandbox)),
+        )
+        .child(arrow(IconName::ArrowRight))
+        .child(
+            region("Pistachio", "Outside the sandbox", gate)
+                .child(node("Git gate", "Checks it, asks you", gate))
+                .child(arrow(IconName::ArrowUp))
+                .child(node("Your keys", "Never leave here", gate)),
+        )
+        .child(arrow(IconName::ArrowRight))
+        .child(node("github.com", "Your remote", remote))
+        .into_any_element()
+}
+
+/// A box in the page's diagrams: what it is, and a few words about it.
+fn diagram_node(title: &'static str, about: &'static str, color: Hsla, muted: Hsla) -> Div {
+    v_flex()
+        .w(px(158.))
+        .flex_none()
+        .items_center()
+        .gap_0p5()
+        .px_3()
+        .py_2()
+        .rounded_lg()
+        .border_1()
+        .border_color(color.opacity(0.55))
+        .bg(color.opacity(0.1))
+        .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(title))
+        .child(div().text_xs().text_color(muted).child(about))
+}
+
+/// A dashed area around boxes in the page's diagrams, named at the top.
+fn diagram_region(title: &'static str, about: &'static str, color: Hsla, muted: Hsla) -> Div {
+    v_flex()
+        .flex_none()
+        .items_center()
+        .gap_2()
+        .p_2()
+        .rounded_xl()
+        .border_1()
+        .border_dashed()
+        .border_color(color.opacity(0.45))
+        .child(
+            v_flex()
+                .items_center()
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(color)
+                        .child(title),
+                )
+                .child(div().text_xs().text_color(muted).child(about)),
+        )
 }
 
 /// What the user allowed to be done with their keys without asking: per project and remote, the

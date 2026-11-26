@@ -85,6 +85,8 @@ pub struct SettingsView {
     pub(super) advanced: web_advanced::Advanced,
     /// The page shown first (scripted runs open Speech to text directly).
     start_page: usize,
+    /// The section of it scrolled to first, if any.
+    start_group: Option<usize>,
     /// The Code colors palette under the pointer in the open picker; the preview shows it.
     code_colors_hover: Option<CodeColors>,
     /// The working-indicator style under the pointer in the open picker; the preview shows it.
@@ -209,6 +211,7 @@ impl SettingsView {
             pi_version: None,
             advanced: web_advanced::Advanced::default(),
             start_page: 0,
+            start_group: None,
             pi_field: cx.new(|_| PiField::plain()),
             code_colors_hover: None,
             indicator_hover: None,
@@ -881,6 +884,12 @@ impl SettingsView {
         self.start_page = 7;
     }
 
+    /// Opens on the Security page's Git and GitHub section (before the first render).
+    pub fn start_on_git(&mut self) {
+        self.start_page = 7;
+        self.start_group = Some(3);
+    }
+
     fn speech_page(&self) -> SettingPage {
         use crate::stt::{AutoStop, catalog};
         SettingPage::new("Speech to text")
@@ -952,7 +961,7 @@ impl Render for SettingsView {
             Settings::new("app-settings")
                 .default_selected_index(SelectIndex {
                     page_ix: self.start_page,
-                    group_ix: None,
+                    group_ix: self.start_group,
                 })
                 .pages([
                     self.general_page(&weak),

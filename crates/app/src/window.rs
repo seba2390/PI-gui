@@ -543,6 +543,12 @@ impl MainWindow {
                         settings.update(cx, |settings, _| settings.start_on_security());
                     }
                 }
+                "settings-git" => {
+                    self.open_settings(&OpenSettings, window, cx);
+                    if let Some(settings) = self.settings.as_ref().map(|s| s.0.clone()) {
+                        settings.update(cx, |settings, _| settings.start_on_git());
+                    }
+                }
                 "speech-download" => crate::stt::ui::open_download_dialog(window, cx),
                 "dictate" => {
                     let composer = self.chat.read(cx).composer().clone();

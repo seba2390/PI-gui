@@ -466,7 +466,8 @@ impl RenderOnce for Settings {
             SettingsState {
                 search_input,
                 selected_index: self.default_selected_index,
-                deferred_scroll_group_ix: None,
+                // Pistachio: a section to start on is scrolled to, as if picked in the sidebar.
+                deferred_scroll_group_ix: self.default_selected_index.group_ix,
                 flash: None,
             }
         });
