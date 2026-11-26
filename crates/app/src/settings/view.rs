@@ -1,6 +1,6 @@
 //! The Settings page, shown in the chat column: General, pi & models, Web search, SSH
-//! connections, Speech to text, Conversation names and Document parsing. Every change is saved
-//! right away.
+//! connections, Speech to text, Conversation names, Document parsing, Sandboxing & Security and
+//! Tools. Every change is saved right away.
 
 use std::path::{Path, PathBuf};
 
@@ -179,8 +179,12 @@ impl SettingsView {
         // Settings → Sandboxing & Security: read again what may have changed elsewhere (/trust, the file).
         let security = crate::security::security(cx);
         security.update(cx, crate::security::Security::refresh);
+        // Settings → Tools asks pi again when it is next shown.
+        let tools = super::tools::tool_catalog(cx);
+        tools.update(cx, |tools, _| tools.mark_stale());
         let mut subscriptions = subscriptions;
         subscriptions.push(cx.observe(&security, |_, _, cx| cx.notify()));
+        subscriptions.push(cx.observe(&tools, |_, _, cx| cx.notify()));
         // The site field is checked as it is typed; Enter adds it.
         subscriptions.push(cx.subscribe_in(
             &site_input,
@@ -885,6 +889,11 @@ impl SettingsView {
         self.start_page = 7;
     }
 
+    /// Opens on the Tools page (before the first render).
+    pub fn start_on_tools(&mut self) {
+        self.start_page = 8;
+    }
+
     /// Opens on the Security page's Git and GitHub section (before the first render).
     pub fn start_on_git(&mut self) {
         self.start_page = 7;
@@ -973,6 +982,7 @@ impl Render for SettingsView {
                     naming_page(cx),
                     super::documents::page(),
                     super::security::page(self.site_input.clone()),
+                    super::tools::page(),
                 ]),
         )
     }

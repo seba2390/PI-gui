@@ -8,6 +8,7 @@ mod documents;
 mod local_search;
 mod models;
 mod security;
+mod tools;
 pub mod view;
 mod web_advanced;
 
