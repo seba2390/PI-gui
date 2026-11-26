@@ -246,6 +246,10 @@ pub struct PiSession {
 /// [`crate::chat::recall`]).
 const RECALLED_STATUS: [&str; 2] = [deepsearch::STATUS_KEY, deepsearch::EFFORT_KEY];
 
+/// Session files up to this size are read as the conversation opens (a few milliseconds),
+/// longer ones in the background.
+const SYNC_PREVIEW_BYTES: u64 = 4 * 1024 * 1024;
+
 /// What the composer shows before pi has answered.
 #[derive(Default)]
 struct Early {
@@ -290,6 +294,8 @@ enum Naming {
 enum Preview {
     #[default]
     None,
+    /// Being read in the background (a long file).
+    Reading,
     Shown,
     /// pi's history arrived: a late preview must not replace it.
     Superseded,
@@ -366,8 +372,8 @@ impl PiSession {
             _naming_task: Task::ready(()),
             _start_task: Task::ready(()),
         };
-        this.show_preview(cx);
         this.recall_early(cx);
+        this.show_preview(cx);
         match remote_env {
             Ok(env) if config.child_env.ready().is_some() => this.start(&env, cx),
             remote_env => {
@@ -1914,33 +1920,62 @@ impl PiSession {
         let (None, Some(file)) = (&self.host, self.resumed_from.clone()) else {
             return;
         };
+        // Read right away when it takes a few milliseconds, so the conversation's first
+        // frame already shows its history: read later, that frame would be empty.
+        let small = std::fs::metadata(&file).is_ok_and(|meta| meta.len() <= SYNC_PREVIEW_BYTES);
+        if small {
+            let (messages, selection) = read_preview(&file);
+            self.apply_preview(messages, selection, cx);
+            return;
+        }
+        self.preview = Preview::Reading;
         self._preview_task = cx.spawn(async move |this, cx| {
             let (messages, selection) = cx
                 .background_executor()
                 .spawn(async move { read_preview(&file) })
                 .await;
             let _ = this.update(cx, |this, cx| {
-                if let Some(selection) = selection {
-                    this.guess_early(&selection);
-                    cx.emit(SessionEvent::MetaChanged);
-                    cx.notify();
+                if this.preview == Preview::Reading {
+                    this.preview = Preview::None;
                 }
-                let Some(messages) = messages else {
-                    return;
-                };
-                if this.preview != Preview::None {
-                    return;
-                }
-                let notices = this.notices();
-                this.transcript = Transcript::from_messages(&messages);
-                for notice in notices {
-                    this.transcript.push_notice(notice.kind, notice.text);
-                }
-                this.preview = Preview::Shown;
+                this.apply_preview(messages, selection, cx);
+                cx.emit(SessionEvent::MetaChanged);
                 cx.emit(SessionEvent::Reloaded);
                 cx.notify();
             });
         });
+    }
+
+    fn apply_preview(
+        &mut self,
+        messages: Option<Vec<AgentMessage>>,
+        selection: Option<pi_sessions::branch::Selection>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(selection) = selection {
+            self.guess_early(&selection);
+        }
+        let Some(messages) = messages else {
+            return;
+        };
+        if self.preview != Preview::None {
+            return;
+        }
+        let notices = self.notices();
+        self.transcript = Transcript::from_messages(&messages);
+        for notice in notices {
+            self.transcript.push_notice(notice.kind, notice.text);
+        }
+        self.preview = Preview::Shown;
+        cx.notify();
+    }
+
+    /// Whether this is a resumed conversation whose history has not arrived yet (it shows
+    /// nothing rather than a new conversation's greeting).
+    pub fn loads_history(&self) -> bool {
+        self.resumed_from.is_some()
+            && self.transcript.items().is_empty()
+            && matches!(self.lifecycle, Lifecycle::Starting)
     }
 
     /// Notices in the transcript (e.g. an extension that failed to load while pi started).
@@ -2277,7 +2312,16 @@ fn read_preview(
             .map(|message| serde_json::from_value(message).ok())
             .collect()
     });
-    (messages, Some(branch.selection(deepsearch::STATUS_KEY)))
+    let mut selection = branch.selection(deepsearch::STATUS_KEY);
+    // Without a level of its own, pi resumes a conversation at its settings' default.
+    if selection.thinking_level.is_none() {
+        let default = pi_sessions::agent_dir()
+            .and_then(|dir| std::fs::read_to_string(dir.join("settings.json")).ok())
+            .and_then(|text| pi_config::settings::startup_defaults(&text).ok())
+            .and_then(|defaults| defaults.thinking_level);
+        selection.thinking_level = Some(default.unwrap_or_else(|| "medium".to_owned()));
+    }
+    (messages, Some(selection))
 }
 
 /// The web search statuses the extension sets for a chat with these entries of its own, as

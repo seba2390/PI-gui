@@ -24,6 +24,8 @@ pub struct Tool {
     pub description: String,
     /// Lines pi adds to the system prompt while the tool is active.
     pub guidelines: Vec<String>,
+    /// The parameters' JSON schema, as the model gets it.
+    pub schema: String,
     pub parameters: Vec<Parameter>,
     /// The extension file it comes from; `None` for pi's own.
     pub extension: Option<PathBuf>,
@@ -35,6 +37,33 @@ pub struct Tool {
 pub struct Parameter {
     pub name: String,
     pub required: bool,
+    /// The JSON schema type (`string`, `integer`, …); empty for a composite one.
+    pub kind: String,
+    pub description: String,
+}
+
+/// Characters per token, roughly, for English text and JSON with common tokenizers.
+pub const CHARS_PER_TOKEN: usize = 4;
+
+impl Tool {
+    /// The characters the tool puts in front of the model with every request: its name,
+    /// description and parameter schema, and its guidelines in the system prompt.
+    pub fn context_chars(&self) -> usize {
+        let chars = |text: &str| text.chars().count();
+        chars(&self.name)
+            + chars(&self.description)
+            + chars(&self.schema)
+            + self
+                .guidelines
+                .iter()
+                .map(|line| chars(line))
+                .sum::<usize>()
+    }
+
+    /// [`Self::context_chars`] in tokens, roughly.
+    pub fn context_tokens(&self) -> usize {
+        self.context_chars().div_ceil(CHARS_PER_TOKEN)
+    }
 }
 
 /// Writes the probe extension to `dir` (unless it is there already) and returns its path.
@@ -59,6 +88,7 @@ pub fn parse(text: &str) -> Option<Vec<Tool>> {
             Some(Tool {
                 name: string(&tool["name"])?,
                 description: string(&tool["description"]).unwrap_or_default(),
+                schema: string(&tool["schema"]).unwrap_or_default(),
                 guidelines: tool["guidelines"]
                     .as_array()
                     .map_or_else(Vec::new, |lines| lines.iter().filter_map(string).collect()),
@@ -71,6 +101,9 @@ pub fn parse(text: &str) -> Option<Vec<Tool>> {
                                 Some(Parameter {
                                     name: string(&parameter["name"])?,
                                     required: parameter["required"].as_bool().unwrap_or(false),
+                                    kind: string(&parameter["type"]).unwrap_or_default(),
+                                    description: string(&parameter["description"])
+                                        .unwrap_or_default(),
                                 })
                             })
                             .collect()
@@ -92,7 +125,9 @@ mod tests {
     fn reads_what_the_probe_reports() {
         let text = r#"[
             {"name":"read","description":"Read a file.","guidelines":["Use read."],
-             "parameters":[{"name":"path","required":true},{"name":"limit","required":false}],
+             "schema":"{\"type\":\"object\"}",
+             "parameters":[{"name":"path","required":true,"type":"string","description":"The file"},
+                           {"name":"limit","required":false}],
              "path":"builtin:read","active":true},
             {"name":"python","description":"Run Python.","guidelines":[],"parameters":[],
              "path":"/x/python/extension.ts","active":false}
@@ -104,14 +139,19 @@ mod tests {
                 name: "read".into(),
                 description: "Read a file.".into(),
                 guidelines: vec!["Use read.".into()],
+                schema: r#"{"type":"object"}"#.into(),
                 parameters: vec![
                     Parameter {
                         name: "path".into(),
-                        required: true
+                        required: true,
+                        kind: "string".into(),
+                        description: "The file".into(),
                     },
                     Parameter {
                         name: "limit".into(),
-                        required: false
+                        required: false,
+                        kind: String::new(),
+                        description: String::new(),
                     },
                 ],
                 extension: None,
@@ -123,6 +163,21 @@ mod tests {
             Some(Path::new("/x/python/extension.ts"))
         );
         assert!(!tools[1].active);
+    }
+
+    #[test]
+    fn what_a_tool_costs_in_context() {
+        let tool = Tool {
+            name: "read".into(),
+            description: "Read a file.".into(),
+            guidelines: vec!["Use read.".into()],
+            schema: r#"{"type":"object"}"#.into(),
+            parameters: Vec::new(),
+            extension: None,
+            active: true,
+        };
+        assert_eq!(tool.context_chars(), 4 + 12 + 17 + 9);
+        assert_eq!(tool.context_tokens(), 11);
     }
 
     #[test]

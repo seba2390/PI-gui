@@ -8,9 +8,11 @@ All notable changes to PI-gui are listed here. The format follows
 
 ### Added
 
-- Settings → Tools: the tools the model gets in chats and in Code sessions, as pi describes them
-  to it (description, guidelines and parameters), where each comes from, and when web search's
-  tools and Python are offered. pi itself is asked, so your extensions' tools are listed too.
+- Settings → Tools: the tools the model gets in chats and in Code sessions. At the top of each,
+  how much of the model's context the tools take with every message (about how many tokens, and
+  each tool's share in a bar). Each tool has a one-line summary, where it comes from and its size;
+  "What the model sees" opens exactly what pi tells the model (description, guidelines in the
+  system prompt, parameters). pi itself is asked, so your extensions' tools are listed too.
 
 ### Changed
 
@@ -20,6 +22,11 @@ All notable changes to PI-gui are listed here. The format follows
 - Chats that used web search (and any conversation with a compaction, extension messages or
   context edits) show their history at once too, read from the session file by pi's rules,
   instead of waiting for pi.
+
+### Fixed
+
+- Switching to another conversation no longer shows an empty "How can I help?" for a frame
+  before its history.
 
 - Chats use Python for more than numbers: the model is told to run a short program for any small
   job a program does more reliably than reasoning, such as counting letters or words, sorting or

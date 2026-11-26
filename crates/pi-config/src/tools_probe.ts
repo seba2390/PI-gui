@@ -10,17 +10,25 @@ export default function (pi: any) {
       const tools = pi
         .getAllTools()
         .filter((tool: any) => tool.exposure !== "hidden")
-        .map((tool: any) => ({
-          name: tool.name,
-          description: tool.description ?? "",
-          guidelines: tool.promptGuidelines ?? [],
-          parameters: Object.keys(tool.parameters?.properties ?? {}).map((name) => ({
-            name,
-            required: (tool.parameters?.required ?? []).includes(name),
-          })),
-          path: tool.sourceInfo?.path ?? "",
-          active: active.has(tool.name),
-        }));
+        .map((tool: any) => {
+          const schema = tool.parameters ?? {};
+          const required: string[] = schema.required ?? [];
+          return {
+            name: tool.name,
+            description: tool.description ?? "",
+            guidelines: tool.promptGuidelines ?? [],
+            // The parameters' JSON schema, as the model gets it.
+            schema: JSON.stringify(schema),
+            parameters: Object.entries(schema.properties ?? {}).map(([name, property]: [string, any]) => ({
+              name,
+              required: required.includes(name),
+              type: typeof property?.type === "string" ? property.type : "",
+              description: property?.description ?? "",
+            })),
+            path: tool.sourceInfo?.path ?? "",
+            active: active.has(tool.name),
+          };
+        });
       ctx?.ui?.setStatus?.(KEY, JSON.stringify(tools));
     }, 300);
   });

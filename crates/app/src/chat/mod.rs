@@ -1262,7 +1262,10 @@ impl Render for ChatView {
                         .child(field.cached(StyleRefinement::default().size_full())),
                 )
             })
-            .child(if is_empty {
+            .child(if is_empty && self.session.read(cx).loads_history() {
+                // A long conversation still being read: nothing, not a new one's greeting.
+                div().flex_1().into_any_element()
+            } else if is_empty {
                 self.render_empty(cx).into_any_element()
             } else {
                 div()

@@ -519,12 +519,16 @@ the Sandboxing & Security page light up under the pointer and scroll by themselv
   sites), and what the agent may do with your git and GitHub logins without asking (Git and
   GitHub). Also which project files pi loads: pi's `defaultProjectTrust` and the saved
   decisions in its `trust.json`, which can be removed.
-- **Tools:** the tools the model gets in chats and in Code sessions on this computer, each with
-  where it comes from (pi, Pistachio or an extension), the description and guidelines pi gives the
-  model, and its parameters; in chats also when web search's tools and Python are offered, and in
-  Code the tools pi has but does not offer. pi is asked for them when the page is shown: a pi
-  that keeps no session, started like a conversation of each mode, reports them through a small
-  extension (`~/.pi/agent/pistachio/tools/tools-probe.ts`) and quits.
+- **Tools:** the tools the model gets in chats and in Code sessions on this computer. Each mode
+  starts with how much of the model's context its tools take with every message: about how many
+  tokens (the characters of each tool's description, parameter schema and system-prompt
+  guidelines, at about 4 characters a token; in chats also the total with web search on), and a
+  bar with each tool's share. Each tool has a one-line summary, where it comes from (pi, Pistachio
+  or an extension) and its size; "What the model sees" opens, word for word, what pi tells the
+  model. In chats it also says when web search's tools and Python are offered, and in Code which
+  tools pi has but does not offer. pi is asked for them when the page is shown: a pi that keeps
+  no session, started like a conversation of each mode, reports them through a small extension
+  (`~/.pi/agent/pistachio/tools/tools-probe.ts`) and quits.
 
 The app's own settings live in `~/.pi/agent/pistachio/settings.json`.
 
