@@ -5,6 +5,7 @@
 use std::path::Path;
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::setting::{SettingField, SettingGroup, SettingItem, SettingPage};
 use gpui_kit::component::{
@@ -313,8 +314,8 @@ impl Folders {
     }
 }
 
-/// The rows of a list of folders: the path, Read and Write to turn on and off (no reading means
-/// no writing; writing needs reading) and the trash can.
+/// The rows of a list of folders: the path, Read and Write to tick (no reading means no writing;
+/// writing needs reading) and the trash can.
 fn folder_rows(list: Folders, cx: &App) -> Vec<AnyElement> {
     let theme = cx.theme();
     let (muted, mono) = (theme.muted_foreground, theme.mono_font_family.clone());
@@ -325,35 +326,38 @@ fn folder_rows(list: Folders, cx: &App) -> Vec<AnyElement> {
             let id = |what: &str| SharedString::from(format!("{}-{index}-{what}", list.key()));
             let read_on = entry.read;
             let write_on = entry.write && entry.read;
-            let read = chip(id("read"), Icon::new(IconName::Eye), "Read", read_on, cx).on_click(
-                move |_, _, cx| {
+            let read = Checkbox::new(id("read"))
+                .small()
+                .label("Read")
+                .checked(read_on)
+                .on_click(move |checked: &bool, _, cx| {
+                    let checked = *checked;
                     list.change(cx, |entries| {
                         if let Some(entry) = entries.get_mut(index) {
-                            entry.read = !read_on;
-                            if read_on {
+                            entry.read = checked;
+                            // No reading, no writing.
+                            if !checked {
                                 entry.write = false;
                             }
                         }
                     });
-                },
-            );
-            let write = chip(
-                id("write"),
-                Icon::from(AppIcon::Pencil),
-                "Write",
-                write_on,
-                cx,
-            )
-            .on_click(move |_, _, cx| {
-                list.change(cx, |entries| {
-                    if let Some(entry) = entries.get_mut(index) {
-                        entry.write = !write_on;
-                        if !write_on {
-                            entry.read = true;
-                        }
-                    }
                 });
-            });
+            let write = Checkbox::new(id("write"))
+                .small()
+                .label("Write")
+                .checked(write_on)
+                .on_click(move |checked: &bool, _, cx| {
+                    let checked = *checked;
+                    list.change(cx, |entries| {
+                        if let Some(entry) = entries.get_mut(index) {
+                            entry.write = checked;
+                            // Writing needs reading.
+                            if checked {
+                                entry.read = true;
+                            }
+                        }
+                    });
+                });
             let remove =
                 remove_button(id("remove"), entry.path.clone(), cx).on_click(move |_, _, cx| {
                     list.change(cx, |entries| {
@@ -376,7 +380,7 @@ fn folder_rows(list: Folders, cx: &App) -> Vec<AnyElement> {
                         .when(!read_on, |this| this.text_color(muted))
                         .child(entry.path.clone()),
                 )
-                .child(h_flex().flex_none().gap_1().child(read).child(write))
+                .child(h_flex().flex_none().gap_3().child(read).child(write))
                 .child(remove)
                 .into_any_element()
         })

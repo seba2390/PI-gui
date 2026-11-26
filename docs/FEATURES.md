@@ -274,8 +274,8 @@ Linux; Windows is planned, #47).
   other extensions and your own `!` commands are not sandboxed.
 - **Files:** the home folder is private. Commands and file tools see only the session's folder
   (and, for a subfolder of a repository, the rest of it), pi's skills, the **tool folders** and the
-  **allowed folders**. Both are lists where each folder can be read, or read and written (turning
-  Read off turns Write off; turning Write on turns Read on), removed, or added with +. The tool
+  **allowed folders**. Both are lists where each folder has Read and Write to tick (unticking
+  Read unticks Write; ticking Write ticks Read), a red trash can, and + to add. The tool
   folders start as what this computer has: caches to write (`~/.cargo`, `~/.npm`, `~/.cache`, …),
   programs and settings to read (`~/.nvm`, `~/.local`, `~/.gitconfig`, …) and `$PATH` folders in
   the home folder; switched off, none of them. Outside the home folder, programs and system files
