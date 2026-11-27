@@ -6,6 +6,12 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- The gate no longer names GitHub accounts in what it prints back to the model: not in the
+  remote it adds after creating a repository, nor when the repository changed while the user was
+  asked. Fixes the code scanning alerts 9–12 (rust/cleartext-logging).
+
 ## [0.5.8] - 2026-11-27
 
 ### Changed

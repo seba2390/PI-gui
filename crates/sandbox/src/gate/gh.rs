@@ -923,7 +923,10 @@ mod tests {
             .expect("allowed")
             .expect("gated");
         assert_eq!(only.accounts, ["me-at-work"]);
-        assert!(only.title.ends_with("as me-at-work"), "{}", only.title);
+        assert_eq!(
+            only.title,
+            "Delete the repository github.com/a/app as me-at-work"
+        );
         let refused = plan_as(&delete, &Scoped(false)).unwrap_err();
         assert!(
             refused.contains("gh auth refresh -h github.com -s delete_repo"),
