@@ -197,6 +197,23 @@ impl ModelsDialog {
                 _ => {}
             },
         );
+        let mut subscriptions = vec![enter, enter_port];
+        if let Some(models) = crate::local_models::local_models(cx) {
+            subscriptions.push(cx.observe(&models, |_, _, cx| cx.notify()));
+            // A suggested model that started is connected like any server.
+            subscriptions.push(cx.subscribe_in(
+                &models,
+                window,
+                |this, _, event: &crate::local_models::LocalModelsEvent, window, cx| {
+                    if let crate::local_models::LocalModelsEvent::Ready { url } = event
+                        && matches!(this.screen, Screen::Hosted)
+                    {
+                        this.back_to = Back::Hosted;
+                        this.open_new_server(vec![url.clone()], window, cx);
+                    }
+                },
+            ));
+        }
         let mut this = Self {
             window: window.window_handle(),
             loaded: None,
@@ -222,7 +239,7 @@ impl ModelsDialog {
             asked: 0,
             task: None,
             _tasks: Vec::new(),
-            _subscriptions: vec![enter, enter_port],
+            _subscriptions: subscriptions,
             place,
         };
         // Servers are only looked for once a device is chosen: none is assumed to run anywhere.

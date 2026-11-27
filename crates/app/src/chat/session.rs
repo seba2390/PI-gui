@@ -206,6 +206,9 @@ pub struct PiSession {
     /// second message never arrives while pi still thinks it is idle (it would start a second
     /// run or be refused as busy).
     outbox: VecDeque<PendingPrompt>,
+    /// A suggested local model is starting, so prompts wait for it (see [`crate::local_models`]).
+    /// `Some(false)` once it could not start: then they go to pi, which says what is wrong.
+    local_model: Option<bool>,
     /// The prompt that was sent and that pi has not answered yet.
     sending: Option<Sending>,
     /// The prompts in pi's queue, for their images.
@@ -355,6 +358,7 @@ impl PiSession {
             extension_status: BTreeMap::new(),
             widgets: BTreeMap::new(),
             outbox: VecDeque::new(),
+            local_model: None,
             sending: None,
             queued: QueuedPrompts::default(),
             clearing_queue: 0,
@@ -488,6 +492,7 @@ impl PiSession {
             extension_status: BTreeMap::new(),
             widgets: BTreeMap::new(),
             outbox: VecDeque::new(),
+            local_model: None,
             sending: None,
             queued: QueuedPrompts::default(),
             clearing_queue: 0,
@@ -981,6 +986,35 @@ impl PiSession {
         self.compaction.sent || self.compaction.running
     }
 
+    /// Whether prompts wait because the session's model is a suggested local model that is
+    /// starting; starts it when it does not run, and sends them once it answers.
+    fn waits_for_local_model(&mut self, cx: &mut Context<Self>) -> bool {
+        match self.local_model {
+            Some(true) => return true,
+            Some(false) => return false,
+            None => {}
+        }
+        let Some(provider) = self.model().map(|model| model.provider.clone()) else {
+            return false;
+        };
+        let Some(started) = crate::local_models::ensure_running(&provider, cx) else {
+            return false;
+        };
+        self.local_model = Some(true);
+        cx.spawn(async move |this, cx| {
+            let ok = started.await;
+            let _ = this.update(cx, |this, cx| {
+                // Once it runs, later prompts check again (it may stop); after a failure the
+                // waiting prompts go to pi, which reports the unreachable server.
+                this.local_model = (!ok).then_some(false);
+                this.flush_outbox(cx);
+                this.local_model = None;
+            });
+        })
+        .detach();
+        true
+    }
+
     /// Sends the next waiting prompt once pi is ready and has answered the previous one.
     fn flush_outbox(&mut self, cx: &mut Context<Self>) {
         if self.sending.is_some() || self.lifecycle != Lifecycle::Ready || self.holds_prompts() {
@@ -989,6 +1023,9 @@ impl PiSession {
         let Some(client) = self.client.clone() else {
             return;
         };
+        if self.outbox.is_empty() || self.waits_for_local_model(cx) {
+            return;
+        }
         let Some(prompt) = self.outbox.pop_front() else {
             return;
         };

@@ -152,6 +152,8 @@ pub struct AppConfig {
     pub tools_dir: PathBuf,
     /// The sandbox's settings and pi extension (see [`sandbox`]).
     pub sandbox_dir: PathBuf,
+    /// Local models suggested for this computer: engines, models, setups (see [`local_models`]).
+    pub local_models_dir: PathBuf,
     /// Where the skills that come with the app are written (see [`crate::builtin_skills`]).
     pub builtin_skills_dir: PathBuf,
     /// This executable, which runs deep search's web tools for pi and reads documents.
@@ -195,6 +197,7 @@ impl AppConfig {
             python_dir: std::env::temp_dir().join("pistachio-test-python"),
             tools_dir: std::env::temp_dir().join("pistachio-test-tools"),
             sandbox_dir: std::env::temp_dir().join("pistachio-test-sandbox"),
+            local_models_dir: std::env::temp_dir().join("pistachio-test-local-models"),
             builtin_skills_dir: std::env::temp_dir().join("pistachio-test-skills"),
             exe: Some(PathBuf::from("/app/pistachio")),
             open_at_startup: Vec::new(),
@@ -226,6 +229,10 @@ impl AppConfig {
                 |dir| dir.join("tools"),
             ),
             sandbox_dir: sandbox::default_dir(),
+            local_models_dir: pi_sessions::app_dir().map_or_else(
+                || std::env::temp_dir().join("pistachio-local-models"),
+                |dir| dir.join("local-models"),
+            ),
             builtin_skills_dir: pi_sessions::app_dir().map_or_else(
                 || std::env::temp_dir().join("pistachio-skills"),
                 |dir| dir.join("skills"),

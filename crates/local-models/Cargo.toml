@@ -1,0 +1,26 @@
+[package]
+name = "local-models"
+description = "Suggesting, downloading and running a local model for pistachio: hardware scan, catalog, recommendations, pinned installs, servers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+flate2 = "1"
+python-env.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10.9"
+tar = { version = "0.4", default-features = false }
+ureq = { version = "=3.5.2", default-features = false, features = ["rustls"] }
+zip = { version = "9.8.1", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

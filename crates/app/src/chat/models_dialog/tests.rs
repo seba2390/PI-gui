@@ -339,6 +339,64 @@ fn locally_hosted_on_this_device(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("device:this").is_some());
 }
 
+/// On this device, three models are suggested for its hardware; downloading one asks first,
+/// saying what is downloaded.
+#[gpui_kit::test]
+fn suggests_local_models(cx: &mut TestAppContext) {
+    use local_models::hardware::{AppleChip, AppleTier, Hardware, Os};
+    let dir = tempfile::tempdir().unwrap();
+    let (_dialog, cx) = open(dir.path(), "", cx);
+    let models = cx.update(|_, cx| {
+        crate::local_models::init(cx);
+        crate::local_models::local_models(cx).unwrap()
+    });
+    click("start:hosted", cx);
+    click("device:this", cx);
+    cx.update(|_, cx| {
+        models.update(cx, |models, cx| {
+            models.scanned(
+                Hardware {
+                    os: Os::Macos,
+                    arm64: true,
+                    os_version: Some((26, 4)),
+                    cpu: "Apple M4".into(),
+                    apple: Some(AppleChip {
+                        generation: 4,
+                        tier: AppleTier::Base,
+                    }),
+                    ram: 16_000_000_000,
+                    gpu: None,
+                    avx512: false,
+                    free_disk: Some(500_000_000_000),
+                    tools: Vec::new(),
+                },
+                cx,
+            );
+        });
+    });
+    draw(cx);
+    for tier in ["Fast", "Balanced", "Most capable"] {
+        let card: &'static str = format!("suggestion:{tier}").leak();
+        assert!(cx.debug_bounds(card).is_some(), "{tier}");
+    }
+    let asking = |cx: &mut VisualTestContext| {
+        cx.update(|window, _| {
+            gpui_kit::test::TestWindowExt::try_find(window, "download-start").is_some()
+        })
+    };
+    assert!(!asking(cx));
+    click("local-Fast-default", cx);
+    assert!(asking(cx), "asks first");
+    click("download-cancel", cx);
+    assert!(!asking(cx));
+    cx.update(|_, cx| {
+        assert!(
+            !models.read(cx).is_busy(),
+            "nothing downloads without a yes"
+        );
+    });
+}
+
 /// An address without a port is a device to look around on; with one, a server.
 #[gpui_kit::test]
 fn another_device_by_its_address(cx: &mut TestAppContext) {

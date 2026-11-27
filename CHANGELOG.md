@@ -6,6 +6,24 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Models suggested for this computer.** Add models… → Locally hosted model → This device now
+  looks at the computer (memory, chip or graphics card, free disk) and suggests up to three models:
+  Fast, Balanced and Most capable. Each comes with the engine that runs it best here, with its
+  estimated speed and memory: a default that installs unattended (llama.cpp, Rapid-MLX, Splash,
+  BigMoeOnEdge) and, where clearly faster, a specialized engine built on the computer
+  (ik_llama.cpp, TurboFieldfare). Download says how much it is and asks first, listing exactly what
+  is downloaded; every file is pinned and checked against its SHA-256. A model that runs is
+  connected like any server, is started when a chat sends to it (the message waits until it
+  answers) and stops when Pistachio quits.
+
+### Fixed
+
+- A llama.cpp server is now added to `models.json` as `llama-cpp`, not `llama.cpp`: pi 1.5 has
+  a built-in provider with that ID, which took the entry's place, so sending to it failed with
+  "Provider is not configured: llama.cpp".
+
 ## [0.5.10] - 2026-11-27
 
 ### Added

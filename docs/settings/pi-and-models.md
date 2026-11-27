@@ -58,6 +58,19 @@ Locally hosted model
   connected by its port or address; Pistachio finds out whether it speaks OpenAI's,
   Anthropic's or Gemini's API.
 
+  On this device (when pi runs here), Pistachio also **suggests models for this computer**. It
+  looks at the memory, the chip or graphics card and the free disk, and offers up to three:
+  **Fast**, **Balanced** and **Most capable**, each faster and less capable than the next. Each
+  comes with the engine that runs it best here and an estimate of its speed and memory: a
+  default engine that installs without any steps (llama.cpp, Rapid-MLX on Macs, Splash on newer
+  Macs, BigMoeOnEdge for models larger than the memory) and, where one is clearly faster, a
+  specialized engine that is built on this computer (ik_llama.cpp, TurboFieldfare). The download
+  button says how much it is; pressing it shows exactly what is downloaded (the engine and the
+  model's files, their sizes and licenses) and asks first. Everything is pinned to a version and
+  checked against its SHA-256, and kept in `~/.pi/agent/pistachio/local-models`. Once it runs,
+  the model is connected like any other server. It runs for this computer only, is started when
+  a chat sends to it, and stops when Pistachio quits.
+
 API provider model
 : pi's own providers (Anthropic, OpenAI, Google Gemini, OpenRouter and more). Paste an API key
   (or `$NAME` for an environment variable, or `!command`), which is checked with the provider

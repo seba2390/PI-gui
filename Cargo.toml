@@ -17,6 +17,7 @@ repository = "https://github.com/seba2390/pistachio"
 # Internal crates
 deepsearch = { path = "crates/deepsearch" }
 documents = { path = "crates/documents" }
+local-models = { path = "crates/local-models" }
 pi-config = { path = "crates/pi-config" }
 pi-rpc = { path = "crates/pi-rpc" }
 pi-sessions = { path = "crates/pi-sessions" }

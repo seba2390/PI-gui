@@ -137,6 +137,7 @@ script/make-icon.sh                      # regenerate the .icns / PNG from icon.
 script/set-version.sh 0.5.0              # bump the version (Cargo.toml, Cargo.lock, README install links)
 script/update-searxng.sh                 # move the pins of the SearXNG the app can download
 script/update-parsers.sh                 # move the pins of the document parsers the app can download
+script/update-local-models.sh <radar>    # copy the local-model catalog from a local-llm-radar checkout
 script/release.sh 0.5.0 --docs-review <file>   # release a version (see Releasing)
 script/ci-build.sh --release --locked    # CI: a build with resource samples and timings (see CI and release builds)
 ```
@@ -215,6 +216,12 @@ first).
 `script/test-deepsearch.py` runs deep search's extension in real pi, with a scripted model, search
 service and pages on this computer (`cargo build` first). It covers what no unit test can: sending
 the model back, revisions, a model that does not answer, Esc and more.
+
+`LOCAL_MODELS_LIVE=lfm3-1.7b/gguf-q4_k_m/llama-cpp cargo test -p local-models --test live --
+--ignored --nocapture` really downloads an engine and a model (about 1 GB), starts it and asks it
+something; any `<model>/<build>/<engine>` that runs on the computer works.
+`cargo test -p local-models typical_computers -- --ignored --nocapture` prints what typical
+computers would be offered, to look over after moving the catalog.
 
 `cargo test -p documents --test live -- --ignored --test-threads 1` really downloads the document
 parsers (2 GB, into a temporary folder) and reads a PDF with each; add `pymupdf4llm`, `docling` or
