@@ -49,6 +49,17 @@ pub enum Status {
     Running,
 }
 
+/// What removing a setup deletes from this computer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Installed {
+    /// The model, unless another setup uses it too.
+    pub model: Option<String>,
+    /// The engine, unless another setup uses it too.
+    pub engine: Option<String>,
+    /// Bytes of the model's files.
+    pub size: u64,
+}
+
 pub struct LocalModels {
     root: PathBuf,
     scan: Scan,
@@ -162,14 +173,18 @@ impl LocalModels {
         self.error.as_deref()
     }
 
-    /// Looks at this computer once, in the background, and makes the suggestions.
-    pub fn ensure_scanned(&mut self, cx: &mut Context<Self>) {
-        if !matches!(self.scan, Scan::NotYet) {
+    /// Looks at this computer (again), in the background, and makes the suggestions.
+    pub fn scan_now(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.scan, Scan::Scanning) {
             return;
         }
         self.scan = Scan::Scanning;
         let root = self.root.clone();
         let env = cx.global::<AppConfig>().child_env.clone();
+        // Long enough to see that it looked; a scan is often quicker.
+        let shown = cx
+            .background_executor()
+            .timer(std::time::Duration::from_millis(600));
         cx.spawn(async move |this, cx| {
             let scan = cx
                 .background_spawn(async move {
@@ -186,9 +201,12 @@ impl LocalModels {
                     }
                 })
                 .await;
+            shown.await;
             let _ = this.update(cx, |this, cx| {
-                this.scan = scan;
-                cx.notify();
+                if matches!(this.scan, Scan::Scanning) {
+                    this.scan = scan;
+                    cx.notify();
+                }
             });
         })
         .detach();
@@ -228,6 +246,75 @@ impl LocalModels {
     /// The address of a running setup.
     pub fn url(&self, choice: &Choice) -> Option<String> {
         self.setup(&choice.key()).map(Setup::base_url)
+    }
+
+    /// What removing the setup listening at `base_url` deletes, when Pistachio set one up there.
+    pub fn installed_at(&self, base_url: &str) -> Option<Installed> {
+        let setup = setups::at(&self.setups, base_url)?;
+        let catalog = catalog();
+        let others: Vec<&Setup> = self
+            .setups
+            .iter()
+            .filter(|other| other.port != setup.port)
+            .collect();
+        let model = catalog.model(&setup.model);
+        let build = model.and_then(|model| model.build(&setup.build));
+        let shared_model = others
+            .iter()
+            .any(|other| other.model == setup.model && other.build == setup.build);
+        let shared_engine = others.iter().any(|other| other.engine == setup.engine);
+        Some(Installed {
+            model: (!shared_model).then(|| {
+                let name = model.map_or(setup.model.as_str(), |model| &model.name);
+                match build {
+                    Some(build) => format!("{name} · {}", build.quant),
+                    None => name.to_owned(),
+                }
+            }),
+            engine: (!shared_engine).then(|| {
+                catalog
+                    .engine(&setup.engine)
+                    .map_or_else(|| setup.engine.clone(), |engine| engine.name.clone())
+            }),
+            size: build
+                .filter(|_| !shared_model)
+                .map_or(0, |build| build.size),
+        })
+    }
+
+    /// Stops and forgets the setup listening at `base_url`, and deletes its model and engine
+    /// (unless another setup uses them) in the background. `None` when there is none there.
+    pub fn remove(
+        &mut self,
+        base_url: &str,
+        cx: &mut Context<Self>,
+    ) -> Option<Task<Result<(), String>>> {
+        let key = setups::at(&self.setups, base_url)?.key();
+        let ix = self.setups.iter().position(|setup| setup.key() == key)?;
+        let setup = self.setups.remove(ix);
+        // Dropping an engine stops it.
+        self.running.remove(&key);
+        if let Err(error) = setups::save(&self.root, &self.setups) {
+            log::warn!("saving the local models: {error}");
+        }
+        cx.notify();
+        let (root, mut others) = (self.root.clone(), self.setups.clone());
+        // What is being downloaded stays too.
+        if let Some(job) = &self.job
+            && let [model, build, engine] = job.key.splitn(3, '/').collect::<Vec<_>>()[..]
+        {
+            others.push(Setup {
+                model: model.to_owned(),
+                build: build.to_owned(),
+                engine: engine.to_owned(),
+                port: 0,
+                context: 0,
+            });
+        }
+        Some(cx.background_spawn(async move {
+            install::uninstall(&root, catalog(), &setup, &others)
+                .map_err(|error| format!("Could not delete the model's files: {error}"))
+        }))
     }
 
     /// Asks whether to download what `choice` needs, showing exactly what that is, and on a yes

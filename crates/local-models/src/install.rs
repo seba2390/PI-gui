@@ -18,8 +18,9 @@ use python_env::{Tools, io};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-use crate::catalog::{Build, Engine, Format, Install, Model};
+use crate::catalog::{Build, Catalog, Engine, Format, Install, Model};
 use crate::recommend::Choice;
+use crate::setups::Setup;
 
 const MARKER: &str = ".installed";
 /// An unpacked engine larger than this is refused.
@@ -359,7 +360,34 @@ fn install_model(
 
 /// Deletes a model's files.
 pub fn remove_model(root: &Path, model: &Model, build: &Build) -> std::io::Result<()> {
-    python_env::remove(&model_dir(root, model, build))
+    python_env::remove(&model_dir(root, model, build))?;
+    // The model's folder too, once no other build of it is left.
+    let _ = fs::remove_dir(root.join("models").join(&model.id));
+    Ok(())
+}
+
+/// Deletes what `setup` downloaded: its model and its engine, each unless one of `others` (the
+/// setups that stay) uses it too.
+pub fn uninstall(
+    root: &Path,
+    catalog: &Catalog,
+    setup: &Setup,
+    others: &[Setup],
+) -> std::io::Result<()> {
+    let shares_model = others
+        .iter()
+        .any(|other| other.model == setup.model && other.build == setup.build);
+    if !shares_model
+        && let Some(model) = catalog.model(&setup.model)
+        && let Some(build) = model.build(&setup.build)
+    {
+        remove_model(root, model, build)?;
+    }
+    let shares_engine = others.iter().any(|other| other.engine == setup.engine);
+    if !shares_engine && let Some(engine) = catalog.engine(&setup.engine) {
+        python_env::remove(&engine_dir(root, engine))?;
+    }
+    Ok(())
 }
 
 /// `step` run by the shell in `dir`, its output going to standard error (which is read).
@@ -538,6 +566,47 @@ mod tests {
             }
         }
         builder.into_inner().unwrap().finish().unwrap()
+    }
+
+    /// A model and engine another setup still uses are kept; the rest is deleted.
+    #[test]
+    fn uninstall_keeps_what_others_use() {
+        let catalog = crate::catalog();
+        let model = &catalog.models[0];
+        let build = &model.builds[0];
+        let engine = catalog.engine(&build.engines[0]).unwrap();
+        let other = catalog
+            .engines
+            .iter()
+            .find(|other| other.id != engine.id)
+            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for path in [
+            model_dir(root, model, build),
+            engine_dir(root, engine),
+            engine_dir(root, other),
+        ] {
+            fs::create_dir_all(&path).unwrap();
+            fs::write(path.join(MARKER), "").unwrap();
+        }
+        let setup = |engine: &Engine| Setup {
+            model: model.id.clone(),
+            build: build.id.clone(),
+            engine: engine.id.clone(),
+            port: 1,
+            context: 1,
+        };
+        let (gone, stays) = (setup(engine), setup(other));
+
+        uninstall(root, catalog, &gone, std::slice::from_ref(&stays)).unwrap();
+        assert!(model_dir(root, model, build).exists(), "still used");
+        assert!(!engine_dir(root, engine).exists());
+        assert!(engine_dir(root, other).exists());
+
+        uninstall(root, catalog, &stays, &[]).unwrap();
+        assert!(!root.join("models").join(&model.id).exists());
+        assert!(!engine_dir(root, other).exists());
     }
 
     #[test]

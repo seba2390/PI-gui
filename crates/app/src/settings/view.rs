@@ -33,6 +33,8 @@ use crate::ui::{AppIcon, PiField};
 pub enum SettingsEvent {
     /// Opens the dialog for this computer's models.
     Models(ModelsOpen),
+    /// A provider was removed from this computer's models.json; says what was done.
+    ModelsRemoved(SharedString),
     Host(SavedHostAction),
     CheckForUpdates,
 }

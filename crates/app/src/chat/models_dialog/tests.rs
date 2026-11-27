@@ -310,6 +310,10 @@ fn locally_hosted_on_this_device(cx: &mut TestAppContext) {
     cx.update(|_, cx| assert!(dialog.read(cx).this_device.is_none()));
     assert!(cx.debug_bounds("local:Ollama").is_none());
     click("device:this", cx);
+    // Attach or deploy first; nothing is looked for yet.
+    assert!(cx.debug_bounds("way:deploy").is_some());
+    cx.update(|_, cx| assert!(dialog.read(cx).this_device.is_none()));
+    click("way:attach", cx);
     cx.update(|_, cx| {
         assert_eq!(
             dialog.read(cx).this_device.as_ref().unwrap().host,
@@ -334,13 +338,16 @@ fn locally_hosted_on_this_device(cx: &mut TestAppContext) {
         provider.base_url.as_deref(),
         Some(format!("http://localhost:{port}/v1").as_str())
     );
-    // Back goes to where the server was chosen.
+    // Back goes to where the server was chosen, then to attach or deploy.
     click("models-back", cx);
-    assert!(cx.debug_bounds("device:this").is_some());
+    assert!(cx.debug_bounds("local:Ollama").is_some());
+    click("models-back", cx);
+    assert!(cx.debug_bounds("local:Ollama").is_none());
+    assert!(cx.debug_bounds("way:attach").is_some());
 }
 
-/// On this device, three models are suggested for its hardware; downloading one asks first,
-/// saying what is downloaded.
+/// Deploying on this device scans its hardware when asked, shows what it found, and suggests
+/// three models for it when asked; downloading one asks first, saying what is downloaded.
 #[gpui_kit::test]
 fn suggests_local_models(cx: &mut TestAppContext) {
     use local_models::hardware::{AppleChip, AppleTier, Hardware, Os};
@@ -352,6 +359,11 @@ fn suggests_local_models(cx: &mut TestAppContext) {
     });
     click("start:hosted", cx);
     click("device:this", cx);
+    click("way:deploy", cx);
+    assert!(cx.debug_bounds("local:Ollama").is_none());
+    assert!(cx.debug_bounds("hardware:Memory").is_none());
+    click("scan-hardware", cx);
+    assert!(cx.debug_bounds("scanning-hardware").is_some());
     cx.update(|_, cx| {
         models.update(cx, |models, cx| {
             models.scanned(
@@ -375,6 +387,16 @@ fn suggests_local_models(cx: &mut TestAppContext) {
         });
     });
     draw(cx);
+    assert!(cx.debug_bounds("scanning-hardware").is_none());
+    for fact in ["Processor", "Memory", "Graphics", "Disk"] {
+        let row: &'static str = format!("hardware:{fact}").leak();
+        assert!(cx.debug_bounds(row).is_some(), "{fact}");
+    }
+    assert!(
+        cx.debug_bounds("suggestion:Fast").is_none(),
+        "only once asked"
+    );
+    click("suggest-models", cx);
     for tier in ["Fast", "Balanced", "Most capable"] {
         let card: &'static str = format!("suggestion:{tier}").leak();
         assert!(cx.debug_bounds(card).is_some(), "{tier}");

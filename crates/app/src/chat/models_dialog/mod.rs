@@ -34,7 +34,7 @@ use remote::HostId;
 pub use probe::answers;
 pub use start_screen::describe;
 
-use self::hosted_screen::{Device, Scan};
+use self::hosted_screen::{DeployStep, Device, Scan, Way};
 use self::key_screen::KeyScreen;
 use self::server_screen::ServerScreen;
 use self::start_screen::Back;
@@ -132,6 +132,10 @@ pub struct ModelsDialog {
     back_to: Back,
     /// Where a locally hosted server runs, once chosen.
     device: Option<Device>,
+    /// On this device: attach to a server that runs, or deploy a new model.
+    this_way: Option<Way>,
+    /// How far deploying a new model on this device got.
+    deploy: DeployStep,
     /// The known servers on this device, once it was chosen.
     this_device: Option<Scan>,
     /// The known servers on the other device last asked for.
@@ -228,6 +232,8 @@ impl ModelsDialog {
             open,
             back_to: Back::Start,
             device: None,
+            this_way: None,
+            deploy: DeployStep::Start,
             this_device: None,
             other_device: None,
             address,
@@ -307,6 +313,17 @@ impl ModelsDialog {
     }
 
     fn back(&mut self, cx: &mut Context<Self>) {
+        // From attaching or deploying on this device to choosing between them.
+        if matches!(self.screen, Screen::Hosted)
+            && self.device == Some(Device::This)
+            && self.this_way.is_some()
+            && self.suggests_models()
+        {
+            self.this_way = None;
+            self.address_error = None;
+            cx.notify();
+            return;
+        }
         let screen = match (&self.screen, self.back_to) {
             (Screen::Key(_) | Screen::Server(_), Back::Hosted) => Screen::Hosted,
             (Screen::Key(_) | Screen::Server(_), Back::Providers) => Screen::Providers,
@@ -579,7 +596,11 @@ fn card(
     Button::new(SharedString::from(id))
         .choice_card(chosen, cx)
         .h(px(40.))
-        .accessibility_label(format!("{title}, {detail}"))
+        .accessibility_label(if detail.is_empty() {
+            title.to_string()
+        } else {
+            format!("{title}, {detail}")
+        })
         .child(
             h_flex()
                 .w_full()

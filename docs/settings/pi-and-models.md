@@ -45,23 +45,31 @@ pi's own `settings.json`, like `/settings` in the terminal, so the terminal pi u
 :alt: Connected models
 ```
 
-The servers and API keys in `models.json` on this computer, each with whether its server
-answers. Click one to change or remove it. Sign-ins made with `/login` are not listed here.
+The servers and API keys in `models.json` on this computer, grouped by where the models run:
+**This device**, **Other devices** and **API connections**. Each shows whether its server
+answers; click one to change it. The trash button removes it after asking: an API connection or
+a server on another device is only removed from `models.json`, and so is a server on this device
+that Pistachio did not set up (like Ollama). A model Pistachio downloaded and runs on this device
+is also stopped and deleted, with its engine unless another local model uses it. Sign-ins made
+with `/login` are not listed here.
 
 **Add models…** (also **Add or change models…** in the model menu of the message box) starts
 with two choices:
 
 Locally hosted model
 : Choose whether it runs on this device or another one (by its address, like
-  `192.168.1.89`). Pistachio looks for Ollama, LM Studio, llama.cpp, MLX, vLLM, Jan, Docker
-  Model Runner, SGLang, Lemonade and KoboldCpp on their usual ports. Any other server is
-  connected by its port or address; Pistachio finds out whether it speaks OpenAI's,
-  Anthropic's or Gemini's API.
+  `192.168.1.89`). On this device (when pi runs here) there are two ways:
+  **Attach to existing model** and **Deploy new model**. Attaching (and another device) looks
+  for Ollama, LM Studio, llama.cpp, MLX, vLLM, Jan, Docker Model Runner, SGLang, Lemonade and
+  KoboldCpp on their usual ports. Any other server is connected by its port or address;
+  Pistachio finds out whether it speaks OpenAI's, Anthropic's or Gemini's API.
 
-  On this device (when pi runs here), Pistachio also **suggests models for this computer**. It
-  looks at the memory, the chip or graphics card and the free disk, and offers up to three:
-  **Fast**, **Balanced** and **Most capable**, each faster and less capable than the next. Each
-  comes with the engine that runs it best here and an estimate of its speed and memory: a
+  **Deploy new model** suggests models for this computer. **Scan local hardware** looks at the
+  processor, the memory, the graphics, the free disk and the build tools, and lists what it
+  found; nothing leaves the computer. **Suggest models** then offers up to three: **Fast**,
+  **Balanced** and **Most capable**, each faster and less capable than the next. Each shows the
+  inference engine that runs it best here, the checkpoint and its quantization, the memory it
+  takes and its speed here (measured or estimated): a
   default engine that installs without any steps (llama.cpp, Rapid-MLX on Macs, Splash on newer
   Macs, BigMoeOnEdge for models larger than the memory) and, where one is clearly faster, a
   specialized engine that is built on this computer (ik_llama.cpp, TurboFieldfare). The download

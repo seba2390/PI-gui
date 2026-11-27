@@ -65,6 +65,34 @@ pub struct Hardware {
     pub tools: Vec<String>,
 }
 
+/// One thing [`Hardware::facts`] tells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fact {
+    Chip,
+    Memory,
+    Graphics,
+    /// How much memory a model may take here.
+    ForModels,
+    Disk,
+    System,
+    /// Build tools, which engines built from source need.
+    Tools,
+}
+
+impl Fact {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Chip => "Processor",
+            Self::Memory => "Memory",
+            Self::Graphics => "Graphics",
+            Self::ForModels => "For models",
+            Self::Disk => "Disk",
+            Self::System => "System",
+            Self::Tools => "Build tools",
+        }
+    }
+}
+
 /// Where the model's weights live while it runs, which decides the speed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Accel {
@@ -164,6 +192,68 @@ impl Hardware {
             _ => os.to_owned(),
         });
         parts.join(" · ")
+    }
+
+    /// What was found, one fact a line, for people.
+    #[allow(clippy::cast_precision_loss)]
+    pub fn facts(&self) -> Vec<(Fact, String)> {
+        let gb = |bytes: u64| format!("{:.0} GB", bytes as f64 / GB);
+        let chip = match self.apple {
+            Some(chip) => chip.label(),
+            None if self.cpu.is_empty() => "Unknown".to_owned(),
+            None => self.cpu.clone(),
+        };
+        let memory = if self.apple.is_some() {
+            format!("{} unified memory", gb(self.ram))
+        } else {
+            gb(self.ram)
+        };
+        let graphics = match (self.apple, &self.gpu) {
+            (Some(chip), _) if self.os == Os::Macos => format!(
+                "{} GPU with Metal · ~{:.0} GB/s",
+                chip.label(),
+                apple_bandwidth(chip)
+            ),
+            (_, Some(gpu)) => format!(
+                "{} · {} · ~{:.0} GB/s",
+                gpu.name,
+                gb(gpu.vram),
+                gpu_bandwidth(gpu)
+            ),
+            _ => "None that models can use: they run on the processor".to_owned(),
+        };
+        let for_models = self.platforms().first().map_or_else(
+            || "Unknown".to_owned(),
+            |(_, accel)| format!("Up to about {} for a model", gb(self.budget(*accel))),
+        );
+        let os = match self.os {
+            Os::Macos => "macOS",
+            Os::Linux => "Linux",
+            Os::Windows => "Windows",
+        };
+        let os = match self.os_version {
+            Some((major, minor)) if self.os == Os::Macos => format!("{os} {major}.{minor}"),
+            _ => os.to_owned(),
+        };
+        let arch = if self.arm64 { "arm64" } else { "x86-64" };
+        let tools = if self.tools.is_empty() {
+            "None found".to_owned()
+        } else {
+            self.tools.join(", ")
+        };
+        vec![
+            (Fact::Chip, chip),
+            (Fact::Memory, memory),
+            (Fact::Graphics, graphics),
+            (Fact::ForModels, for_models),
+            (
+                Fact::Disk,
+                self.free_disk
+                    .map_or_else(|| "Unknown".to_owned(), |free| format!("{} free", gb(free))),
+            ),
+            (Fact::System, format!("{os} · {arch}")),
+            (Fact::Tools, tools),
+        ]
     }
 
     /// Whether this macOS is at least `version` (`"26.4"`).
@@ -501,6 +591,27 @@ mod tests {
         assert_eq!(
             mac.summary(),
             "Apple M3 Pro · 18 GB unified memory · macOS 26.4"
+        );
+        let facts = Hardware {
+            free_disk: Some(312_000_000_000),
+            tools: vec!["cmake".into(), "swift".into()],
+            ..mac.clone()
+        }
+        .facts();
+        assert_eq!(
+            facts,
+            [
+                (Fact::Chip, "Apple M3 Pro".to_owned()),
+                (Fact::Memory, "18 GB unified memory".to_owned()),
+                (
+                    Fact::Graphics,
+                    "Apple M3 Pro GPU with Metal · ~150 GB/s".to_owned()
+                ),
+                (Fact::ForModels, "Up to about 13 GB for a model".to_owned()),
+                (Fact::Disk, "312 GB free".to_owned()),
+                (Fact::System, "macOS 26.4 · arm64".to_owned()),
+                (Fact::Tools, "cmake, swift".to_owned()),
+            ]
         );
         let pc = Hardware {
             os: Os::Linux,

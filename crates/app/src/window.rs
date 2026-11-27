@@ -2013,6 +2013,13 @@ impl MainWindow {
     ) {
         match event {
             SettingsEvent::Models(open) => self.open_models_dialog(open.clone(), None, window, cx),
+            SettingsEvent::ModelsRemoved(note) => {
+                window.push_notification(note.clone(), cx);
+                // The visible session's pi reads this computer's models.json.
+                if !self.welcome && self.models_host(cx).is_none() {
+                    self.reload_models(None, ReloadReason::Models, window, cx);
+                }
+            }
             SettingsEvent::Host(action) => self.on_saved_host_action(action, window, cx),
             SettingsEvent::CheckForUpdates => self.check_for_updates(true, window, cx),
         }
