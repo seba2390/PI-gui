@@ -26,6 +26,7 @@ pub mod session;
 #[cfg(all(test, unix))]
 mod session_tests;
 pub mod text_viewer;
+pub(crate) mod token_rate;
 mod turn_rail;
 mod viewer_dialog;
 
@@ -120,6 +121,8 @@ pub struct ChatView {
     expand_tools: bool,
     focus_handle: FocusHandle,
     ticker: Option<Task<()>>,
+    /// The tokens-per-second pill at the top.
+    rate_pill: token_rate::Pill,
     /// The host was re-checked after this remote session ended.
     checked_host: bool,
     /// Shown in the window (false while it works in the background).
@@ -269,6 +272,7 @@ impl ChatView {
             expand_tools: false,
             focus_handle: cx.focus_handle(),
             ticker: None,
+            rate_pill: token_rate::Pill::default(),
             checked_host: false,
             visible: true,
             roles: Vec::new(),
@@ -1254,6 +1258,20 @@ impl Focusable for ChatView {
     }
 }
 
+impl ChatView {
+    /// The tokens-per-second pill, brought up to date (the working π's ticker repaints it while
+    /// a reply streams; a timer, when it should leave after the run).
+    fn render_rate_pill(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let now = std::time::Instant::now();
+        let view = self.session.read(cx).token_rate(now, cx);
+        if let Some(wait) = self.rate_pill.update(view, now) {
+            self.rate_pill
+                .wake(wait, cx, |this: &mut Self| &mut this.rate_pill);
+        }
+        self.rate_pill.render(cx)
+    }
+}
+
 impl Render for ChatView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let _timer = crate::perf::render("chat");
@@ -1271,6 +1289,7 @@ impl Render for ChatView {
         let pi_field = self.pi_field.clone();
 
         let find_bar = self.render_find(cx);
+        let rate_pill = self.render_rate_pill(cx);
         let root = self.find_actions(v_flex(), cx);
         root.relative()
             .key_context(CHAT_CONTEXT)
@@ -1317,6 +1336,7 @@ impl Render for ChatView {
                         .size_full(),
                     )
                     .child(self.turn_rail.clone())
+                    .children(rate_pill)
                     .children(find_bar)
                     .into_any_element()
             })

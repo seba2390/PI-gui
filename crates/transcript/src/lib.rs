@@ -11,6 +11,7 @@ mod format;
 mod history;
 mod in_flight;
 mod model;
+pub mod rate;
 mod reducer;
 pub mod research;
 pub mod search;

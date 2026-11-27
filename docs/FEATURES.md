@@ -259,6 +259,11 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
 - **Working indicator**: a little green π with orbiting dots shows a working agent in the
   chat ("Working… 12s · esc to interrupt", centred) and before its name in the sidebar. Settings
   → Appearance → Working indicator picks the style, with a live preview.
+- **Tokens per second**: while a reply streams, a pill under the top bar shows a line of the
+  model's speed over the last seconds and its speed now ("~31 tok/s"), then the reply's exact
+  average in gray ("avg. 30 tok/s") before it slides away. The live figure is estimated from the
+  streamed text and calibrated per model against the provider's exact counts (hover it for how far
+  off it has been); models whose thinking doesn't stream get none.
 - **Transcript layout**: the model's text is the main voice. Tool calls and thinking sit on a
   thin rail on the left in a quieter style, with more room where they meet the text.
 - **Turn rail**: dots at the left edge of the conversation, one per prompt (Chat and Code, from two

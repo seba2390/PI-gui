@@ -39,6 +39,15 @@ All notable changes to PI-gui are listed here. The format follows
   Pistachio set up on this device also has a play / stop button that starts its engine (loading
   the model) or stops it, without deleting anything.
 
+- **Tokens per second.** While a reply streams, a pill slides down from under the top bar with
+  a line of the model's speed over the last seconds and its speed now ("~31 tok/s"); when the reply
+  ends it turns gray with the reply's exact average ("avg. 30 tok/s") and slides back up after a
+  few seconds. The live figure is an estimate from the streamed text, calibrated per model on its
+  finished replies against the provider's exact count; hovering it says how far off it has been
+  for that model on average. A provider that counts as it streams (Gemini) is shown exactly. A
+  model that thinks without streaming it, or streams only a summary, gets no live estimate; nor
+  does a model before one of its replies has checked out.
+
 ### Fixed
 
 - A llama.cpp server is now added to `models.json` as `llama-cpp`, not `llama.cpp`: pi 1.5 has

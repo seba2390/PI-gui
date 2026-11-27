@@ -20,6 +20,7 @@ use pi_rpc::protocol::{
 };
 use pi_rpc::{ClientEvent, PiClient, PiProcess, RpcError, SpawnOptions};
 use pi_sessions::prompt;
+use transcript::rate::{RateMeter, RateView};
 use transcript::{BashStatus, InFlight, NoticeKind, RunStatus, Transcript};
 
 use super::queued::QueuedPrompts;
@@ -192,6 +193,8 @@ pub struct PiSession {
     transcript: Transcript,
     /// The run's reply and tools that pi has not saved yet, for a side chat.
     in_flight: InFlight,
+    /// How fast the model writes, for the tokens-per-second pill.
+    rate: RateMeter,
     state: Option<SessionState>,
     models: Vec<Model>,
     /// All levels pi offers for the model; see [`Self::thinking_levels`].
@@ -350,6 +353,7 @@ impl PiSession {
             lifecycle: Lifecycle::Starting,
             transcript: Transcript::new(),
             in_flight: InFlight::default(),
+            rate: RateMeter::default(),
             state: None,
             models: Vec::new(),
             thinking_levels: Vec::new(),
@@ -484,6 +488,7 @@ impl PiSession {
             lifecycle: Lifecycle::Idle,
             transcript: Transcript::new(),
             in_flight: InFlight::default(),
+            rate: RateMeter::default(),
             state: None,
             models: Vec::new(),
             thinking_levels: Vec::new(),
@@ -558,6 +563,12 @@ impl PiSession {
 
     pub fn transcript(&self) -> &Transcript {
         &self.transcript
+    }
+
+    /// The tokens-per-second pill's content at `now`.
+    pub fn token_rate(&self, now: Instant, cx: &gpui_kit::App) -> Option<RateView> {
+        let rates = cx.try_global::<super::token_rate::TokenRates>()?;
+        self.rate.view(now, &rates.0)
     }
 
     pub fn is_running(&self) -> bool {
@@ -2168,8 +2179,15 @@ impl PiSession {
     fn handle(&mut self, event: ClientEvent, cx: &mut Context<Self>) {
         match event {
             ClientEvent::Event(event) => {
-                self.transcript.apply(&event, Instant::now());
+                let now = Instant::now();
+                self.transcript.apply(&event, now);
                 self.in_flight.apply(&event);
+                if cx.has_global::<super::token_rate::TokenRates>() {
+                    let rates = &mut cx.global_mut::<super::token_rate::TokenRates>().0;
+                    if self.rate.apply(&event, now, rates) {
+                        super::token_rate::TokenRates::save(cx);
+                    }
+                }
                 match *event {
                     pi_rpc::protocol::Event::AgentStart => {
                         self.runs_started += 1;
@@ -2217,6 +2235,7 @@ impl PiSession {
                 let message = self.exit_message(&RpcError::Disconnected);
                 self.transcript.force_settle(Instant::now());
                 self.in_flight = InFlight::default();
+                self.rate = RateMeter::default();
                 if self.lifecycle == Lifecycle::Ready {
                     self.transcript
                         .push_notice(NoticeKind::Error, message.clone());

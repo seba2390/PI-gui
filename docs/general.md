@@ -49,6 +49,15 @@ Pistachio is started from the Dock or a desktop launcher.
 - **Find in chat** (⌘F) searches prompts, replies, thinking and tool output, collapsed rows
   included. Enter / Shift+Enter (or ⌘G / ⌘⇧G) go to the next / previous match, Esc closes it.
 - Ctrl+T expands all thinking, Ctrl+O all tool output.
+- **Tokens per second.** While a reply streams, a pill slides down under the top bar: a line of
+  the model's speed over the last seconds and its speed now ("~31 tok/s"). When the reply ends it
+  turns gray with the reply's exact average ("avg. 30 tok/s") and slides away after a few seconds.
+  The live figure is an estimate from the streamed text; Pistachio calibrates it for each model
+  against the exact token counts of its finished replies, and hovering the pill says how far off
+  it has been for that model on average (usually a few percent). A model that thinks without
+  streaming its thinking, or streams only a summary, gets no live figure, since the tokens it
+  writes can't be seen; a new model shows only the exact average until one of its replies has
+  been checked.
 
 ## The message box
 
