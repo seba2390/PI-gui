@@ -11,8 +11,9 @@
 // - The gate: in the sandbox, `git`, `gh`, `gpg` and `ssh-keygen` are wrappers. What needs the
 //   user's keys (pushing, fetching private repositories, GitHub, signing) comes to a socket this
 //   extension listens on; the helper says what it would do (`gate decide`), the user is asked
-//   (once, or always for this project and remote), and the helper does it outside the sandbox
-//   (`gate run`). Only what the command prints goes back.
+//   (once, or always for this project and remote), and the helper does it (`gate run`): git with
+//   the user's keys works only in the helper's own copy of the remote, never in the agent's
+//   repository. Only what the command prints goes back.
 //
 // The rules are read again whenever the settings change, so changes apply to the next tool call.
 // Pistachio writes this file on start; edits here are overwritten.
@@ -130,6 +131,30 @@ function gateHelper(command: string, input: unknown): any {
   }
 }
 
+// `gateHelper` without blocking pi: deciding on a push packs its commits, which can take a while.
+function gateHelperLater(command: string, input: unknown): Promise<any> {
+  return new Promise((done) => {
+    let out = "";
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(BIN!, ["--sandbox-tool", "gate", command], { stdio: ["pipe", "pipe", "ignore"] });
+    } catch {
+      return done(null);
+    }
+    child.stdout!.setEncoding("utf8").on("data", (text: string) => (out += text));
+    child.on("error", () => done(null));
+    child.on("close", () => {
+      try {
+        done(JSON.parse(out.trim().split("\n").pop() ?? "null"));
+      } catch {
+        done(null);
+      }
+    });
+    child.stdin!.on("error", () => {});
+    child.stdin!.end(JSON.stringify(input));
+  });
+}
+
 // Added to the system prompt in sandboxed sessions.
 const GATE_NOTE = [
   "Git and GitHub in Pistachio's sandbox:",
@@ -182,7 +207,7 @@ function startGate(project: () => string, ui: () => any): string | undefined {
         return finish(2, "[Pistachio] The wrapper's request couldn't be read.");
       }
       request.project = project();
-      const decision = gateHelper("decide", request);
+      const decision = await gateHelperLater("decide", request);
       if (!decision) return finish(1, "[Pistachio] The gate couldn't read the request.");
       if (decision.kind === "local") {
         send({ local: true });
@@ -231,6 +256,8 @@ function startGate(project: () => string, ui: () => any): string | undefined {
       }
       // A question only (a website for the proxy): nothing runs, the answer was the point.
       if (!plan.program) return finish(0);
+      // What runs must still be what was allowed.
+      request.approved = plan;
       const child = spawn(BIN!, ["--sandbox-tool", "gate", "run"], { stdio: ["pipe", "pipe", "pipe"] });
       child.stdout.setEncoding("utf8").on("data", (text: string) => send({ stdout: text }));
       child.stderr.setEncoding("utf8").on("data", (text: string) => send({ stderr: text }));

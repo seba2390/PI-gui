@@ -6,12 +6,101 @@
 //! each command acts as; the gate runs `gh` with that account's token for that command only
 //! (`GH_TOKEN`), without switching the active account. A repository created for an owner is
 //! offered only as accounts that are that owner or members of it.
+//!
+//! `gh` runs in an empty folder outside any repository, so the git it starts never reads the
+//! agent's: the gate names the repository (`-R`), the branch, and reads body files in the
+//! sandbox.
 
 use std::fmt::Write as _;
 use std::path::Path;
 
 use super::config::{Repo, normalize_url};
-use super::{Class, Plan, Request, inside, project_of};
+use super::relay::Env;
+use super::{After, Class, Plan, Request, inside, project_of};
+
+/// Commands that act on the current branch's pull request when none is named.
+const BRANCH_SELECTED: &[&str] = &[
+    "view", "checks", "diff", "merge", "ready", "edit", "close", "reopen", "comment", "review",
+];
+
+/// gh's options that take a value (the rest stand alone), for finding what is named.
+const VALUED: &[&str] = &[
+    "-b",
+    "--body",
+    "-t",
+    "--title",
+    "-F",
+    "--body-file",
+    "-B",
+    "--base",
+    "-H",
+    "--head",
+    "-l",
+    "--label",
+    "--add-label",
+    "--remove-label",
+    "-a",
+    "--assignee",
+    "--add-assignee",
+    "--remove-assignee",
+    "-m",
+    "--milestone",
+    "-r",
+    "--reviewer",
+    "--add-reviewer",
+    "--remove-reviewer",
+    "-p",
+    "--project",
+    "--add-project",
+    "--remove-project",
+    "-R",
+    "--repo",
+    "--json",
+    "-q",
+    "--jq",
+    "-T",
+    "--template",
+    "--subject",
+    "--match-head-commit",
+    "-A",
+    "--author-email",
+    "-S",
+    "--search",
+    "-s",
+    "--state",
+    "-L",
+    "--limit",
+    "--color",
+    "-i",
+    "--interval",
+    "--recover",
+];
+
+/// Whether `args` name something after `gh <group> <command>` (a number, URL or branch).
+fn names_one(args: &[String]) -> bool {
+    let mut iter = args.iter().skip_while(|arg| arg.starts_with('-')).skip(2);
+    while let Some(arg) = iter.next() {
+        if arg == "--" {
+            return iter.next().is_some();
+        }
+        if arg.starts_with('-') {
+            if VALUED.contains(&arg.as_str()) {
+                iter.next();
+            }
+            continue;
+        }
+        return true;
+    }
+    false
+}
+
+/// Groups whose commands take `-R`.
+fn takes_repo_option(group: &str) -> bool {
+    matches!(
+        group,
+        "pr" | "issue" | "run" | "workflow" | "release" | "label"
+    )
+}
 
 /// What `gh <group> <command>` may do: read, or change things on GitHub.
 fn class_of(group: &str, command: &str) -> Option<Class> {
@@ -194,12 +283,124 @@ pub fn auth_status(accounts: &dyn Accounts, identity: (Option<String>, Option<St
 
 /// The plan for a `gh` request, `None` for help and version (run in the sandbox), or why it is
 /// refused.
-pub fn plan(request: &Request) -> Result<Option<Plan>, String> {
-    plan_with(request, &Installed)
+pub fn plan(request: &Request, env: &Env) -> Result<Option<Plan>, String> {
+    plan_with(request, &Installed, env)
 }
 
 /// [`plan`], with the accounts from `accounts`.
-pub fn plan_with(request: &Request, accounts: &dyn Accounts) -> Result<Option<Plan>, String> {
+pub fn plan_with(
+    request: &Request,
+    accounts: &dyn Accounts,
+    env: &Env,
+) -> Result<Option<Plan>, String> {
+    let Some(mut plan) = plan_in_place(request, accounts)? else {
+        return Ok(None);
+    };
+    away_from_the_repository(&mut plan, request, env)?;
+    Ok(Some(plan))
+}
+
+/// gh moved to an empty folder: what it would have read in the repository, named.
+fn away_from_the_repository(plan: &mut Plan, request: &Request, env: &Env) -> Result<(), String> {
+    let project = project_of(request);
+    let branch = || {
+        env.sandboxed_output(
+            &project,
+            &request.cwd,
+            &["symbolic-ref", "--short", "-q", "HEAD"],
+            None,
+        )
+        .filter(|branch| !branch.is_empty())
+    };
+    let words: Vec<&str> = plan
+        .args
+        .iter()
+        .filter(|arg| !arg.starts_with('-'))
+        .take(2)
+        .map(String::as_str)
+        .collect();
+    let (group, command) = match words.as_slice() {
+        [group, command] => ((*group).to_owned(), (*command).to_owned()),
+        _ => return Ok(()),
+    };
+    let mut args = plan.args.clone();
+    // A body file is read in the sandbox and given on standard input.
+    let mut at = 0;
+    while at < args.len() {
+        let arg = args[at].clone();
+        let (path, inline) = if FILE_OPTIONS.contains(&arg.as_str()) {
+            (args.get(at + 1).cloned(), false)
+        } else if let Some((name, value)) = arg.split_once('=')
+            && FILE_OPTIONS.contains(&name)
+        {
+            (Some(value.to_owned()), true)
+        } else {
+            at += 1;
+            continue;
+        };
+        let path = path.unwrap_or_default();
+        let mut cat = std::process::Command::new(&env.exe);
+        cat.arg(crate::cli::FLAG)
+            .args(["run", "--cwd"])
+            .arg(&project)
+            .args(["--", "cat", "--"])
+            .arg(request.cwd.join(&path))
+            .stdin(std::process::Stdio::null());
+        let output = cat.output().map_err(|error| error.to_string())?;
+        if !output.status.success() {
+            return Err(format!("`gh`: the body file {path} couldn't be read."));
+        }
+        plan.stdin = Some(String::from_utf8_lossy(&output.stdout).into_owned());
+        if inline {
+            args[at] = format!("{}=-", arg.split_once('=').map_or("", |(name, _)| name));
+            at += 1;
+        } else {
+            "-".clone_into(&mut args[at + 1]);
+            at += 2;
+        }
+    }
+    let repo_given = args
+        .iter()
+        .any(|arg| arg == "-R" || arg == "--repo" || arg.starts_with("--repo="));
+    if group == "pr" && BRANCH_SELECTED.contains(&command.as_str()) && !names_one(&args) {
+        let branch = branch().ok_or_else(|| {
+            format!(
+                "`gh pr {command}`: name the pull request (its number), or check out its branch."
+            )
+        })?;
+        let at = args
+            .iter()
+            .position(|arg| *arg == command)
+            .map_or(args.len(), |at| at + 1);
+        args.insert(at, branch);
+    }
+    if (group.as_str(), command.as_str()) == ("pr", "create") {
+        if args.iter().any(|arg| arg.starts_with("--fill")) {
+            return Err(
+                "Pistachio runs `gh pr create` with --title and --body (or --body-file), not --fill."
+                    .to_owned(),
+            );
+        }
+        let head_given = args
+            .iter()
+            .any(|arg| arg == "-H" || arg == "--head" || arg.starts_with("--head="));
+        if !head_given {
+            let branch = branch().ok_or("`gh pr create` needs a branch checked out, or --head.")?;
+            args.extend(["--head".to_owned(), branch]);
+        }
+    }
+    if takes_repo_option(&group) && !repo_given {
+        args.extend(["-R".to_owned(), plan.target.clone()]);
+    }
+    if (group.as_str(), command.as_str()) == ("repo", "view") && !names_one(&args) {
+        args.push(plan.target.clone());
+    }
+    plan.args = args;
+    plan.cwd = env.nowhere();
+    Ok(())
+}
+
+fn plan_in_place(request: &Request, accounts: &dyn Accounts) -> Result<Option<Plan>, String> {
     let args = &request.args;
     if args.is_empty()
         || args
@@ -254,29 +455,13 @@ pub fn plan_with(request: &Request, accounts: &dyn Accounts) -> Result<Option<Pl
             project.display()
         ));
     }
-    // gh reads the repository's remotes with git, so its settings must be safe too, and the git
-    // it starts is held to that repository.
+    // The repository's remotes, read as data.
     let repo = Repo::find(&request.cwd);
-    if let Some(repo) = &repo {
-        let found = repo.unsafe_settings();
-        if !found.is_empty() {
-            return Err(format!(
-                "Pistachio won't run `gh` outside the sandbox: this repository's git settings set {}.",
-                found.join(", ")
-            ));
-        }
-    }
-    let pin = |mut plan: Plan| {
-        if let Some(repo) = &repo {
-            plan.pin(repo);
-        }
-        plan
-    };
     if (group, command) == ("repo", "create") {
-        return repo_create(request, &project, accounts).map(|plan| Some(pin(plan)));
+        return repo_create(request, &project, accounts).map(Some);
     }
     if (group, command) == ("repo", "delete") {
-        return repo_delete(request, repo.as_ref(), accounts).map(|plan| Some(pin(plan)));
+        return repo_delete(request, repo.as_ref(), accounts).map(Some);
     }
     let target = match repo_option {
         Some(name) if name.matches('/').count() >= 2 => name.to_lowercase(),
@@ -321,7 +506,7 @@ pub fn plan_with(request: &Request, accounts: &dyn Accounts) -> Result<Option<Pl
         .to_owned();
     plan.accounts = logged_in(accounts, &host)?;
     name_the_account(&mut plan);
-    Ok(Some(pin(plan)))
+    Ok(Some(plan))
 }
 
 /// The accounts on `host`, or why there are none.
@@ -356,7 +541,8 @@ fn gh_plan(request: &Request, title: String, class: Class, target: String) -> Pl
         stdin: None,
         accounts: Vec::new(),
         account: None,
-        repo: None,
+        job: None,
+        after: None,
     }
 }
 
@@ -412,9 +598,26 @@ fn repo_create(request: &Request, project: &Path, accounts: &dyn Accounts) -> Re
     if visibility == "public" {
         plan.warnings.push("Public: anyone can see it.".to_owned());
     }
-    if let Some(remote) = value_of(args, &["--remote", "-r"]) {
+    // gh would add the remote itself, in the folder; that happens in the sandbox instead.
+    if let Some(source) = value_of(args, &["--source", "-s"]) {
+        let remote = value_of(args, &["--remote", "-r"]).unwrap_or_else(|| "origin".to_owned());
         plan.details
             .push(format!("Adds it as the remote {remote}."));
+        plan.after = Some(After::AddRemote {
+            dir: request.cwd.join(&source),
+            remote,
+            name: name.clone(),
+        });
+        let mut kept = Vec::new();
+        let mut iter = args.iter();
+        while let Some(arg) = iter.next() {
+            if matches!(arg.as_str(), "--source" | "-s" | "--remote" | "-r") {
+                iter.next();
+            } else if !(arg.starts_with("--source=") || arg.starts_with("--remote=")) {
+                kept.push(arg.clone());
+            }
+        }
+        plan.args = kept;
     }
     // Who may create it: for `owner/name`, that owner or its members; else any account (the
     // repository is then that account's).
@@ -607,7 +810,15 @@ mod tests {
     }
 
     fn plan(request: &Request) -> Result<Option<Plan>, String> {
-        plan_with(request, &Fake)
+        plan_with(request, &Fake, &super::super::relay::test_env(&request.cwd))
+    }
+
+    fn plan_as(request: &Request, accounts: &dyn Accounts) -> Result<Option<Plan>, String> {
+        plan_with(
+            request,
+            accounts,
+            &super::super::relay::test_env(&request.cwd),
+        )
     }
 
     #[test]
@@ -653,12 +864,12 @@ mod tests {
     fn deleting_needs_the_permission_before_the_user_is_asked() {
         let (_dir, work) = work();
         let delete = request(&work, &["repo", "delete", "a/app"]);
-        let only = plan_with(&delete, &Scoped(true))
+        let only = plan_as(&delete, &Scoped(true))
             .expect("allowed")
             .expect("gated");
         assert_eq!(only.accounts, ["me-at-work"]);
         assert!(only.title.ends_with("as me-at-work"), "{}", only.title);
-        let refused = plan_with(&delete, &Scoped(false)).unwrap_err();
+        let refused = plan_as(&delete, &Scoped(false)).unwrap_err();
         assert!(
             refused.contains("gh auth refresh -h github.com -s delete_repo"),
             "{refused}"
@@ -689,19 +900,25 @@ mod tests {
             project: Some(cwd.to_path_buf()),
             stdin: None,
             account: None,
+            approved: None,
         }
     }
 
     fn work() -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().expect("temp dir");
         let work = dir.path().canonicalize().expect("canonical");
-        std::fs::create_dir_all(work.join(".git")).expect("mkdir");
-        std::fs::write(work.join(".git/HEAD"), "ref: refs/heads/main\n").expect("write");
-        std::fs::write(
-            work.join(".git/config"),
-            "[remote \"origin\"]\n\turl = git@github.com:a/app.git\n",
-        )
-        .expect("write");
+        for args in [
+            &["init", "-q", "-b", "main"][..],
+            &["remote", "add", "origin", "git@github.com:a/app.git"],
+        ] {
+            let status = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&work)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .status()
+                .expect("git");
+            assert!(status.success());
+        }
         (dir, work)
     }
 
@@ -745,13 +962,56 @@ mod tests {
         ] {
             assert!(plan(&request(&work, args)).is_err(), "{args:?}");
         }
+        // A body file is read in the sandbox and given on standard input.
+        std::fs::write(work.join("notes.md"), "The notes").expect("write");
+        let create = plan(&request(
+            &work,
+            &["pr", "create", "--title", "T", "--body-file", "notes.md"],
+        ))
+        .unwrap()
+        .unwrap();
+        assert_eq!(create.stdin.as_deref(), Some("The notes"));
         assert!(
-            plan(&request(
-                &work,
-                &["pr", "create", "--body-file", "notes.md"]
-            ))
-            .is_ok()
+            create
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--body-file", "-"])
         );
+        assert!(plan(&request(&work, &["pr", "create", "--title", "T", "--fill"])).is_err());
+    }
+
+    #[test]
+    fn gh_runs_away_from_the_repository() {
+        let (_dir, work) = work();
+        let view = plan(&request(&work, &["pr", "view", "--comments"]))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            view.args,
+            ["pr", "view", "main", "--comments", "-R", "github.com/a/app"]
+        );
+        assert!(view.cwd.ends_with("gate-empty"), "{}", view.cwd.display());
+        let numbered = plan(&request(&work, &["pr", "merge", "12", "--squash"]))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            numbered.args,
+            ["pr", "merge", "12", "--squash", "-R", "github.com/a/app"]
+        );
+        let create = plan(&request(
+            &work,
+            &["pr", "create", "--title", "T", "--body", "B"],
+        ))
+        .unwrap()
+        .unwrap();
+        assert!(create.args.ends_with(&[
+            "--head".to_owned(),
+            "main".to_owned(),
+            "-R".to_owned(),
+            "github.com/a/app".to_owned()
+        ]));
+        let repo = plan(&request(&work, &["repo", "view"])).unwrap().unwrap();
+        assert_eq!(repo.args, ["repo", "view", "github.com/a/app"]);
     }
 
     #[test]
@@ -778,6 +1038,16 @@ mod tests {
             create
                 .details
                 .contains(&"As me-at-work: github.com/me-at-work/tool".to_owned())
+        );
+        // The remote is added in the sandbox afterwards, not by gh.
+        assert_eq!(create.args, ["repo", "create", "tool", "--public"]);
+        assert_eq!(
+            create.after,
+            Some(After::AddRemote {
+                dir: work.join("."),
+                remote: "origin".to_owned(),
+                name: "tool".to_owned(),
+            })
         );
     }
 
@@ -809,7 +1079,7 @@ mod tests {
         let both = plan(&request(&work, &["pr", "list"])).unwrap().unwrap();
         assert_eq!(both.accounts, ["me", "me-at-work"]);
         assert_eq!(both.title, "Read prs on github.com/a/app (gh pr list)");
-        let one = plan_with(&request(&work, &["pr", "list"]), &Single)
+        let one = plan_as(&request(&work, &["pr", "list"]), &Single)
             .unwrap()
             .unwrap();
         assert_eq!(one.title, "Read prs on github.com/a/app (gh pr list) as me");

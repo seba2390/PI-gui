@@ -164,6 +164,17 @@ fn run(dir: &Path, exe: &Path, args: &[OsString]) -> i32 {
         settings.unsandboxed.clear();
     }
     let mut policy = Policy::for_project(&settings, &cwd, &Context::current());
+    // The gate's mirrors a command it starts may read (`--read <folder>`).
+    if let Some(policy) = policy.as_mut() {
+        let mut iter = options.iter();
+        while let Some(option) = iter.next() {
+            if option == "--read"
+                && let Some(path) = iter.next()
+            {
+                policy.readable.push(crate::paths::resolve(Path::new(path)));
+            }
+        }
+    }
     // A limited network (sites asked about, or a list) goes through the app's proxy: for the
     // sandbox, only the proxy can be reached. Without one (the app is not running) there is none.
     let mut proxy = None;
@@ -398,13 +409,28 @@ fn gate(dir: &Path, args: &[OsString]) -> i32 {
             };
             // Read again here: what runs is what the gate itself makes of the request.
             let settings = Settings::load(dir);
+            let env = crate::gate::relay::Env::current();
             let crate::gate::Decision::Gate { plan, .. } =
-                crate::gate::decide(&request, &settings, home.as_deref())
+                crate::gate::decide_with(&request, &settings, home.as_deref(), &env)
             else {
                 eprintln!("[Pistachio] This isn't something the gate runs.");
                 return 2;
             };
-            let mut command = crate::gate::command(&plan, &crate::gate::hooks_dir());
+            // What runs must be what the user allowed (the repository may have changed since).
+            if let Some(approved) = &request.approved
+                && !approved.same_question(&plan)
+            {
+                eprintln!(
+                    "[Pistachio] The repository changed while the user was asked; this is now: {}. \
+                     Run the command again.",
+                    plan.title
+                );
+                return 1;
+            }
+            if let Some(job) = &plan.job {
+                return crate::gate::git::execute(job, &request, &env);
+            }
+            let mut command = crate::gate::command(&plan, &env);
             // gh as the account the user chose, for this command only.
             if !plan.accounts.is_empty() {
                 let chosen = request
@@ -432,7 +458,7 @@ fn gate(dir: &Path, args: &[OsString]) -> i32 {
                         .env("GH_ENTERPRISE_TOKEN", token);
                 }
             }
-            match &plan.stdin {
+            let code = match &plan.stdin {
                 None => exec(command, &OsString::from(&plan.program)),
                 Some(text) => {
                     use std::io::Write as _;
@@ -449,7 +475,13 @@ fn gate(dir: &Path, args: &[OsString]) -> i32 {
                     }
                     child.wait().map_or(1, |status| status.code().unwrap_or(1))
                 }
+            };
+            if code == 0
+                && let Some(after) = &plan.after
+            {
+                crate::gate::after(after, &plan, &request, &env);
             }
+            code
         }
         _ => {
             eprintln!("usage: {FLAG} gate decide|allow|run");

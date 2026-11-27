@@ -21,6 +21,7 @@
 pub mod config;
 pub mod gh;
 pub mod git;
+pub mod relay;
 pub mod shim;
 pub mod sign;
 
@@ -48,6 +49,9 @@ pub struct Request {
     /// The `gh` account the user chose (set by the extension).
     #[serde(default)]
     pub account: Option<String>,
+    /// The plan the user allowed (set by the extension): what runs must still be that.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approved: Option<Box<Plan>>,
 }
 
 /// What kind of thing a request does; the user allows each kind separately.
@@ -140,27 +144,34 @@ pub struct Plan {
     /// The account a rule chose.
     #[serde(default)]
     pub account: Option<String>,
-    /// The repository the gate checked, which git is then made to use ([`command`]).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub repo: Option<Pinned>,
+    /// For git: how it is done through the gate's mirrors ([`relay`]).
+    #[serde(skip)]
+    pub job: Option<git::Job>,
+    /// What follows in the sandbox once the command succeeded.
+    #[serde(skip)]
+    pub after: Option<After>,
 }
 
-/// A repository git is held to: `GIT_DIR` and `GIT_WORK_TREE`. Without them git looks for its
-/// repository itself and can find another one than the gate checked: a subfolder that is a bare
-/// repository, or a broken `.git` it skips on its way up.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Pinned {
-    pub git_dir: PathBuf,
-    pub work_tree: PathBuf,
+/// What follows a command that succeeded, in the sandbox.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum After {
+    /// `gh repo create --source`: the new repository becomes the folder's remote `remote`.
+    /// `name` is `owner/name`, or `name` for the account that created it.
+    AddRemote {
+        dir: PathBuf,
+        remote: String,
+        name: String,
+    },
 }
 
 impl Plan {
-    /// Makes git use `repo`, the one whose settings were checked.
-    pub fn pin(&mut self, repo: &config::Repo) {
-        self.repo = Some(Pinned {
-            git_dir: repo.git_dir.clone(),
-            work_tree: repo.top.clone(),
-        });
+    /// Whether `other` says the same to the user (what they allowed).
+    pub fn same_question(&self, other: &Self) -> bool {
+        self.title == other.title
+            && self.details == other.details
+            && self.warnings == other.warnings
+            && self.class == other.class
+            && self.target == other.target
     }
 }
 
@@ -180,14 +191,24 @@ pub enum Decision {
 
 /// What `request` needs, with `settings`' rules.
 pub fn decide(request: &Request, settings: &Settings, home: Option<&Path>) -> Decision {
+    decide_with(request, settings, home, &relay::Env::current())
+}
+
+/// [`decide`], with the gate's git in `env`.
+pub fn decide_with(
+    request: &Request,
+    settings: &Settings,
+    home: Option<&Path>,
+    env: &relay::Env,
+) -> Decision {
     if request.tool == "gh" && gh::is_auth_status(&request.args) {
         return Decision::Answer {
-            text: gh::auth_status(&gh::Installed, git_identity(request)),
+            text: gh::auth_status(&gh::Installed, git_identity(request, env)),
         };
     }
     let planned = match request.tool.as_str() {
-        "git" => git::plan(request),
-        "gh" => gh::plan(request),
+        "git" => git::plan(request, env),
+        "gh" => gh::plan(request, env),
         "gpg" | "ssh-keygen" => sign::plan(request),
         "site" => Ok(site_plan(request)),
         _ => Ok(None),
@@ -211,16 +232,22 @@ pub fn decide(request: &Request, settings: &Settings, home: Option<&Path>) -> De
 
 /// The `user.name` and `user.email` git uses in the request's folder (the session's folder when it
 /// ran elsewhere), read outside the sandbox.
-fn git_identity(request: &Request) -> (Option<String>, Option<String>) {
+fn git_identity(request: &Request, env: &relay::Env) -> (Option<String>, Option<String>) {
     let project = project_of(request);
     let folder = if inside(&request.cwd, &project) {
         request.cwd.clone()
     } else {
         project
     };
-    let hooks = hooks_dir();
+    // Read in the sandbox: the repository's settings are the agent's.
     let get = |key: &str| {
-        git_output(&folder, &["config", "--get", key], &hooks).filter(|value| !value.is_empty())
+        env.sandboxed_output(
+            &project_of(request),
+            &folder,
+            &["config", "--get", key],
+            None,
+        )
+        .filter(|value| !value.is_empty())
     };
     (get("user.name"), get("user.email"))
 }
@@ -251,7 +278,8 @@ fn site_plan(request: &Request) -> Option<Plan> {
         stdin: None,
         accounts: Vec::new(),
         account: None,
-        repo: None,
+        job: None,
+        after: None,
     })
 }
 
@@ -327,10 +355,10 @@ pub fn allow(
 }
 
 /// The environment of what the gate runs: hooks off (from `hooks`, an empty folder), no program
-/// a repository could name, no prompts on a terminal nobody sees. As environment variables,
-/// so the git that `gh` or git-lfs start keeps to them too.
-pub fn hardened_env(hooks: &Path) -> Vec<(String, String)> {
-    let settings = [
+/// a repository could name, no prompts on a terminal nobody sees, then `extra` settings. As
+/// environment variables, so the git that `gh` or git-lfs start keeps to them too.
+pub fn hardened_env(hooks: &Path, extra: &[(String, String)]) -> Vec<(String, String)> {
+    let mut settings = vec![
         ("core.hooksPath", hooks.to_string_lossy().into_owned()),
         ("core.fsmonitor", "false".to_owned()),
         ("protocol.ext.allow", "never".to_owned()),
@@ -339,6 +367,11 @@ pub fn hardened_env(hooks: &Path) -> Vec<(String, String)> {
         // A folder that is a bare repository is not taken for one (only with `GIT_DIR`).
         ("safe.bareRepository", "explicit".to_owned()),
     ];
+    settings.extend(
+        extra
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.clone())),
+    );
     let mut env = vec![("GIT_CONFIG_COUNT".to_owned(), settings.len().to_string())];
     for (index, (key, value)) in settings.into_iter().enumerate() {
         env.push((format!("GIT_CONFIG_KEY_{index}"), key.to_owned()));
@@ -355,75 +388,53 @@ pub fn hardened_env(hooks: &Path) -> Vec<(String, String)> {
     env
 }
 
-/// The command for `plan`, outside the sandbox, with [`hardened_env`]. Git's own variables from
-/// this process's environment are dropped (a repository or folder they name would be obeyed), and
-/// git is held to the repository the gate checked ([`Plan::repo`]).
-pub fn command(plan: &Plan, hooks: &Path) -> Command {
-    let mut command = Command::new(&plan.program);
+/// Does `after` in the sandbox, once the command succeeded.
+pub fn after(after: &After, plan: &Plan, request: &Request, env: &relay::Env) {
+    match after {
+        After::AddRemote { dir, remote, name } => {
+            let full = if name.contains('/') {
+                name.clone()
+            } else {
+                let account = request
+                    .account
+                    .clone()
+                    .or_else(|| plan.account.clone())
+                    .or_else(|| plan.accounts.first().cloned())
+                    .unwrap_or_default();
+                format!("{account}/{name}")
+            };
+            let ssh = env
+                .outside("gh")
+                .args(["config", "get", "git_protocol", "-h", "github.com"])
+                .output()
+                .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).trim() == "ssh");
+            let url = if ssh {
+                format!("git@github.com:{full}.git")
+            } else {
+                format!("https://github.com/{full}.git")
+            };
+            match env.sandboxed_output(
+                &project_of(request),
+                dir,
+                &["remote", "add", remote, &url],
+                None,
+            ) {
+                Some(_) => println!("Added the remote {remote}: {url}"),
+                None => eprintln!(
+                    "[Pistachio] The repository was created, but adding the remote {remote} failed; \
+                     run `git remote add {remote} {url}`."
+                ),
+            }
+        }
+    }
+}
+
+/// The command for `plan` (`gh`, signing), outside the sandbox, with [`hardened_env`] and none of
+/// this process's git variables. git's own requests go through [`git::execute`] instead.
+pub fn command(plan: &Plan, env: &relay::Env) -> Command {
+    let mut command = env.outside(&plan.program);
     command.args(&plan.args).current_dir(&plan.cwd);
-    for (name, _) in std::env::vars_os() {
-        let name = name.to_string_lossy();
-        if name.starts_with("GIT_") && name != "GIT_SSH_COMMAND" && name != "GIT_SSH" {
-            command.env_remove(name.as_ref());
-        }
-    }
-    command.envs(hardened_env(hooks));
-    if let Some(repo) = &plan.repo {
-        command
-            .env("GIT_DIR", &repo.git_dir)
-            .env("GIT_WORK_TREE", &repo.work_tree);
-    }
     command
-}
-
-/// Output of a quick git command outside the sandbox (counting commits for the question), or
-/// `None`.
-pub(crate) fn git_output(repo: &Path, args: &[&str], hooks: &Path) -> Option<String> {
-    let mut plan = Plan {
-        title: String::new(),
-        details: Vec::new(),
-        warnings: Vec::new(),
-        class: Class::Fetch,
-        target: String::new(),
-        rememberable: false,
-        program: "git".to_owned(),
-        args: args.iter().map(|&arg| arg.to_owned()).collect(),
-        cwd: repo.to_path_buf(),
-        stdin: None,
-        accounts: Vec::new(),
-        account: None,
-        repo: None,
-    };
-    if let Some(found) = config::Repo::find(repo) {
-        plan.pin(&found);
-    }
-    let output = command(&plan, hooks)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
-}
-
-/// An empty folder for `core.hooksPath`, so no hook runs.
-pub fn hooks_dir() -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("pistachio-no-hooks-{}", whoami()));
-    let _ = std::fs::create_dir_all(&dir);
-    // Anything put there is not ours.
-    if let Ok(read) = std::fs::read_dir(&dir) {
-        for entry in read.flatten() {
-            let _ = std::fs::remove_file(entry.path());
-        }
-    }
-    dir
-}
-
-fn whoami() -> String {
-    std::env::var("USER")
-        .or_else(|_| std::env::var("USERNAME"))
-        .unwrap_or_default()
 }
 
 /// Options of a command: which take a value, which may stand alone.
@@ -539,7 +550,8 @@ mod tests {
             stdin: None,
             accounts: Vec::new(),
             account: None,
-            repo: None,
+            job: None,
+            after: None,
         };
         let request = Request {
             tool: "git".into(),
@@ -548,6 +560,7 @@ mod tests {
             project: Some(project.clone()),
             stdin: None,
             account: None,
+            approved: None,
         };
         assert!(allowed_by_rules(&plan, &request, &settings, None));
         let other = Plan {
@@ -590,6 +603,7 @@ mod tests {
             project: Some(project.clone()),
             stdin: None,
             account: None,
+            approved: None,
         };
         let plan = Plan {
             title: String::new(),
@@ -604,7 +618,8 @@ mod tests {
             stdin: None,
             accounts: vec!["me".into(), "me-at-work".into()],
             account: None,
-            repo: None,
+            job: None,
+            after: None,
         };
         let rule = matching_rule(&plan, &request, &settings, None).expect("allowed");
         assert_eq!(rule.account.as_deref(), Some("me-at-work"));
@@ -640,7 +655,7 @@ mod tests {
 
     #[test]
     fn the_environment_turns_hooks_and_prompts_off() {
-        let env = hardened_env(Path::new("/tmp/none"));
+        let env = hardened_env(Path::new("/tmp/none"), &[]);
         let get = |key: &str| {
             env.iter()
                 .find(|(name, _)| name == key)

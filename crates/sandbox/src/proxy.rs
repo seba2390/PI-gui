@@ -443,6 +443,7 @@ fn ask_gate(dir: &Path, session: &str, host: &str, port: u16) -> Result<(), Stri
         project: None,
         stdin: None,
         account: None,
+        approved: None,
     };
     let mut line = serde_json::to_string(&request).map_err(|error| error.to_string())?;
     line.push('\n');
