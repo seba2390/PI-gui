@@ -18,12 +18,12 @@ speech sounds rather than how loud it is, so soft speech counts and a fan or typ
 
 ## Models
 
-```{image} /_static/shots/speech-models-light.webp
+```{image} /_static/screenshots/speech-models-light.webp
 :class: shot only-light
 :alt: The speech models
 ```
 
-```{image} /_static/shots/speech-models-dark.webp
+```{image} /_static/screenshots/speech-models-dark.webp
 :class: shot only-dark
 :alt: The speech models
 ```
@@ -44,12 +44,12 @@ before the model is used. Models are kept in `~/.pi/agent/pistachio/speech/`.
 
 ## Dictation
 
-```{image} /_static/shots/speech-dictation-light.webp
+```{image} /_static/screenshots/speech-dictation-light.webp
 :class: shot only-light
 :alt: The Dictation section
 ```
 
-```{image} /_static/shots/speech-dictation-dark.webp
+```{image} /_static/screenshots/speech-dictation-dark.webp
 :class: shot only-dark
 :alt: The Dictation section
 ```

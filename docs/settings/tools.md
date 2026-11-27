@@ -8,12 +8,12 @@ are listed too.
 
 ## Chat
 
-```{image} /_static/shots/tools-chat-light.webp
+```{image} /_static/screenshots/tools-chat-light.webp
 :class: shot only-light
 :alt: The tools of chats
 ```
 
-```{image} /_static/shots/tools-chat-dark.webp
+```{image} /_static/screenshots/tools-chat-dark.webp
 :class: shot only-dark
 :alt: The tools of chats
 ```
@@ -31,12 +31,12 @@ The Python switch is the same as **Compute with Python** under
 
 ## Code
 
-```{image} /_static/shots/tools-code-light.webp
+```{image} /_static/screenshots/tools-code-light.webp
 :class: shot only-light
 :alt: The tools of Code sessions
 ```
 
-```{image} /_static/shots/tools-code-dark.webp
+```{image} /_static/screenshots/tools-code-dark.webp
 :class: shot only-dark
 :alt: The tools of Code sessions
 ```
@@ -62,12 +62,12 @@ checks cover.
 
 ## The context meter
 
-```{image} /_static/shots/tools-meter-light.webp
+```{image} /_static/screenshots/tools-meter-light.webp
 :class: shot only-light
 :alt: The context meter
 ```
 
-```{image} /_static/shots/tools-meter-dark.webp
+```{image} /_static/screenshots/tools-meter-dark.webp
 :class: shot only-dark
 :alt: The context meter
 ```
@@ -79,12 +79,12 @@ total with web search on.
 
 ## What the model sees
 
-```{image} /_static/shots/tools-model-sees-light.webp
+```{image} /_static/screenshots/tools-model-sees-light.webp
 :class: shot only-light
 :alt: A tool with its What the model sees link
 ```
 
-```{image} /_static/shots/tools-model-sees-dark.webp
+```{image} /_static/screenshots/tools-model-sees-dark.webp
 :class: shot only-dark
 :alt: A tool with its What the model sees link
 ```

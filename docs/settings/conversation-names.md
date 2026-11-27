@@ -10,12 +10,12 @@ first messages are their own name, and slash commands are not named.
 
 ## Automatic names
 
-```{image} /_static/shots/names-automatic-light.webp
+```{image} /_static/screenshots/names-automatic-light.webp
 :class: shot only-light
 :alt: The Automatic names section
 ```
 
-```{image} /_static/shots/names-automatic-dark.webp
+```{image} /_static/screenshots/names-automatic-dark.webp
 :class: shot only-dark
 :alt: The Automatic names section
 ```
@@ -35,12 +35,12 @@ Made by
 
 ## Models on this computer
 
-```{image} /_static/shots/names-models-light.webp
+```{image} /_static/screenshots/names-models-light.webp
 :class: shot only-light
 :alt: The naming models
 ```
 
-```{image} /_static/shots/names-models-dark.webp
+```{image} /_static/screenshots/names-models-dark.webp
 :class: shot only-dark
 :alt: The naming models
 ```

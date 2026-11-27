@@ -9,12 +9,12 @@ command, so changes apply from the next command, also in running sessions.
 
 ## Sandbox
 
-```{image} /_static/shots/security-sandbox-light.webp
+```{image} /_static/screenshots/security-sandbox-light.webp
 :class: shot only-light
 :alt: The Sandbox section
 ```
 
-```{image} /_static/shots/security-sandbox-dark.webp
+```{image} /_static/screenshots/security-sandbox-dark.webp
 :class: shot only-dark
 :alt: The Sandbox section
 ```
@@ -37,12 +37,12 @@ it, with a button that allows reading (or changing) the folder it tried to use.
 
 ## Files
 
-```{image} /_static/shots/security-files-light.webp
+```{image} /_static/screenshots/security-files-light.webp
 :class: shot only-light
 :alt: The Files section with tool folders
 ```
 
-```{image} /_static/shots/security-files-dark.webp
+```{image} /_static/screenshots/security-files-dark.webp
 :class: shot only-dark
 :alt: The Files section with tool folders
 ```
@@ -73,12 +73,12 @@ Environment variables that hold keys and tokens (names ending in `_API_KEY`, `_T
 
 ## Internet
 
-```{image} /_static/shots/security-internet-light.webp
+```{image} /_static/screenshots/security-internet-light.webp
 :class: shot only-light
 :alt: The Internet section
 ```
 
-```{image} /_static/shots/security-internet-dark.webp
+```{image} /_static/screenshots/security-internet-dark.webp
 :class: shot only-dark
 :alt: The Internet section
 ```
@@ -108,12 +108,12 @@ Linux, Landlock needs Linux 6.7 to limit the network.
 
 ## Git and GitHub
 
-```{image} /_static/shots/security-git-light.webp
+```{image} /_static/screenshots/security-git-light.webp
 :class: shot only-light
 :alt: The Git and GitHub section
 ```
 
-```{image} /_static/shots/security-git-dark.webp
+```{image} /_static/screenshots/security-git-dark.webp
 :class: shot only-dark
 :alt: The Git and GitHub section
 ```
@@ -146,12 +146,12 @@ each removable.
 
 ## Project files
 
-```{image} /_static/shots/security-project-files-light.webp
+```{image} /_static/screenshots/security-project-files-light.webp
 :class: shot only-light
 :alt: The Project files section
 ```
 
-```{image} /_static/shots/security-project-files-dark.webp
+```{image} /_static/screenshots/security-project-files-dark.webp
 :class: shot only-dark
 :alt: The Project files section
 ```

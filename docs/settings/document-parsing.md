@@ -6,12 +6,12 @@ model.
 
 ## Parser
 
-```{image} /_static/shots/documents-parser-light.webp
+```{image} /_static/screenshots/documents-parser-light.webp
 :class: shot only-light
 :alt: The parsers
 ```
 
-```{image} /_static/shots/documents-parser-dark.webp
+```{image} /_static/screenshots/documents-parser-dark.webp
 :class: shot only-dark
 :alt: The parsers
 ```
@@ -38,12 +38,12 @@ parser is missing, fails or takes too long, the built-in reader is used and the 
 
 ## Long files in chats
 
-```{image} /_static/shots/documents-long-files-light.webp
+```{image} /_static/screenshots/documents-long-files-light.webp
 :class: shot only-light
 :alt: The Long files in chats section
 ```
 
-```{image} /_static/shots/documents-long-files-dark.webp
+```{image} /_static/screenshots/documents-long-files-dark.webp
 :class: shot only-dark
 :alt: The Long files in chats section
 ```

@@ -4,12 +4,12 @@ Which pi Pistachio runs, the model new sessions start with, and the models you h
 
 ## pi
 
-```{image} /_static/shots/pi-pi-light.webp
+```{image} /_static/screenshots/pi-pi-light.webp
 :class: shot only-light
 :alt: The pi section
 ```
 
-```{image} /_static/shots/pi-pi-dark.webp
+```{image} /_static/screenshots/pi-pi-dark.webp
 :class: shot only-dark
 :alt: The pi section
 ```
@@ -20,12 +20,12 @@ pi program
 
 ## Startup model
 
-```{image} /_static/shots/pi-startup-light.webp
+```{image} /_static/screenshots/pi-startup-light.webp
 :class: shot only-light
 :alt: The Startup model section
 ```
 
-```{image} /_static/shots/pi-startup-dark.webp
+```{image} /_static/screenshots/pi-startup-dark.webp
 :class: shot only-dark
 :alt: The Startup model section
 ```
@@ -35,12 +35,12 @@ pi's own `settings.json`, like `/settings` in the terminal, so the terminal pi u
 
 ## Connected models
 
-```{image} /_static/shots/pi-connected-light.webp
+```{image} /_static/screenshots/pi-connected-light.webp
 :class: shot only-light
 :alt: Connected models
 ```
 
-```{image} /_static/shots/pi-connected-dark.webp
+```{image} /_static/screenshots/pi-connected-dark.webp
 :class: shot only-dark
 :alt: Connected models
 ```
