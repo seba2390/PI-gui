@@ -149,6 +149,9 @@ pub struct AppSettings {
     /// pi's optional tools turned on in Code sessions on this computer (Settings → Tools; see
     /// `pi_config::tools::OPTIONAL_CODE_TOOLS`). None by default.
     pub code_tools: Vec<String>,
+    /// Offer `request_user_help` in local Code sessions while the sandbox is on (Settings →
+    /// Tools; see `sandbox::help`). On by default.
+    pub help_tool: bool,
     /// Settings this version doesn't know (a newer one wrote them), kept for the next save.
     #[serde(flatten)]
     pub unknown: serde_json::Map<String, serde_json::Value>,
@@ -177,6 +180,7 @@ impl Default for AppSettings {
             namer: crate::naming::Namer::default(),
             naming_model: crate::naming::catalog::DEFAULT_MODEL.to_owned(),
             code_tools: Vec::new(),
+            help_tool: true,
             unknown: serde_json::Map::new(),
         }
     }

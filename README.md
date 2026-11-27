@@ -23,8 +23,8 @@ and (experimentally) Windows.
 Pistachio runs pi itself (`pi --mode rpc`) and draws pi's own event stream, so a session behaves
 exactly as it does in pi's terminal: the same sessions, models, skills, extensions and settings,
 and you can switch between the app and the terminal at any time. Extra tools are opt-in: Code
-sessions get exactly pi's own tools until you turn more on in
-[Settings → Tools](https://seba2390.github.io/pistachio/settings/tools.html).
+sessions get pi's own tools, plus a way to ask you for help while the sandbox is on, until you
+turn more on in [Settings → Tools](https://seba2390.github.io/pistachio/settings/tools.html).
 
 - **Easy to use and polished.** A clean, intuitive interface built to the standard of the
   Claude Code and Codex desktop apps: streaming markdown, inline diffs and readable tool calls.
@@ -38,7 +38,8 @@ sessions get exactly pi's own tools until you turn more on in
   for complex layouts, scans and formulas.
 - **Web search and deep research** in chats.
 - **Sandboxing and security.** The agent's commands see only the project and the folders you
-  allow, never your keys. Pushing, GitHub and signing go through a gate that asks you first.
+  allow, never your keys. Pushing, GitHub and signing go through a gate that asks you first,
+  and a step the sandbox blocks can be handed to you to do yourself.
 - **Background sessions, branches and side chats**, so several things can run at once.
 
 The [documentation](https://seba2390.github.io/pistachio/) explains each feature and Settings
@@ -86,20 +87,20 @@ npm i -g @earendil-works/pi-coding-agent
   - Debian, Ubuntu:
 
     ```bash
-    curl -fLO https://github.com/seba2390/pistachio/releases/download/v0.5.9/pistachio_0.5.9-1_$(dpkg --print-architecture).deb && sudo apt install ./pistachio_0.5.9-1_$(dpkg --print-architecture).deb
+    curl -fLO https://github.com/seba2390/pistachio/releases/download/v0.5.10/pistachio_0.5.10-1_$(dpkg --print-architecture).deb && sudo apt install ./pistachio_0.5.10-1_$(dpkg --print-architecture).deb
     ```
 
   - Fedora and other RPM-based systems:
 
     ```bash
-    sudo dnf install https://github.com/seba2390/pistachio/releases/download/v0.5.9/pistachio-0.5.9-1.$(uname -m).rpm
+    sudo dnf install https://github.com/seba2390/pistachio/releases/download/v0.5.10/pistachio-0.5.10-1.$(uname -m).rpm
     ```
 
   - Any other distribution (installs for your user only, no root, and adds "Pistachio" to your
     app launcher):
 
     ```bash
-    curl -fL https://github.com/seba2390/pistachio/releases/download/v0.5.9/pistachio-v0.5.9-linux-$(uname -m).tar.gz | tar xz && pistachio-v0.5.9-linux-$(uname -m)/install.sh
+    curl -fL https://github.com/seba2390/pistachio/releases/download/v0.5.10/pistachio-v0.5.10-linux-$(uname -m).tar.gz | tar xz && pistachio-v0.5.10-linux-$(uname -m)/install.sh
     ```
 
   Or download the files yourself from [Releases](https://github.com/seba2390/pistachio/releases).

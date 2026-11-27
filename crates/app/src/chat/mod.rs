@@ -11,6 +11,7 @@ mod file_links;
 mod file_picker;
 mod files;
 mod find;
+mod help;
 mod images;
 mod math;
 pub(crate) mod mention;
@@ -387,6 +388,15 @@ impl ChatView {
         cx.notify();
     }
 
+    /// Opens the details of the request for help shown (`PISTACHIO_OPEN=help-request-open`).
+    pub(crate) fn expand_help(&mut self, cx: &mut Context<Self>) {
+        if let Some(question::Card::Help(card)) =
+            self.questions.first().map(|question| &question.card)
+        {
+            card.update(cx, |card, cx| card.set_expanded(true, cx));
+        }
+    }
+
     /// Sends the answer to the question `id` and shows the next one, or gives the keyboard back
     /// to the composer.
     fn answer(
@@ -560,7 +570,27 @@ impl ChatView {
                     cx.emit(ChatEvent::NeedsAttention);
                 }
             }
-            SessionEvent::BusyChanged => cx.emit(ChatEvent::BusyChanged),
+            SessionEvent::BusyChanged => {
+                // A request for help waits on a tool call: once the agent stopped (Esc), no one
+                // takes its answer.
+                if !self.session.read(cx).is_busy()
+                    && self.questions.iter().any(question::Docked::is_help)
+                {
+                    let had_focus = self
+                        .questions
+                        .first()
+                        .is_some_and(|question| question.focus.contains_focused(window, cx));
+                    self.questions.retain(|question| !question.is_help());
+                    if had_focus && self.questions.is_empty() {
+                        let focus = self.composer_focus(cx);
+                        window.focus(&focus, cx);
+                    } else if had_focus {
+                        self.focus_question(window, cx);
+                    }
+                    cx.notify();
+                }
+                cx.emit(ChatEvent::BusyChanged);
+            }
             SessionEvent::Reloaded => self.reset_rows(cx),
             SessionEvent::SetEditorText(text) => {
                 let text = text.clone();
@@ -1297,7 +1327,7 @@ impl Render for ChatView {
                         .max_w(CONTENT_MAX_WIDTH + px(32.))
                         .children(self.render_reconnect(cx))
                         // Behind the composer (painted first), its bottom tucked under it.
-                        .children(self.questions.first().map(|question| question.card.clone()))
+                        .children(self.questions.first().map(|question| question.card.view()))
                         .child(self.composer.clone()),
                 ),
             )

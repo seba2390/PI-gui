@@ -580,6 +580,40 @@ impl MainWindow {
                     self.chat
                         .update(cx, |chat, cx| chat.ask(&request, window, cx));
                 }
+                // A `request_user_help` pill, folded (`help-request`) or open (`help-request-open`).
+                "help-request" | "help-request-open" => {
+                    let title = format!(
+                        "{}{}",
+                        sandbox::help::MARK,
+                        serde_json::json!({
+                            "title": "Install the Xcode command line tools",
+                            "reason": "Building needs clang, and installing the command line tools changes \
+                                       /Library, which the sandbox doesn't let commands write.",
+                            "suggested_command": "xcode-select --install",
+                            "blocked": {
+                                "command": "xcode-select --install",
+                                "cwd": "/Users/ana/code/fibonacci",
+                                "error": "xcode-select: error: Operation not permitted",
+                            },
+                        })
+                    );
+                    let request = pi_rpc::protocol::ExtensionUiRequest {
+                        id: "layout-check-help".into(),
+                        method: pi_rpc::protocol::ExtensionUiMethod::Select {
+                            title,
+                            options: [sandbox::help::DONE, sandbox::help::DISMISS]
+                                .map(str::to_owned)
+                                .to_vec(),
+                            timeout: None,
+                        },
+                    };
+                    self.chat.update(cx, |chat, cx| {
+                        chat.ask(&request, window, cx);
+                        if panel == "help-request-open" {
+                            chat.expand_help(cx);
+                        }
+                    });
+                }
                 "settings-git" => {
                     self.open_settings(&OpenSettings, window, cx);
                     if let Some(settings) = self.settings.as_ref().map(|s| s.0.clone()) {

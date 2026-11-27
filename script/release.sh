@@ -3,28 +3,44 @@
 # opens a pull request into main and turns on auto-merge. GitHub does the rest (merge once the
 # required checks pass, then tag-release.yml and release.yml), so nothing has to be watched.
 #
-#   script/release.sh 0.5.0              # from the branch with the changes (or from main)
+#   script/release.sh 0.5.0 --docs-review /tmp/docs-review.md   # from the branch with the changes
 #   script/release.sh 0.5.0 --dry-run    # check everything, change and push nothing
+#
+# --docs-review names the summary of the documentation review done before every release (see
+# Releasing in CONTRIBUTING.md); it goes into the pull request. Keep it outside the repository.
 #
 # --skip-checks leaves out fmt, clippy and the tests (CI runs them too). Running it again after
 # a failure goes on where it stopped.
 set -euo pipefail
 
-usage="usage: script/release.sh <version> [--dry-run] [--skip-checks]"
+usage="usage: script/release.sh <version> --docs-review <file> [--dry-run] [--skip-checks]"
 die() { echo "release.sh: $*" >&2; exit 1; }
 step() { echo "==> $*"; }
 
-version="" dry_run="" skip_checks=""
-for arg in "$@"; do
-  case $arg in
+version="" dry_run="" skip_checks="" docs_review=""
+while (($#)); do
+  case $1 in
     --dry-run) dry_run=1 ;;
     --skip-checks) skip_checks=1 ;;
+    --docs-review) (($# > 1)) || die "$usage"; docs_review=$2; shift ;;
+    --docs-review=*) docs_review=${1#--docs-review=} ;;
     -*) die "$usage" ;;
-    *) [[ -z "$version" ]] || die "$usage"; version=$arg ;;
+    *) [[ -z "$version" ]] || die "$usage"; version=$1 ;;
   esac
+  shift
 done
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "$usage"
 tag="v$version"
+
+# Read before changing directory, so a relative path is the caller's.
+review=""
+if [[ -n "$docs_review" ]]; then
+  [[ -f "$docs_review" ]] || die "$docs_review: no such file"
+  review="$(<"$docs_review")"
+  [[ -n "${review//[[:space:]]/}" ]] || die "$docs_review is empty: record the documentation review in it"
+elif [[ -z "$dry_run" ]]; then
+  die "review the documentation first and pass its summary with --docs-review <file> (see Releasing in CONTRIBUTING.md)"
+fi
 cd "$(dirname "$0")/.."
 
 step "Checking that $version can be released"
@@ -93,6 +109,7 @@ fi
 if [[ -n "$dry_run" ]]; then
   git --no-pager diff --stat -- "${files[@]}"
   echo "$changes"
+  [[ -n "$review" ]] || echo "(the real run needs --docs-review <file>: review the documentation first)"
   step "$version can be released from $branch (dry run: nothing was changed or pushed)"
   exit 0
 fi
@@ -110,14 +127,22 @@ trap - EXIT
 step "Pushing $branch"
 git push -q -u origin "$branch"
 
-url="$(gh pr list --head "$branch" --base main --state open --json url --jq '.[0].url // ""')"
-if [[ -z "$url" ]]; then
-  step "Opening a pull request"
-  url="$(gh pr create --base main --head "$branch" --title "Release $version" --body "## What and why
+body="## What and why
 
 **Merging this PR publishes $version** (\`tag-release.yml\`).
 
-$changes" | tail -n 1)"
+$changes
+
+## Documentation review
+
+$review"
+url="$(gh pr list --head "$branch" --base main --state open --json url --jq '.[0].url // ""')"
+if [[ -z "$url" ]]; then
+  step "Opening a pull request"
+  url="$(gh pr create --base main --head "$branch" --title "Release $version" --body "$body" | tail -n 1)"
+else
+  step "Updating the pull request's description"
+  gh pr edit "$url" --body "$body" >/dev/null
 fi
 
 step "Turning on auto-merge"

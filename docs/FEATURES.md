@@ -357,6 +357,14 @@ Linux; Windows is planned, #47).
   when that applies); its menu runs the project without a sandbox (or with one again) and opens
   Settings → Sandboxing & Security. A call the sandbox blocked says so under it, with a button that allows
   reading (or changing) the folder it tried to use.
+- **Asking you for help:** when the sandbox blocks a step the task needs and nothing inside the
+  sandbox would do, the model can call `request_user_help` with a short title, its reason and
+  maybe a command to suggest. A pill above the message box says "Needs your help: …"; opened, it
+  shows the command the sandbox blocked last, its folder and its error (recorded by the
+  extension) apart from the model's reason and suggestion. **Copy command**, **Done** and
+  **Dismiss** (Esc); the model gets the answer. It runs nothing and asks for no credentials. It is
+  offered only while the sandbox is on for the folder and its switch in Settings → Tools → Code is
+  on (the default), and a pill goes when the agent stops.
 - Settings are `~/.pi/agent/pistachio/sandbox/settings.json`, read by every command, so changes
   apply from the next one, also in running sessions. `script/test-sandbox.py` checks it end to end
   with real pi and a scripted model.

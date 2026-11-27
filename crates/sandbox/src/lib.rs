@@ -10,12 +10,14 @@
 //! Commands may write only to the project, temporary folders, tool caches and folders the user
 //! adds; they can't read hidden paths (keys, logins), don't get secret environment variables
 //! ([`secrets`]) and, when the user says so, have no network. The extension holds pi's file tools
-//! (`read`, `write`, `edit`, `grep`, …) to the same rules ([`Policy`]).
+//! (`read`, `write`, `edit`, `grep`, …) to the same rules ([`Policy`]), and offers the model
+//! [`help::TOOL`] to hand the user a step the sandbox blocks.
 
 pub mod backend;
 mod bwrap;
 pub mod cli;
 pub mod gate;
+pub mod help;
 pub mod landlock;
 pub mod note;
 pub mod paths;

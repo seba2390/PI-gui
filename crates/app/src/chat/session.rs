@@ -407,6 +407,7 @@ impl PiSession {
         );
         if mode == Mode::Code && saved.is_none() {
             optional_tool_args(&code_tools(cx), &mut options);
+            help_tool_env(help_tool(cx), &mut options);
         }
         self.start_process(&options, cx);
     }
@@ -2455,6 +2456,20 @@ pub(crate) fn optional_tool_args(tools: &[String], options: &mut SpawnOptions) {
         options
             .extra_args
             .extend(["--tools".into(), added.join(",").into()]);
+    }
+}
+
+/// Whether `request_user_help` is switched on in Settings → Tools (see [`sandbox::help`]).
+pub(crate) fn help_tool(cx: &gpui_kit::App) -> bool {
+    cx.try_global::<crate::settings::AppSettings>()
+        .is_none_or(|settings| settings.help_tool)
+}
+
+/// Tells the sandbox's extension that `request_user_help` is switched off; it is offered
+/// otherwise, while the sandbox is on for the session's folder.
+pub(crate) fn help_tool_env(on: bool, options: &mut SpawnOptions) {
+    if !on {
+        options.env.push((sandbox::help::ENV.into(), "off".into()));
     }
 }
 

@@ -6,6 +6,18 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.5.10] - 2026-11-27
+
+### Added
+
+- `request_user_help`, a tool for Code sessions on this computer: when the sandbox blocks a step
+  the task needs and there is no way to do it inside the sandbox, the model can hand it to you. A
+  pill above the message box says "Needs your help: …"; opened, it shows the command the sandbox
+  blocked, its folder and its error apart from the model's reason and the command it suggests.
+  **Copy command**, **Done** and **Dismiss**; the model gets your answer. It runs nothing and
+  never asks for passwords or keys. It is offered while the sandbox is on, and has a switch in
+  Settings → Tools → Code (on by default).
+
 ## [0.5.9] - 2026-11-27
 
 ### Fixed
@@ -777,7 +789,8 @@ chats, skills and model management. Changes since the last private build:
 - A corrupt `hosts.json` is kept as a backup.
 - A remembered terminal height can no longer squeeze out the chat.
 
-[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.5.9...HEAD
+[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.5.10...HEAD
+[0.5.10]: https://github.com/seba2390/pistachio/compare/v0.5.9...v0.5.10
 [0.5.9]: https://github.com/seba2390/pistachio/compare/v0.5.8...v0.5.9
 [0.5.8]: https://github.com/seba2390/pistachio/compare/v0.5.7...v0.5.8
 [0.5.7]: https://github.com/seba2390/pistachio/compare/v0.5.6...v0.5.7

@@ -111,6 +111,11 @@ pub fn header(tool: &ToolBlock, paths: PathContext<'_>) -> ToolHeader {
         "web_fetch" => ("Read", short_url(arg(args, "url").unwrap_or(""))),
         // The chats' python tool (Monty): its last line, usually the expression computed.
         "python" => ("Computed", last_line(arg(args, "code").unwrap_or(""))),
+        // The sandbox's handoff to the user: what the model asked them to do.
+        "request_user_help" => (
+            "Asked for help",
+            arg(args, "title").unwrap_or("").to_owned(),
+        ),
         other => {
             return ToolHeader {
                 title: other.to_owned(),
@@ -311,6 +316,11 @@ pub fn result_summary(tool: &ToolBlock) -> Option<String> {
                 }
             })
         }
+        "request_user_help" => match tool.details.as_ref()?.get("answer")?.as_str()? {
+            "done" => Some("Done".to_owned()),
+            "dismissed" => Some("Dismissed".to_owned()),
+            _ => Some("No answer".to_owned()),
+        },
         "web_search" => {
             let results = tool.details.as_ref()?.get("results")?.as_array()?.len();
             Some(if results == 0 {
@@ -485,6 +495,14 @@ mod tests {
                 "Read",
                 "example.com/a/b",
             ),
+            (
+                tool(
+                    "request_user_help",
+                    json!({"title":"Install the Xcode tools","reason":"r"}),
+                ),
+                "Asked for help",
+                "Install the Xcode tools",
+            ),
             (tool("mcp__x", json!({"q":"hi"})), "mcp__x", "q: hi"),
         ];
         for (tool, title, detail) in cases {
@@ -506,6 +524,19 @@ mod tests {
         let mut fetch = tool("web_fetch", json!({"url":"https://e.com"}));
         fetch.details = Some(json!({"title":"Docs","sections_shown":3,"sections_total":9}));
         assert_eq!(result_summary(&fetch).unwrap(), "Docs (3 of 9 sections)");
+    }
+
+    #[test]
+    fn summarizes_the_users_answer_to_a_help_request() {
+        let mut help = tool("request_user_help", json!({"title":"t"}));
+        for (answer, summary) in [
+            ("done", "Done"),
+            ("dismissed", "Dismissed"),
+            ("none", "No answer"),
+        ] {
+            help.details = Some(json!({ "answer": answer }));
+            assert_eq!(result_summary(&help).as_deref(), Some(summary));
+        }
     }
 
     #[test]
