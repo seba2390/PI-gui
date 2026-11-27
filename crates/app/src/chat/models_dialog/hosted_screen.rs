@@ -609,6 +609,38 @@ impl ModelsDialog {
         let (border, muted) = (theme.border, theme.muted_foreground);
         let accent = crate::theme::palette(cx).accent;
         let tier = suggestion.tier.label();
+        let expanded = self.expanded.contains(&tier);
+        let toggle = div()
+            .w_full()
+            .flex()
+            .justify_center()
+            .debug_selector(move || format!("expand:{tier}"))
+            .child(
+                Button::new(SharedString::from(format!("expand:{tier}")))
+                    .quiet(cx)
+                    .xsmall()
+                    .icon(
+                        Icon::new(if expanded {
+                            IconName::ChevronUp
+                        } else {
+                            IconName::ChevronDown
+                        })
+                        .text_color(muted),
+                    )
+                    .accessibility_label(if expanded {
+                        format!("Hide how {} runs", suggestion.model.name)
+                    } else {
+                        format!("Show how {} runs", suggestion.model.name)
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(ix) = this.expanded.iter().position(|open| *open == tier) {
+                            this.expanded.remove(ix);
+                        } else {
+                            this.expanded.push(tier);
+                        }
+                        cx.notify();
+                    })),
+            );
         let rows = [
             (suggestion.default.as_ref(), default, false),
             (suggestion.specialized.as_ref(), special, true),
@@ -618,7 +650,8 @@ impl ModelsDialog {
             .w_full()
             .gap_1p5()
             .px_3()
-            .py_2()
+            .pt_2()
+            .pb_0p5()
             .rounded_lg()
             .border_1()
             .border_color(border)
@@ -648,20 +681,12 @@ impl ModelsDialog {
                     .text_color(muted)
                     .child(suggestion.model.why.clone()),
             )
-            .children(
-                rows.into_iter()
-                    .filter_map(|(choice, status, specialized)| {
-                        Some(self.render_choice(
-                            models,
-                            tier,
-                            choice?,
-                            status?,
-                            specialized,
-                            busy,
-                            cx,
-                        ))
-                    }),
-            )
+            .children(rows.into_iter().filter(|_| expanded).filter_map(
+                |(choice, status, specialized)| {
+                    Some(self.render_choice(models, tier, choice?, status?, specialized, busy, cx))
+                },
+            ))
+            .child(toggle)
     }
 
     /// A way to run a suggested model: the engine, the checkpoint, the memory it takes and its

@@ -71,7 +71,8 @@ Locally hosted model
   **Deploy new model** suggests models for this computer. **Scan local hardware** looks at the
   processor, the memory, the graphics, the free disk and the build tools, with a progress bar
   that says what it is looking at, and lists what it found; nothing leaves the computer.
-  **Suggest models** then offers up to three: **Fast**, **Balanced** and **Most capable**, each faster and less capable than the next. Each shows the
+  **Suggest models** then offers up to three: **Fast**, **Balanced** and **Most capable**, each faster and less capable than the next. Each starts collapsed;
+  the arrow at its bottom opens it. Opened, it shows the
   inference engine that runs it best here, the checkpoint and its quantization, the memory it
   takes and its speed here (measured or estimated); the engine and the checkpoint link to their
   pages. Each comes with a

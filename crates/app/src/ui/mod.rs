@@ -62,16 +62,20 @@ pub fn web_link(
     url: String,
     cx: &gpui_kit::App,
 ) -> gpui_kit::Stateful<gpui_kit::Div> {
+    use gpui_kit::component::ActiveTheme as _;
     use gpui_kit::{
         InteractiveElement as _, ParentElement as _, StatefulInteractiveElement as _, Styled as _,
     };
-    let color = crate::theme::palette(cx).accent;
+    // Plain text with a faint underline that brightens on hover.
+    let theme = cx.theme();
+    let (faint, strong) = (theme.border, theme.muted_foreground);
     gpui_kit::div()
         .id(id.into())
         .min_w_0()
-        .text_color(color)
         .cursor_pointer()
-        .hover(|style| style.underline())
+        .underline()
+        .text_decoration_color(faint)
+        .hover(move |style| style.text_decoration_color(strong))
         .child(text.into())
         .on_click(move |_, _, cx| cx.open_url(&url))
 }

@@ -138,6 +138,8 @@ pub struct ModelsDialog {
     deploy: DeployStep,
     /// Hardware scans asked for, so each one's progress starts from the beginning.
     scans: usize,
+    /// The suggestions opened to show how they run (by tier).
+    expanded: Vec<&'static str>,
     /// The known servers on this device, once it was chosen.
     this_device: Option<Scan>,
     /// The known servers on the other device last asked for.
@@ -237,6 +239,7 @@ impl ModelsDialog {
             this_way: None,
             deploy: DeployStep::Start,
             scans: 0,
+            expanded: Vec::new(),
             this_device: None,
             other_device: None,
             address,
