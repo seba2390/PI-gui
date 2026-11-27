@@ -9,20 +9,13 @@ article dl.myst > dt {
   font-weight: 600;
 }
 
-/* Screenshots of the app: faded into the page at every edge, more at the bottom (many show
-   the start of a longer section). There are light and dark ones; Furo shows the one that matches. */
+/* Screenshots of the app. Each image has the app's background above and below it, fading slowly
+   to transparent (baked into the image), so it blends into the page at the top and bottom and the
+   screenshot itself is never dimmed. There are light and dark ones; Furo shows the matching one. */
 article img.shot {
   display: block;
   width: 100%;
   max-width: 46rem;
   height: auto;
-  margin: 1.25rem auto 1.75rem;
-  -webkit-mask-image:
-    linear-gradient(to bottom, transparent 0, #000 min(1.25rem, 12%), #000 calc(100% - min(3.5rem, 28%)), transparent 100%),
-    linear-gradient(to right, transparent 0, #000 6%, #000 94%, transparent 100%);
-  -webkit-mask-composite: source-in;
-  mask-image:
-    linear-gradient(to bottom, transparent 0, #000 min(1.25rem, 12%), #000 calc(100% - min(3.5rem, 28%)), transparent 100%),
-    linear-gradient(to right, transparent 0, #000 6%, #000 94%, transparent 100%);
-  mask-composite: intersect;
+  margin: 0.25rem auto 0.75rem;
 }

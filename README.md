@@ -15,41 +15,38 @@
   <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue" alt="License"></a>
 </p>
 
-<!-- docs/media/demo.mp4, uploaded through GitHub (it only plays videos hosted there). After
-re-recording it, upload the new file the same way and replace this link. -->
-https://github.com/user-attachments/assets/45a10dcc-881a-451d-a78e-cefb881ec8d0
+**Pistachio is an open-source, native desktop app for the [pi coding agent](https://pi.dev).**
+It is written in Rust and drawn on the GPU with [GPUI](https://gpui.rs), so it starts quickly,
+stays smooth in long sessions and uses about 90 MB of memory when idle. It runs on macOS, Linux
+and (experimentally) Windows.
 
-Pistachio runs `pi --mode rpc` and draws pi's own event stream, so it behaves exactly like pi in
-the terminal. Your sessions, models, skills and extensions come from your normal pi setup. It is
-written in Rust and GPU-rendered with [GPUI](https://gpui.rs), and uses about 90 MB of memory
-when idle.
+Pistachio runs pi itself (`pi --mode rpc`) and draws pi's own event stream, so a session behaves
+exactly as it does in pi's terminal: the same sessions, models, skills, extensions and settings,
+and you can switch between the app and the terminal at any time. Extra tools are opt-in: Code
+sessions get exactly pi's own tools until you turn more on in
+[Settings → Tools](https://seba2390.github.io/pistachio/settings/tools.html).
 
-## Features
-
-- **Chat and Code modes.** Plain chat that can't touch your files, or the coding agent in a
-  project folder.
-- **A readable transcript.** Streaming markdown, collapsible thinking and inline edit diffs.
-  Shell commands are labelled by what they do ("Read Cargo.toml", "Ran cargo test").
-- **Side panels and a terminal** in the session's folder: git changes, a file tree, and an
-  integrated terminal.
-- **SSH remotes.** Run pi on another machine, and Pistachio installs pi there if it's missing.
-  Your models work there too: requests come back through the SSH connection, so keys stay on
-  your computer.
-- **Web search** for chats: quick lookups or multi-step deep research.
-- **Speech to text.** Dictate with the microphone button. A model you download once (Parakeet,
-  Whisper or Moonshine) transcribes on your computer, so nothing you say leaves it.
-- **A sandbox for the agent.** In Code sessions its commands see only the project and the folders
-  you allow, never your keys (Seatbelt on macOS, bubblewrap or Landlock on Linux).
-  When it needs your logins (git push and pull, GitHub's `gh`, signing), you're asked, and it's done
-  outside the sandbox. Settings → Sandboxing & Security.
-- **Background sessions.** Chats keep working while you switch, plus branching, model and
-  skill management.
-- **Settings and updates.** A Settings page (⌘,) for look, models, web search, SSH and the sandbox. When a
-  new release is out, Update installs it in place (only when you say yes), and the new version
-  shows what changed.
+- **Easy to use and polished.** A clean, intuitive interface built to the standard of the
+  Claude Code and Codex desktop apps: streaming markdown, inline diffs and readable tool calls.
+- **Chat and Code.** Plain chats that can't touch your files, or the agent working in a project
+  folder, with a terminal, git changes and a file tree beside it.
+- **SSH remotes.** Run pi on another machine. Pistachio installs pi there if needed, and your
+  models work there with the keys kept on your computer.
+- **Speech to text.** Dictate your messages. A model that runs on your computer transcribes them,
+  so nothing you say leaves it.
+- **Document parsing.** Attach PDFs, Word, PowerPoint, Excel and EPUB files, with optional parsers
+  for complex layouts, scans and formulas.
+- **Web search and deep research** in chats.
+- **Sandboxing and security.** The agent's commands see only the project and the folders you
+  allow, never your keys. Pushing, GitHub and signing go through a gate that asks you first.
+- **Background sessions, branches and side chats**, so several things can run at once.
 
 The [documentation](https://seba2390.github.io/pistachio/) explains each feature and Settings
 page. See [docs/FEATURES.md](docs/FEATURES.md) for the full list and keyboard shortcuts.
+
+<!-- docs/media/demo.mp4, uploaded through GitHub (it only plays videos hosted there). After
+re-recording it, upload the new file the same way and replace this link. -->
+https://github.com/user-attachments/assets/45a10dcc-881a-451d-a78e-cefb881ec8d0
 
 
 ## Install
