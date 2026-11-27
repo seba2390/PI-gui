@@ -413,16 +413,18 @@ pub fn after(after: &After, plan: &Plan, request: &Request, env: &relay::Env) {
             } else {
                 format!("https://github.com/{full}.git")
             };
+            // The URL names the account, which stays out of what is printed (it goes back to the
+            // model); gh printed the repository's URL already.
             match env.sandboxed_output(
                 &project_of(request),
                 dir,
                 &["remote", "add", remote, &url],
                 None,
             ) {
-                Some(_) => println!("Added the remote {remote}: {url}"),
+                Some(_) => println!("Added the remote {remote}."),
                 None => eprintln!(
                     "[Pistachio] The repository was created, but adding the remote {remote} failed; \
-                     run `git remote add {remote} {url}`."
+                     run `git remote add {remote}` with the URL gh printed."
                 ),
             }
         }

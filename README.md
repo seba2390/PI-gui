@@ -86,20 +86,20 @@ npm i -g @earendil-works/pi-coding-agent
   - Debian, Ubuntu:
 
     ```bash
-    curl -fLO https://github.com/seba2390/pistachio/releases/download/v0.5.8/pistachio_0.5.8-1_$(dpkg --print-architecture).deb && sudo apt install ./pistachio_0.5.8-1_$(dpkg --print-architecture).deb
+    curl -fLO https://github.com/seba2390/pistachio/releases/download/v0.5.9/pistachio_0.5.9-1_$(dpkg --print-architecture).deb && sudo apt install ./pistachio_0.5.9-1_$(dpkg --print-architecture).deb
     ```
 
   - Fedora and other RPM-based systems:
 
     ```bash
-    sudo dnf install https://github.com/seba2390/pistachio/releases/download/v0.5.8/pistachio-0.5.8-1.$(uname -m).rpm
+    sudo dnf install https://github.com/seba2390/pistachio/releases/download/v0.5.9/pistachio-0.5.9-1.$(uname -m).rpm
     ```
 
   - Any other distribution (installs for your user only, no root, and adds "Pistachio" to your
     app launcher):
 
     ```bash
-    curl -fL https://github.com/seba2390/pistachio/releases/download/v0.5.8/pistachio-v0.5.8-linux-$(uname -m).tar.gz | tar xz && pistachio-v0.5.8-linux-$(uname -m)/install.sh
+    curl -fL https://github.com/seba2390/pistachio/releases/download/v0.5.9/pistachio-v0.5.9-linux-$(uname -m).tar.gz | tar xz && pistachio-v0.5.9-linux-$(uname -m)/install.sh
     ```
 
   Or download the files yourself from [Releases](https://github.com/seba2390/pistachio/releases).

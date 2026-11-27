@@ -6,6 +6,14 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.5.9] - 2026-11-27
+
+### Fixed
+
+- The gate no longer names GitHub accounts in what it prints back to the model: not in the
+  remote it adds after creating a repository, nor when the repository changed while the user was
+  asked. Fixes the code scanning alerts 9–12 (rust/cleartext-logging).
+
 ## [0.5.8] - 2026-11-27
 
 ### Changed
@@ -769,7 +777,8 @@ chats, skills and model management. Changes since the last private build:
 - A corrupt `hosts.json` is kept as a backup.
 - A remembered terminal height can no longer squeeze out the chat.
 
-[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.5.8...HEAD
+[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.5.9...HEAD
+[0.5.9]: https://github.com/seba2390/pistachio/compare/v0.5.8...v0.5.9
 [0.5.8]: https://github.com/seba2390/pistachio/compare/v0.5.7...v0.5.8
 [0.5.7]: https://github.com/seba2390/pistachio/compare/v0.5.6...v0.5.7
 [0.5.6]: https://github.com/seba2390/pistachio/compare/v0.5.5...v0.5.6
