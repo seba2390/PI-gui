@@ -6,6 +6,16 @@ ssh-agent and `known_hosts` apply.
 
 ## Settings
 
+```{image} /_static/shots/ssh-settings-light.webp
+:class: shot only-light
+:alt: Settings → SSH connections with two saved connections
+```
+
+```{image} /_static/shots/ssh-settings-dark.webp
+:class: shot only-dark
+:alt: Settings → SSH connections with two saved connections
+```
+
 Connect saved connections at start
 : Off by default. When on, saved hosts connect quietly in the background when Pistachio opens
   (no password prompts), so their status and sessions are ready. Takes effect the next time
@@ -20,6 +30,16 @@ Saved connections
 Connections are saved in `~/.pi/agent/pistachio/hosts.json`.
 
 ## Adding a host
+
+```{image} /_static/shots/ssh-add-light.webp
+:class: shot only-light
+:alt: The Add SSH connection dialog listing hosts from ~/.ssh/config
+```
+
+```{image} /_static/shots/ssh-add-dark.webp
+:class: shot only-dark
+:alt: The Add SSH connection dialog listing hosts from ~/.ssh/config
+```
 
 In Code mode, click the device button next to the folder in the message box ("This
 computer"):

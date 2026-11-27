@@ -18,6 +18,16 @@ speech sounds rather than how loud it is, so soft speech counts and a fan or typ
 
 ## Models
 
+```{image} /_static/shots/speech-models-light.webp
+:class: shot only-light
+:alt: The speech models
+```
+
+```{image} /_static/shots/speech-models-dark.webp
+:class: shot only-dark
+:alt: The speech models
+```
+
 No model ships with the app. The first press of the microphone offers the choice, and this page
 lists them to download, use or remove:
 
@@ -33,6 +43,16 @@ progress bar, from a pinned Hugging Face revision, and every file is checked aga
 before the model is used. Models are kept in `~/.pi/agent/pistachio/speech/`.
 
 ## Dictation
+
+```{image} /_static/shots/speech-dictation-light.webp
+:class: shot only-light
+:alt: The Dictation section
+```
+
+```{image} /_static/shots/speech-dictation-dark.webp
+:class: shot only-dark
+:alt: The Dictation section
+```
 
 Stop listening
 : Dictation ends by itself after this much silence: 1.5, 2.5 (the default) or 4 seconds, or

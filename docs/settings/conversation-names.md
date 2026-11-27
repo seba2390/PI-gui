@@ -10,6 +10,16 @@ first messages are their own name, and slash commands are not named.
 
 ## Automatic names
 
+```{image} /_static/shots/names-automatic-light.webp
+:class: shot only-light
+:alt: The Automatic names section
+```
+
+```{image} /_static/shots/names-automatic-dark.webp
+:class: shot only-dark
+:alt: The Automatic names section
+```
+
 Name new conversations
 : Turns automatic names on.
 
@@ -24,6 +34,16 @@ Made by
   keep their first line.
 
 ## Models on this computer
+
+```{image} /_static/shots/names-models-light.webp
+:class: shot only-light
+:alt: The naming models
+```
+
+```{image} /_static/shots/names-models-dark.webp
+:class: shot only-dark
+:alt: The naming models
+```
 
 Used when names are made by a small model on this computer. Downloaded once from a pinned
 Hugging Face revision and checked against its SHA-256; none ship with the app.

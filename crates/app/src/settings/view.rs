@@ -894,6 +894,13 @@ impl SettingsView {
         self.start_page = 8;
     }
 
+    /// Opens on page `page`, scrolled to its section `group` (before the first render; for
+    /// scripted screenshots, `PISTACHIO_OPEN=settings-at:<page>:<group>`).
+    pub fn start_on(&mut self, page: usize, group: Option<usize>) {
+        self.start_page = page;
+        self.start_group = group;
+    }
+
     /// Opens on the Security page's Git and GitHub section (before the first render).
     pub fn start_on_git(&mut self) {
         self.start_page = 7;

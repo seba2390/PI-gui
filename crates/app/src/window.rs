@@ -586,6 +586,19 @@ impl MainWindow {
                         settings.update(cx, |settings, _| settings.start_on_git());
                     }
                 }
+                // `settings-at:<page>:<section>`: Settings on that page (0 is General), scrolled
+                // to that section (for the documentation's screenshots).
+                other if other.starts_with("settings-at:") => {
+                    let mut numbers = other["settings-at:".len()..]
+                        .split(':')
+                        .map(|number| number.parse::<usize>().ok());
+                    let page = numbers.next().flatten().unwrap_or(0);
+                    let group = numbers.next().flatten();
+                    self.open_settings(&OpenSettings, window, cx);
+                    if let Some(settings) = self.settings.as_ref().map(|s| s.0.clone()) {
+                        settings.update(cx, |settings, _| settings.start_on(page, group));
+                    }
+                }
                 "speech-download" => crate::stt::ui::open_download_dialog(window, cx),
                 "dictate" => {
                     let composer = self.chat.read(cx).composer().clone();

@@ -16,7 +16,7 @@ extensions = [
     "sphinx_copybutton",
 ]
 
-# docs/ also holds pages read on GitHub (linked from the README) and the demo video.
+# docs/ also holds pages read on GitHub (linked from the README) and the README's demo video.
 exclude_patterns = ["_build", "ARCHITECTURE.md", "FEATURES.md", "media"]
 nitpicky = True
 
@@ -45,8 +45,7 @@ html_title = "Pistachio"
 # The app's own icon.
 html_logo = "../crates/app/assets/app-icon/icon.svg"
 html_favicon = "../crates/app/assets/app-icon/icon.svg"
-# media/ holds the demo video the home page plays (served as _static/demo.mp4).
-html_static_path = ["_static", "media"]
+html_static_path = ["_static"]
 html_css_files = ["custom.css"]
 html_copy_source = False
 html_show_sourcelink = False

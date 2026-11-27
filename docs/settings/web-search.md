@@ -27,6 +27,16 @@ you allow local ones below.
 
 ## Search service
 
+```{image} /_static/shots/web-service-light.webp
+:class: shot only-light
+:alt: The Search service section
+```
+
+```{image} /_static/shots/web-service-dark.webp
+:class: shot only-dark
+:alt: The Search service section
+```
+
 Service
 : **DuckDuckGo** (no key, the default), **SearXNG** (no key), **Brave Search** or **Tavily**
   (API key). Keys are stored only on this computer, readable by you alone.
@@ -41,6 +51,16 @@ SearXNG
   address or remove it.
 
 ## New chats
+
+```{image} /_static/shots/web-new-chats-light.webp
+:class: shot only-light
+:alt: The New chats section
+```
+
+```{image} /_static/shots/web-new-chats-dark.webp
+:class: shot only-dark
+:alt: The New chats section
+```
 
 Web search
 : Whether new chats start with web search **Off**, **Search** or **Deep search**.
@@ -57,10 +77,30 @@ Deep search effort
 
 ## Advanced search options
 
+```{image} /_static/shots/web-advanced-search-light.webp
+:class: shot only-light
+:alt: Advanced search options
+```
+
+```{image} /_static/shots/web-advanced-search-dark.webp
+:class: shot only-dark
+:alt: Advanced search options
+```
+
 What a quick search may do: **Searches** and **Pages read** per message, and **Text per page**
 (characters, about four to a token; lower it for models with a small context window).
 
 ## Advanced deep search settings
+
+```{image} /_static/shots/web-advanced-deep-light.webp
+:class: shot only-light
+:alt: Advanced deep search settings
+```
+
+```{image} /_static/shots/web-advanced-deep-dark.webp
+:class: shot only-dark
+:alt: Advanced deep search settings
+```
 
 How much work each effort level does. Pick a level, then set:
 
@@ -81,6 +121,16 @@ For every level
 : **Time per question**, **Time per check** and **Answer length** for the checks.
 
 ## Network
+
+```{image} /_static/shots/web-network-light.webp
+:class: shot only-light
+:alt: The Network section
+```
+
+```{image} /_static/shots/web-network-dark.webp
+:class: shot only-dark
+:alt: The Network section
+```
 
 Allow local network addresses
 : Off by default. When on, pages the model asks for can reach devices on your network
