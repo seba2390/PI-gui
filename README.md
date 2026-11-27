@@ -36,9 +36,6 @@ when idle.
   Your models work there too: requests come back through the SSH connection, so keys stay on
   your computer.
 - **Web search** for chats: quick lookups or multi-step deep research.
-- **Numbers worked out, not guessed.** Chats compute sums, logarithms, series and statistics in
-  Python, run in [Monty](https://github.com/pydantic/monty), a sealed interpreter with no files,
-  network or programs. It can be turned off in Settings → General.
 - **Speech to text.** Dictate with the microphone button. A model you download once (Parakeet,
   Whisper or Moonshine) transcribes on your computer, so nothing you say leaves it.
 - **A sandbox for the agent.** In Code sessions its commands see only the project and the folders
