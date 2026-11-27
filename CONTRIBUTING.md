@@ -108,6 +108,23 @@ publishes the release and updates the Homebrew cask. If a required check fails, 
 released: push a fix to the branch. If `release.yml` fails, run it again on the tag (Actions →
 Release → Run workflow).
 
+## CI and release builds
+
+- **Caches.** `rust-cache` keeps compiled dependencies. A run can restore caches saved on its own
+  branch or on `main`, and a release runs for a tag, so `release-cache.yml` builds the release
+  binaries on `main` (on each push except documentation, and weekly) and saves them under
+  `release-<platform>`; `release.yml` restores those and saves nothing. CI saves from `main` only.
+  The repository has 10 GB for caches; caches unused for a week are deleted.
+- **Build logs.** Release builds run through `script/ci-build.sh`: `cargo build --timings` with the
+  machine's memory, swap (Windows: commit charge), disk, CPU and largest processes printed every
+  30 s between cargo's lines. Each build job's summary says how it went, how many crates were
+  compiled (nearly all of them: the cache wasn't used), the peak memory and, after a failure, the
+  end of the log. The log, the samples and cargo's timings report (`cargo-timing.html`) are in the
+  job's `build-log-<platform>` artifact, also when the build failed or ran out of time. A build
+  stops after 60 minutes (a normal one takes 15–25), so one that stalls fails with its logs.
+- If a release build fails, read its summary and artifact first; run it again only once the
+  cause is known.
+
 ## Handy tools
 
 ```bash
@@ -121,6 +138,7 @@ script/set-version.sh 0.5.0              # bump the version (Cargo.toml, Cargo.l
 script/update-searxng.sh                 # move the pins of the SearXNG the app can download
 script/update-parsers.sh                 # move the pins of the document parsers the app can download
 script/release.sh 0.5.0 --docs-review <file>   # release a version (see Releasing)
+script/ci-build.sh --release --locked    # CI: a build with resource samples and timings (see CI and release builds)
 ```
 
 `script/shot.sh` stops any running `Pistachio.app` first.

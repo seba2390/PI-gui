@@ -1,0 +1,89 @@
+name: Release build cache
+
+# Release builds run for a tag, and a run for a tag can restore only caches saved on main (or for
+# that tag). This builds the release binaries on main, exactly as release.yml does (same commands,
+# env and cache keys), and saves their dependencies, so a release compiles little more than the
+# app itself. It also shows that main builds in release mode on every platform before a release.
+# Weekly too: caches not used for 7 days are deleted.
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["docs/**", "**.md"]
+  workflow_dispatch:
+  schedule:
+    - cron: "41 3 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# The same as release.yml's: the cache keys include it.
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CI_MONITOR_SECONDS: 30
+
+jobs:
+  build:
+    name: Release build (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos
+            runner: macos-latest
+            args: --target aarch64-apple-darwin
+          - platform: linux-x86_64
+            runner: ubuntu-22.04
+          - platform: linux-aarch64
+            runner: ubuntu-22.04-arm
+          - platform: windows
+            runner: windows-latest
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - if: runner.os == 'macOS'
+        run: rustup target add aarch64-apple-darwin
+      - name: System libraries (GPUI)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev \
+            libx11-xcb-dev libxcb1-dev libfontconfig-dev libfreetype-dev libzstd-dev libasound2-dev
+      - uses: Swatinem/rust-cache@v2
+        id: cache
+        with:
+          shared-key: release-${{ matrix.platform }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # See release.yml.
+      - name: Re-fetch sherpa-onnx libraries the cache dropped
+        shell: bash
+        run: |
+            if ! ls target/sherpa-onnx-prebuilt/*/lib/*sherpa-onnx-c-api* >/dev/null 2>&1; then
+              rm -rf target/sherpa-onnx-prebuilt \
+                target/*/build/sherpa-onnx-sys-* target/*/.fingerprint/sherpa-onnx-sys-* \
+                target/*/*/build/sherpa-onnx-sys-* target/*/*/.fingerprint/sherpa-onnx-sys-*
+            fi
+      - name: Build
+        timeout-minutes: 60
+        shell: bash
+        run: script/ci-build.sh --release --locked ${{ matrix.args }}
+      - name: Build report
+        if: always()
+        shell: bash
+        env:
+          CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
+        run: script/ci-build.sh --report
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: build-log-${{ matrix.platform }}
+          path: target/ci-logs
+          if-no-files-found: ignore
+          retention-days: 14
