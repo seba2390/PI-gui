@@ -44,7 +44,17 @@ cargo test --workspace
 - Add or update tests for logic changes (UI-agnostic crates make this easy).
 - Keep commits focused, with messages that say *why*.
 - Update [docs/FEATURES.md](docs/FEATURES.md) and [CHANGELOG.md](CHANGELOG.md) for
-  user-visible changes.
+  user-visible changes, and the documentation site's page for it (`docs/general.md` or
+  `docs/settings/`).
+
+**The documentation site** (https://seba2390.github.io/pistachio/) is built with Sphinx, Furo and
+MyST from `docs/`, and `docs.yml` publishes it when `docs/` changes on `main`. To build it
+locally:
+
+```bash
+uv venv --python 3.14 /tmp/pistachio-docs && VIRTUAL_ENV=/tmp/pistachio-docs uv pip install --require-hashes -r docs/requirements.txt
+/tmp/pistachio-docs/bin/sphinx-build -M html docs docs/_build -W --keep-going -n   # open docs/_build/html/index.html
+```
 
 ## Releasing
 
