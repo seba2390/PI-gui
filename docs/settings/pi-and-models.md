@@ -68,6 +68,16 @@ Locally hosted model
 
   Each choice opens a page of its own, and the back arrow returns to the one before.
 
+  ```{image} /_static/screenshots/models-ways-light.webp
+  :class: shot only-light
+  :alt: Attach to existing model or Deploy new model, on this device
+  ```
+
+  ```{image} /_static/screenshots/models-ways-dark.webp
+  :class: shot only-dark
+  :alt: Attach to existing model or Deploy new model, on this device
+  ```
+
   **Deploy new model** suggests models for this computer. **Scan local hardware** looks at the
   processor, the memory, the graphics, the free disk and the build tools, with a progress bar
   that says what it is looking at, and lists what it found; nothing leaves the computer.
@@ -83,6 +93,26 @@ Locally hosted model
   specialized engine that is built on this computer (ik_llama.cpp, TurboFieldfare). The **Download and
   run** button says how much it is; pressing it shows exactly what is downloaded (the engine and
   the model's files, linked to their pages, with their sizes and licenses) and asks first. Everything is pinned to a version and
+  ```{image} /_static/screenshots/models-deploy-light.webp
+  :class: shot only-light
+  :alt: The hardware this device has and the three models suggested for it
+  ```
+
+  ```{image} /_static/screenshots/models-deploy-dark.webp
+  :class: shot only-dark
+  :alt: The hardware this device has and the three models suggested for it
+  ```
+
+  ```{image} /_static/screenshots/models-suggestion-light.webp
+  :class: shot only-light
+  :alt: A suggested model opened: its engine, quantization, memory, speed, context and thinking
+  ```
+
+  ```{image} /_static/screenshots/models-suggestion-dark.webp
+  :class: shot only-dark
+  :alt: A suggested model opened: its engine, quantization, memory, speed, context and thinking
+  ```
+
   checked against its SHA-256, and kept in `~/.pi/agent/pistachio/local-models`. Once it runs,
   the model is connected like any other server, set up so that the thinking levels of the
   message box reach it. It runs for this computer only, is started when
@@ -97,6 +127,14 @@ For a server, Pistachio asks which models it has and you tick the ones to add. T
 size, longest answer, and whether they think or see pictures are filled in as far as the server
 says, and can be changed. A model can be tested with a short message before it is added, and
 added by its ID when the server has no list.
+
+When a thinking model is added, Pistachio checks how its server takes thinking levels, in a few
+seconds: servers differ (and so do their versions) in how they are asked to think, and a model's
+template decides which efforts change anything. vLLM shows the prompt it builds for each way of
+asking, llama.cpp lists the efforts its template knows, and one short reply with thinking off
+shows whether off really stops it. The levels of the message box are set up from what it finds;
+levels that do the same thing show as one. A model that thinks a little at any effort, or can't
+stop, shows **lowest** instead of **off**.
 
 **Edit models.json…** opens the file as text, with validation. The previous version is kept as
 `models.json.bak-pistachio`.

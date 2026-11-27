@@ -263,6 +263,8 @@ impl ModelsDialog {
             };
             div()
                 .debug_selector(|| selector.into())
+                .relative()
+                .children(crate::demo::probe(selector))
                 .w(relative(0.49))
                 .child(
                     card(
@@ -331,6 +333,8 @@ impl ModelsDialog {
             };
             div()
                 .debug_selector(|| selector.into())
+                .relative()
+                .children(crate::demo::probe(selector))
                 .w(relative(0.49))
                 .child(
                     card(
@@ -418,6 +422,8 @@ impl ModelsDialog {
         let scan_button = div()
             .flex_none()
             .debug_selector(|| "scan-hardware".into())
+            .relative()
+            .children(crate::demo::probe("scan-hardware"))
             .child(
                 Button::new("scan-hardware")
                     .icon(Icon::new(IconName::Cpu).text_color(accent))
@@ -462,16 +468,20 @@ impl ModelsDialog {
                     .w_full()
                     .justify_center()
                     .child(
-                        div().debug_selector(|| "suggest-models".into()).child(
-                            Button::new("suggest-models")
-                                .form_other(cx)
-                                .icon(Icon::from(AppIcon::Sparkles).text_color(accent))
-                                .label("Suggest models")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.deploy = DeployStep::Suggestions;
-                                    cx.notify();
-                                })),
-                        ),
+                        div()
+                            .debug_selector(|| "suggest-models".into())
+                            .relative()
+                            .children(crate::demo::probe("suggest-models"))
+                            .child(
+                                Button::new("suggest-models")
+                                    .form_other(cx)
+                                    .icon(Icon::from(AppIcon::Sparkles).text_color(accent))
+                                    .label("Suggest models")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.deploy = DeployStep::Suggestions;
+                                        cx.notify();
+                                    })),
+                            ),
                     )
                     .into_any_element()
             }
@@ -613,6 +623,8 @@ impl ModelsDialog {
         let toggle = div()
             .w_full()
             .debug_selector(move || format!("expand:{tier}"))
+            .relative()
+            .children(crate::demo::probe(format!("expand:{tier}")))
             .child(
                 Button::new(SharedString::from(format!("expand:{tier}")))
                     .quiet(cx)

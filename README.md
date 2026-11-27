@@ -30,6 +30,9 @@ turn more on in [Settings → Tools](https://seba2390.github.io/pistachio/settin
   Claude Code and Codex desktop apps: streaming markdown, inline diffs and readable tool calls.
 - **Chat and Code.** Plain chats that can't touch your files, or the agent working in a project
   folder, with a terminal, git changes and a file tree beside it.
+- **Local models in one click.** Pistachio scans your computer's hardware and suggests models
+  that run well on it (Fast, Balanced, Most capable), each with the inference engine that runs it
+  best there. One click downloads, verifies and runs it, ready for your chats.
 - **SSH remotes.** Run pi on another machine. Pistachio installs pi there if needed, and your
   models work there with the keys kept on your computer.
 - **Speech to text.** Dictate your messages. A model that runs on your computer transcribes them,

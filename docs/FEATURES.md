@@ -245,7 +245,10 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   model uses it. A server is asked which models it has, and they are ticked in a list; their
   context, longest answer and whether they think or see pictures are filled in as far as the
   server says. Models can be tested with a short message before they are added, and added by their
-  ID when a server has no list. The same screens change and remove what is connected; what they do
+  ID when a server has no list. Adding a thinking model checks how its server takes thinking levels (the
+  prompt vLLM builds for each way of asking, the efforts llama.cpp's template knows, and one short
+  reply with thinking off), so each level of the message box does what it says; a model that
+  thinks anyway shows **lowest** instead of **off**. The same screens change and remove what is connected; what they do
   not know of a provider or model in `models.json` stays as it is. The file can also be edited as
   text, with validation. It is the one the session's pi reads (on the SSH host for remote
   sessions); the previous version is kept as `models.json.bak-pistachio`. pi reads the file only

@@ -62,7 +62,13 @@ impl ModelsDialog {
             .child(
                 v_flex()
                     .gap_2()
-                    .child(div().debug_selector(|| "start:hosted".into()).child(hosted))
+                    .child(
+                        div()
+                            .debug_selector(|| "start:hosted".into())
+                            .relative()
+                            .children(crate::demo::probe("start:hosted"))
+                            .child(hosted),
+                    )
                     .child(
                         div()
                             .debug_selector(|| "start:provider".into())
