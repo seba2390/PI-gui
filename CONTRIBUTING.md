@@ -59,13 +59,49 @@ uv venv --python 3.14 /tmp/pistachio-docs && VIRTUAL_ENV=/tmp/pistachio-docs uv 
 ## Releasing
 
 For maintainers. Describe the changes under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md) (it
-becomes the release notes), commit everything, and run this on the branch with the changes:
+becomes the release notes), then review the documentation as below, commit everything, and run
+this on the branch with the changes:
 
 ```bash
-script/release.sh 0.5.0   # --dry-run checks everything and changes nothing
+script/release.sh 0.5.0 --docs-review /tmp/docs-review.md   # --dry-run checks everything and changes nothing
 ```
 
-It runs CI's checks, sets the version, dates the changelog section, pushes, opens a pull request
+**Review the documentation before every release**, patch and internal-only ones included, even
+when no documentation file changed:
+
+1. **Find out what is being released, from summaries.** Read the commit messages since the last
+   released tag (`git log --oneline $(git describe --tags --abbrev=0)..HEAD`) and the changelog's
+   Unreleased section, and pull requests' titles and descriptions where they help. Don't read all
+   the diffs: look at a specific change only when the summaries leave a concrete documentation
+   question open.
+2. **Go through all the documentation**, not only pages changed in that range: `README.md` and
+   `docs/index.md` (overview, installation, prerequisites, platforms); `docs/FEATURES.md`,
+   `docs/general.md` and every page in `docs/settings/` (features, workflows, defaults, setting
+   names, shortcuts, limitations); `docs/ARCHITECTURE.md`, `CONTRIBUTING.md`, `AGENTS.md` and the
+   other guides where the changes touch what they say; and screenshots and examples where changed
+   UI or behaviour could make them misleading.
+3. **Fix what is missing, changed or obsolete** before releasing, and check that the README, the
+   feature list, the documentation site and the release notes agree. Settle unclear claims with
+   targeted checks, not guesses. Update screenshots only where needed.
+4. **Validate.** When the site's content changed, build it as above
+   (`sphinx-build … -W --keep-going -n`), fix warnings and errors, and check the affected links,
+   examples and pages. A passing build doesn't replace the review.
+5. **Record it** in a file outside the repository, for `--docs-review`; it goes into the release
+   pull request:
+
+   ```markdown
+   - Range: v0.5.8..HEAD (commit messages, changelog, PRs #56 and #57)
+   - Checked: README, docs/index.md, FEATURES, general, every settings page, ARCHITECTURE,
+     CONTRIBUTING, AGENTS, screenshots
+   - Updated: docs/settings/tools.md (new switch) — or "Reviewed; no updates needed"
+   - Validation: sphinx-build -M html docs docs/_build -W --keep-going -n: passed (or "not run:
+     the site didn't change")
+   ```
+
+   An unresolved question about whether the documentation is right, or validation that fails,
+   stops the release until it is fixed.
+
+The script refuses to release without `--docs-review`. It runs CI's checks, sets the version, dates the changelog section, pushes, opens a pull request
 into `main` and turns on auto-merge. Then GitHub does the rest: it merges once the required checks
 pass, `tag-release.yml` tags the merge and starts `release.yml`, and that builds the downloads,
 publishes the release and updates the Homebrew cask. If a required check fails, nothing is
@@ -84,7 +120,7 @@ script/make-icon.sh                      # regenerate the .icns / PNG from icon.
 script/set-version.sh 0.5.0              # bump the version (Cargo.toml, Cargo.lock, README install links)
 script/update-searxng.sh                 # move the pins of the SearXNG the app can download
 script/update-parsers.sh                 # move the pins of the document parsers the app can download
-script/release.sh 0.5.0                  # release a version (see Releasing)
+script/release.sh 0.5.0 --docs-review <file>   # release a version (see Releasing)
 ```
 
 `script/shot.sh` stops any running `Pistachio.app` first.
