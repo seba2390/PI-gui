@@ -27,12 +27,12 @@ you allow local ones below.
 
 ## Search service
 
-```{image} /_static/shots/web-service-light.webp
+```{image} /_static/screenshots/web-service-light.webp
 :class: shot only-light
 :alt: The Search service section
 ```
 
-```{image} /_static/shots/web-service-dark.webp
+```{image} /_static/screenshots/web-service-dark.webp
 :class: shot only-dark
 :alt: The Search service section
 ```
@@ -52,12 +52,12 @@ SearXNG
 
 ## New chats
 
-```{image} /_static/shots/web-new-chats-light.webp
+```{image} /_static/screenshots/web-new-chats-light.webp
 :class: shot only-light
 :alt: The New chats section
 ```
 
-```{image} /_static/shots/web-new-chats-dark.webp
+```{image} /_static/screenshots/web-new-chats-dark.webp
 :class: shot only-dark
 :alt: The New chats section
 ```
@@ -77,12 +77,12 @@ Deep search effort
 
 ## Advanced search options
 
-```{image} /_static/shots/web-advanced-search-light.webp
+```{image} /_static/screenshots/web-advanced-search-light.webp
 :class: shot only-light
 :alt: Advanced search options
 ```
 
-```{image} /_static/shots/web-advanced-search-dark.webp
+```{image} /_static/screenshots/web-advanced-search-dark.webp
 :class: shot only-dark
 :alt: Advanced search options
 ```
@@ -92,12 +92,12 @@ What a quick search may do: **Searches** and **Pages read** per message, and **T
 
 ## Advanced deep search settings
 
-```{image} /_static/shots/web-advanced-deep-light.webp
+```{image} /_static/screenshots/web-advanced-deep-light.webp
 :class: shot only-light
 :alt: Advanced deep search settings
 ```
 
-```{image} /_static/shots/web-advanced-deep-dark.webp
+```{image} /_static/screenshots/web-advanced-deep-dark.webp
 :class: shot only-dark
 :alt: Advanced deep search settings
 ```
@@ -122,12 +122,12 @@ For every level
 
 ## Network
 
-```{image} /_static/shots/web-network-light.webp
+```{image} /_static/screenshots/web-network-light.webp
 :class: shot only-light
 :alt: The Network section
 ```
 
-```{image} /_static/shots/web-network-dark.webp
+```{image} /_static/screenshots/web-network-dark.webp
 :class: shot only-dark
 :alt: The Network section
 ```
