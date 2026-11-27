@@ -51,6 +51,13 @@ All notable changes to PI-gui are listed here. The format follows
 - **Python code as it is written.** Expanding a chat's "Computed" row while the model is still
   writing the call shows the code growing line by line, before it runs.
 
+- **Thinking levels that do what they say on servers you add.** Adding a thinking model in
+  Models → Locally hosted model now checks, in a few seconds, how its server takes thinking: which
+  way of asking it reads, which levels change anything (levels that do the same show as one) and
+  whether "off" really stops it. Before, "off" sent nothing to such servers, so most models went on
+  thinking. A model that thinks a little at any effort, or can't stop, shows "lowest" instead of
+  "off".
+
 ### Changed
 
 - **A shorter, sharper Python tool text.** What the model is told about the python tool is down

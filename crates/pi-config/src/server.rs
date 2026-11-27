@@ -406,7 +406,7 @@ pub fn short_address(base_url: &str) -> &str {
 
 /// The server's root: the base URL without `/v1`, where Ollama, LM Studio and llama.cpp answer
 /// on their own APIs.
-fn root(base_url: &str) -> &str {
+pub(crate) fn root(base_url: &str) -> &str {
     let base = base_url.trim_end_matches('/');
     base.strip_suffix("/v1").unwrap_or(base)
 }

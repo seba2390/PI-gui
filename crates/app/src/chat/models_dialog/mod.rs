@@ -152,6 +152,8 @@ pub struct ModelsDialog {
     editor: Entity<EditorState>,
     json_error: Option<SharedString>,
     saving: bool,
+    /// Checking how servers take thinking levels, before saving.
+    checking_thinking: bool,
     /// Counts what is asked of servers, so an answer that comes too late is left out.
     asked: usize,
     /// What is being asked of servers; a new question replaces it.
@@ -248,6 +250,7 @@ impl ModelsDialog {
             editor: cx.new(|cx| EditorState::new(window, cx).language("json")),
             json_error: None,
             saving: false,
+            checking_thinking: false,
             asked: 0,
             task: None,
             _tasks: Vec::new(),

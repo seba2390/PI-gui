@@ -118,6 +118,9 @@ fn main() {
         cx.set_global(chat::recall::Recall::load(
             chat::recall::Recall::path().as_deref(),
         ));
+        cx.set_global(chat::thinking_notes::ThinkingNotes::load(
+            chat::thinking_notes::ThinkingNotes::path().as_deref(),
+        ));
         cx.set_global(chat::token_rate::TokenRates::load(
             chat::token_rate::TokenRates::path().as_deref(),
         ));

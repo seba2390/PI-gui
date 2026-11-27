@@ -26,6 +26,7 @@ pub mod session;
 #[cfg(all(test, unix))]
 mod session_tests;
 pub mod text_viewer;
+pub(crate) mod thinking_notes;
 pub(crate) mod token_rate;
 mod turn_rail;
 mod viewer_dialog;
