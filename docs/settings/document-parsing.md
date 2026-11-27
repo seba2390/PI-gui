@@ -6,6 +6,16 @@ model.
 
 ## Parser
 
+```{image} /_static/shots/documents-parser-light.webp
+:class: shot only-light
+:alt: The parsers
+```
+
+```{image} /_static/shots/documents-parser-dark.webp
+:class: shot only-dark
+:alt: The parsers
+```
+
 The built-in reader is the default and needs no download. The others are downloaded on request
 and can be removed again (macOS and Linux):
 
@@ -27,6 +37,16 @@ document, without network, for at most 10 minutes (2 for a PDF from the web). If
 parser is missing, fails or takes too long, the built-in reader is used and the result says so.
 
 ## Long files in chats
+
+```{image} /_static/shots/documents-long-files-light.webp
+:class: shot only-light
+:alt: The Long files in chats section
+```
+
+```{image} /_static/shots/documents-long-files-dark.webp
+:class: shot only-dark
+:alt: The Long files in chats section
+```
 
 Send whole up to
 : Text longer than this (256 KB by default, from 32 KB to all that fits) goes to the model

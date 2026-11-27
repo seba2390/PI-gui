@@ -4,16 +4,46 @@ Which pi Pistachio runs, the model new sessions start with, and the models you h
 
 ## pi
 
+```{image} /_static/shots/pi-pi-light.webp
+:class: shot only-light
+:alt: The pi section
+```
+
+```{image} /_static/shots/pi-pi-dark.webp
+:class: shot only-dark
+:alt: The pi section
+```
+
 pi program
 : The `pi` to run. Leave it empty to find pi on your `PATH`. The page shows the version it
   found. Used by new sessions. If `PISTACHIO_PI_BIN` is set, it takes precedence.
 
 ## Startup model
 
+```{image} /_static/shots/pi-startup-light.webp
+:class: shot only-light
+:alt: The Startup model section
+```
+
+```{image} /_static/shots/pi-startup-dark.webp
+:class: shot only-dark
+:alt: The Startup model section
+```
+
 The model and thinking level new sessions start with, or **Let pi choose**. They are saved in
 pi's own `settings.json`, like `/settings` in the terminal, so the terminal pi uses them too.
 
 ## Connected models
+
+```{image} /_static/shots/pi-connected-light.webp
+:class: shot only-light
+:alt: Connected models
+```
+
+```{image} /_static/shots/pi-connected-dark.webp
+:class: shot only-dark
+:alt: Connected models
+```
 
 The servers and API keys in `models.json` on this computer, each with whether its server
 answers. Click one to change or remove it. Sign-ins made with `/login` are not listed here.

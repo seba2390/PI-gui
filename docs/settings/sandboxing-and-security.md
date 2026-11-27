@@ -9,6 +9,16 @@ command, so changes apply from the next command, also in running sessions.
 
 ## Sandbox
 
+```{image} /_static/shots/security-sandbox-light.webp
+:class: shot only-light
+:alt: The Sandbox section
+```
+
+```{image} /_static/shots/security-sandbox-dark.webp
+:class: shot only-dark
+:alt: The Sandbox section
+```
+
 The top of the page says which sandbox this computer has: **Seatbelt** on macOS, **bubblewrap**
 on Linux, or **Landlock** where bubblewrap is missing or not allowed to run (for example
 Ubuntu's AppArmor, or containers). Where bubblewrap is missing, it shows the command that
@@ -26,6 +36,16 @@ In a session, a shield next to the folder in the message box shows the sandbox (
 it, with a button that allows reading (or changing) the folder it tried to use.
 
 ## Files
+
+```{image} /_static/shots/security-files-light.webp
+:class: shot only-light
+:alt: The Files section with tool folders
+```
+
+```{image} /_static/shots/security-files-dark.webp
+:class: shot only-dark
+:alt: The Files section with tool folders
+```
 
 Your home folder is hidden from the agent, except the session's folder (for a subfolder of a
 repository, the whole repository) and what you allow here. Programs and system files outside
@@ -53,6 +73,16 @@ Environment variables that hold keys and tokens (names ending in `_API_KEY`, `_T
 
 ## Internet
 
+```{image} /_static/shots/security-internet-light.webp
+:class: shot only-light
+:alt: The Internet section
+```
+
+```{image} /_static/shots/security-internet-dark.webp
+:class: shot only-dark
+:alt: The Internet section
+```
+
 Allowed websites
 : **None** (the default): a command reaches a website only once you allow it. The first time a
   conversation's commands use a site, you're asked in the conversation: **Allow** (for that
@@ -77,6 +107,16 @@ the like, which curl, git, npm, pip and cargo use; tools that ignore those get n
 Linux, Landlock needs Linux 6.7 to limit the network.
 
 ## Git and GitHub
+
+```{image} /_static/shots/security-git-light.webp
+:class: shot only-light
+:alt: The Git and GitHub section
+```
+
+```{image} /_static/shots/security-git-dark.webp
+:class: shot only-dark
+:alt: The Git and GitHub section
+```
 
 Your git and GitHub logins never enter the sandbox. Local git (commit, branch, merge, rebase,
 log, …) runs in the sandbox as usual. When the agent needs your logins, you're asked, and it is
@@ -105,6 +145,16 @@ asked, the command doesn't run. `gh pr create` needs `--title` and `--body` (or 
 each removable.
 
 ## Project files
+
+```{image} /_static/shots/security-project-files-light.webp
+:class: shot only-light
+:alt: The Project files section
+```
+
+```{image} /_static/shots/security-project-files-dark.webp
+:class: shot only-dark
+:alt: The Project files section
+```
 
 A project's `.pi` folder can bring its own extensions (code that runs inside pi), MCP servers,
 skills and settings. pi loads them only for projects you trust (on the Skills page, or `/trust`

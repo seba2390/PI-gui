@@ -8,6 +8,16 @@ are listed too.
 
 ## Chat
 
+```{image} /_static/shots/tools-chat-light.webp
+:class: shot only-light
+:alt: The tools of chats
+```
+
+```{image} /_static/shots/tools-chat-dark.webp
+:class: shot only-dark
+:alt: The tools of chats
+```
+
 No file or shell tools: chats can't touch your computer.
 
 | Tool | What it does | Offered |
@@ -20,6 +30,16 @@ The Python switch is the same as **Compute with Python** under
 [Settings → General](../general.md#settings-general).
 
 ## Code
+
+```{image} /_static/shots/tools-code-light.webp
+:class: shot only-light
+:alt: The tools of Code sessions
+```
+
+```{image} /_static/shots/tools-code-dark.webp
+:class: shot only-dark
+:alt: The tools of Code sessions
+```
 
 pi's tools and your extensions', in sessions on this computer.
 
@@ -42,12 +62,32 @@ checks cover.
 
 ## The context meter
 
+```{image} /_static/shots/tools-meter-light.webp
+:class: shot only-light
+:alt: The context meter
+```
+
+```{image} /_static/shots/tools-meter-dark.webp
+:class: shot only-dark
+:alt: The context meter
+```
+
 Each mode starts with about how many tokens its tools take with every message, and a bar with
 each tool's share. It is counted from the text pi sends for each tool (description, parameters
 and guidelines in the system prompt), at about 4 characters a token. In chats it also shows the
 total with web search on.
 
 ## What the model sees
+
+```{image} /_static/shots/tools-model-sees-light.webp
+:class: shot only-light
+:alt: A tool with its What the model sees link
+```
+
+```{image} /_static/shots/tools-model-sees-dark.webp
+:class: shot only-dark
+:alt: A tool with its What the model sees link
+```
 
 Each tool has a one-line summary, where it comes from (pi, Pistachio or an extension) and its
 size. **What the model sees** opens, word for word, what pi tells the model: the description,

@@ -182,6 +182,16 @@ or another) or an API provider. The startup model and thinking level are set the
 
 ## Settings → General
 
+```{image} /_static/shots/general-appearance-light.webp
+:class: shot only-light
+:alt: Settings → General: Appearance
+```
+
+```{image} /_static/shots/general-appearance-dark.webp
+:class: shot only-dark
+:alt: Settings → General: Appearance
+```
+
 Settings opens with ⌘, or the button at the bottom of the sidebar. Every change is saved at
 once.
 

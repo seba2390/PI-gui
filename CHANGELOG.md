@@ -6,6 +6,12 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The [documentation](https://seba2390.github.io/pistachio/) shows the app: every Settings page
+  has screenshots of its sections, in light and dark to match the page, faded into it. Its home
+  page says more plainly what Pistachio is, and the demo video stays in the README.
+
 ## [0.5.7] - 2026-11-27
 
 ### Added

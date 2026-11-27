@@ -1,12 +1,29 @@
 # Pistachio
 
-**A native desktop app for the [pi coding agent](https://pi.dev).** Pistachio runs
-`pi --mode rpc` and draws pi's own event stream, so it behaves like pi in the terminal: your
-sessions, models, skills and extensions come from your normal pi setup. It is written in Rust,
-GPU-rendered with [GPUI](https://gpui.rs), and runs on macOS, Linux and (experimentally)
-Windows.
+**Pistachio is an open-source, native desktop app for the [pi coding agent](https://pi.dev).**
+It is written in Rust and drawn on the GPU with [GPUI](https://gpui.rs), so it starts quickly,
+stays smooth in long sessions and uses about 90 MB of memory when idle. It runs on macOS, Linux
+and (experimentally) Windows.
 
-<video src="_static/demo.mp4" controls muted playsinline preload="metadata" width="100%"></video>
+Pistachio runs pi itself (`pi --mode rpc`) and draws pi's own event stream, so a session behaves
+exactly as it does in pi's terminal: the same sessions, models, skills, extensions and settings,
+and you can switch between the app and the terminal at any time. Extra tools are opt-in: Code
+sessions get exactly pi's own tools until you turn more on in [Settings → Tools](settings/tools.md).
+
+- **Easy to use and polished.** A clean, intuitive interface built to the standard of the
+  Claude Code and Codex desktop apps: streaming markdown, inline diffs and readable tool calls.
+- **Chat and Code.** Plain chats that can't touch your files, or the agent working in a project
+  folder, with a terminal, git changes and a file tree beside it.
+- **SSH remotes.** Run pi on another machine. Pistachio installs pi there if needed, and your
+  models work there with the keys kept on your computer.
+- **Speech to text.** Dictate your messages. A model that runs on your computer transcribes them,
+  so nothing you say leaves it.
+- **Document parsing.** Attach PDFs, Word, PowerPoint, Excel and EPUB files, with optional parsers
+  for complex layouts, scans and formulas.
+- **Web search and deep research** in chats.
+- **Sandboxing and security.** The agent's commands see only the project and the folders you
+  allow, never your keys. Pushing, GitHub and signing go through a gate that asks you first.
+- **Background sessions, branches and side chats**, so several things can run at once.
 
 ## Install
 
