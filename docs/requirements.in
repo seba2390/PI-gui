@@ -1,0 +1,6 @@
+# The documentation site's tools. After changing this file, run:
+#   uv pip compile docs/requirements.in --universal --generate-hashes --python-version 3.14 -o docs/requirements.txt
+furo
+myst-parser
+sphinx
+sphinx-copybutton
