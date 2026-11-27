@@ -1,11 +1,6 @@
-//! A repository's git settings, as far as the gate needs them: read without running git, and
-//! checked against what may hold when git runs outside the sandbox.
-//!
-//! The agent can write the repository's `.git` folder, so its `config` may name programs that
-//! git would start (`core.sshCommand`, `core.fsmonitor`, `credential.helper`, filter and merge
-//! drivers, `url.*.insteadOf`, remote helpers, …). Outside the sandbox those would run with the
-//! user's keys. So the gate runs git only in repositories whose settings are all on a list of
-//! ones that start nothing ([`unsafe_entries`]); anything else is refused and named.
+//! A repository's git settings, read as data (never by running git outside the sandbox): which
+//! remotes it has and where they are, and its branch. git with the user's keys never reads them;
+//! it works in the gate's own mirror ([`super::relay`]).
 
 use std::path::{Path, PathBuf};
 
@@ -126,176 +121,6 @@ pub fn unsafe_url(url: &str) -> bool {
         || url.get(1..2) == Some(":")
 }
 
-/// Whether one setting may hold while git runs outside the sandbox: it starts no program and
-/// reads no file on this computer.
-fn allowed(entry: &Entry) -> bool {
-    let name = entry.name.as_str();
-    let value = entry.value.trim().to_lowercase();
-    match (entry.section.as_str(), entry.subsection.is_some()) {
-        ("core", false) => matches!(
-            name,
-            "repositoryformatversion"
-                | "filemode"
-                | "bare"
-                | "logallrefupdates"
-                | "ignorecase"
-                | "precomposeunicode"
-                | "symlinks"
-                | "autocrlf"
-                | "eol"
-                | "safecrlf"
-                | "quotepath"
-                | "longpaths"
-                | "checkstat"
-                | "trustctime"
-                | "untrackedcache"
-                | "splitindex"
-                | "commitgraph"
-                | "multipackindex"
-                | "preloadindex"
-                | "sparsecheckout"
-                | "sparsecheckoutcone"
-                | "abbrev"
-                | "compression"
-                | "loosecompression"
-                | "bigfilethreshold"
-                | "fsyncmethod"
-                | "warnambiguousrefs"
-                | "whitespace"
-        ),
-        ("remote", true) => match name {
-            "url" | "pushurl" => !unsafe_url(&entry.value),
-            "fetch" | "push" | "tagopt" | "prune" | "prunetags" | "promisor"
-            | "partialclonefilter" | "skipdefaultupdate" | "skipfetchall" | "mirror"
-            | "followremotehead" => true,
-            _ => false,
-        },
-        // Which remote and branch a branch follows, and editors' notes about it.
-        ("branch", true) => true,
-        ("branch", false) => matches!(name, "autosetupmerge" | "autosetuprebase" | "sort"),
-        ("user", false) => matches!(name, "name" | "email" | "signingkey" | "useconfigonly"),
-        ("author" | "committer", false) => matches!(name, "name" | "email"),
-        ("pull", false) => matches!(name, "rebase" | "ff"),
-        ("push", false) => matches!(
-            name,
-            "default"
-                | "autosetupremote"
-                | "followtags"
-                | "recursesubmodules"
-                | "gpgsign"
-                | "usebitmaps"
-                | "negotiate"
-        ),
-        ("fetch", false) => matches!(
-            name,
-            "prune"
-                | "prunetags"
-                | "recursesubmodules"
-                | "writecommitgraph"
-                | "parallel"
-                | "showforcedupdates"
-                | "negotiationalgorithm"
-                | "output"
-                | "all"
-        ),
-        ("init", false) => name == "defaultbranch",
-        ("submodule", true) => match name {
-            "url" => !unsafe_url(&entry.value),
-            // `!command` would run a program.
-            "update" => matches!(value.as_str(), "checkout" | "rebase" | "merge" | "none"),
-            "active" | "branch" | "fetchrecursesubmodules" | "ignore" | "shallow" => true,
-            _ => false,
-        },
-        ("submodule", false) => matches!(name, "recurse" | "active" | "propagatebranches"),
-        // git-lfs: where its files are (checked against the remote, see the plan).
-        ("lfs", _) => true,
-        ("extensions", false) => matches!(
-            name,
-            "objectformat"
-                | "worktreeconfig"
-                | "partialclone"
-                | "refstorage"
-                | "preciousobjects"
-                | "noop"
-        ),
-        (
-            "gc" | "maintenance" | "color" | "column" | "advice" | "status" | "log" | "rerere"
-            | "index" | "pack" | "feature" | "receive" | "blame" | "grep" | "am" | "apply"
-            | "checkout" | "clone" | "transfer",
-            _,
-        ) => !matches!(name, "hook" | "command" | "program"),
-        ("commit" | "tag", false) => matches!(name, "gpgsign" | "verbose" | "cleanup" | "sort"),
-        // The program is the user's own setting, never the repository's.
-        ("gpg", false) => name == "format",
-        ("merge", false) => matches!(
-            name,
-            "ff" | "conflictstyle"
-                | "log"
-                | "renames"
-                | "renamelimit"
-                | "defaulttoupstream"
-                | "autostash"
-                | "verifysignatures"
-                | "stat"
-                | "branchdesc"
-                | "directoryrenames"
-        ),
-        ("rebase", false) => matches!(
-            name,
-            "autosquash"
-                | "autostash"
-                | "updaterefs"
-                | "abbreviatecommands"
-                | "missingcommitscheck"
-                | "stat"
-                | "instructionformat"
-                | "forkpoint"
-                | "rescheduledfailedexec"
-                | "rebasemerges"
-        ),
-        ("diff", false) => matches!(
-            name,
-            "algorithm"
-                | "renames"
-                | "renamelimit"
-                | "mnemonicprefix"
-                | "noprefix"
-                | "colormoved"
-                | "colormovedws"
-                | "indentheuristic"
-                | "statgraphwidth"
-                | "submodule"
-                | "ignoresubmodules"
-                | "context"
-                | "interhunkcontext"
-                | "relative"
-                | "wserrorhighlight"
-                | "dirstat"
-                | "suppressblankempty"
-        ),
-        ("http", false) => matches!(
-            name,
-            "postbuffer" | "version" | "lowspeedlimit" | "lowspeedtime" | "maxrequests"
-        ),
-        // Which account to log in as for a remote (not a helper program).
-        ("credential", _) => matches!(name, "username" | "usehttppath"),
-        // An alias that starts a shell; the gate runs no aliases, but a reader might.
-        ("alias", false) => !value.starts_with('!'),
-        _ => false,
-    }
-}
-
-/// The settings among `entries` that git must not obey outside the sandbox, by key.
-pub fn unsafe_entries(entries: &[Entry]) -> Vec<String> {
-    let mut keys: Vec<String> = entries
-        .iter()
-        .filter(|entry| !allowed(entry))
-        .map(Entry::key)
-        .collect();
-    keys.dedup();
-    keys
-}
-
 /// Where a repository keeps its git data.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Repo {
@@ -335,20 +160,6 @@ impl Repo {
         None
     }
 
-    /// The config files git reads for this repository (not the user's own), and those of its
-    /// submodules' repositories.
-    pub fn config_files(&self) -> Vec<PathBuf> {
-        let mut files = vec![self.common_dir.join("config")];
-        if self.git_dir != self.common_dir {
-            files.push(self.git_dir.join("config.worktree"));
-        }
-        files.push(self.common_dir.join("config.worktree"));
-        collect_module_configs(&self.common_dir.join("modules"), 0, &mut files);
-        files.retain(|file| file.is_file());
-        files.dedup();
-        files
-    }
-
     /// The repository's settings (not its submodules').
     pub fn entries(&self) -> Vec<Entry> {
         let mut files = vec![self.common_dir.join("config")];
@@ -375,48 +186,12 @@ impl Repo {
             .map(|entry| entry.value)
     }
 
-    /// The settings anywhere in the repository that git must not obey outside the sandbox,
-    /// with the file they are in.
-    pub fn unsafe_settings(&self) -> Vec<String> {
-        let mut found = Vec::new();
-        for file in self.config_files() {
-            let Ok(text) = std::fs::read_to_string(&file) else {
-                continue;
-            };
-            for key in unsafe_entries(&parse(&text)) {
-                found.push(key);
-            }
-        }
-        found.dedup();
-        found
-    }
-
     /// The checked-out branch, unless `HEAD` is detached.
     pub fn branch(&self) -> Option<String> {
         let head = std::fs::read_to_string(self.git_dir.join("HEAD")).ok()?;
         head.trim()
             .strip_prefix("ref: refs/heads/")
             .map(str::to_owned)
-    }
-}
-
-fn collect_module_configs(dir: &Path, depth: usize, files: &mut Vec<PathBuf>) {
-    if depth > 6 {
-        return;
-    }
-    let Ok(read) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in read.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        if path.join("config").is_file() {
-            files.push(path.join("config"));
-        }
-        collect_module_configs(&path, depth + 1, files);
-        collect_module_configs(&path.join("modules"), depth + 1, files);
     }
 }
 
@@ -487,63 +262,6 @@ mod tests {
         );
         assert_eq!(entries[6].value, "refs/heads/main");
         assert_eq!(entries[8].value, "a@b.c");
-        assert_eq!(unsafe_entries(&entries), Vec::<String>::new());
-    }
-
-    #[test]
-    fn settings_that_start_programs_are_unsafe() {
-        let text = r#"
-[core]
-	sshCommand = /tmp/evil
-	fsmonitor = /tmp/evil
-	hooksPath = /tmp/hooks
-	pager = evil
-[credential]
-	helper = !evil
-	username = work-account
-[url "https://evil.example/"]
-	insteadOf = https://github.com/
-[filter "lfs"]
-	smudge = evil %f
-[merge "ours"]
-	driver = evil
-[include]
-	path = /tmp/more
-[remote "x"]
-	url = ext::sh -c evil
-	receivepack = evil
-[submodule "s"]
-	update = !evil
-	url = /Users/a/private
-[gpg]
-	program = /tmp/evil
-[http]
-	cookiefile = /Users/a/.ssh/id_rsa
-[alias]
-	x = !evil
-	st = status
-"#;
-        assert_eq!(
-            unsafe_entries(&parse(text)),
-            [
-                "core.sshcommand",
-                "core.fsmonitor",
-                "core.hookspath",
-                "core.pager",
-                "credential.helper",
-                "url.https://evil.example/.insteadof",
-                "filter.lfs.smudge",
-                "merge.ours.driver",
-                "include.path",
-                "remote.x.url",
-                "remote.x.receivepack",
-                "submodule.s.update",
-                "submodule.s.url",
-                "gpg.program",
-                "http.cookiefile",
-                "alias.x",
-            ]
-        );
     }
 
     #[test]
@@ -586,15 +304,10 @@ mod tests {
     fn finds_the_repository_its_branch_and_settings() {
         let dir = tempfile::tempdir().expect("temp dir");
         let top = dir.path().canonicalize().expect("canonical");
-        std::fs::create_dir_all(top.join(".git/modules/lib")).expect("mkdir");
+        std::fs::create_dir_all(top.join(".git")).expect("mkdir");
         std::fs::create_dir_all(top.join("src/deep")).expect("mkdir");
         std::fs::write(top.join(".git/config"), CONFIG).expect("write");
         std::fs::write(top.join(".git/HEAD"), "ref: refs/heads/0.5.5\n").expect("write");
-        std::fs::write(
-            top.join(".git/modules/lib/config"),
-            "[core]\n\tfsmonitor = evil\n",
-        )
-        .expect("write");
         let repo = Repo::find(&top.join("src/deep")).expect("a repository");
         assert_eq!(repo.top, top);
         assert_eq!(repo.branch().as_deref(), Some("0.5.5"));
@@ -602,6 +315,5 @@ mod tests {
             repo.get("remote", Some("origin"), "url").as_deref(),
             Some("git@github.com:seba2390/pistachio.git")
         );
-        assert_eq!(repo.unsafe_settings(), ["core.fsmonitor"]);
     }
 }

@@ -11,6 +11,7 @@
 <p align="center">
   <a href="https://github.com/seba2390/pistachio/actions/workflows/ci.yml"><img src="https://github.com/seba2390/pistachio/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/seba2390/pistachio/releases"><img src="https://img.shields.io/github/v/release/seba2390/pistachio?include_prereleases" alt="Release"></a>
+  <a href="https://seba2390.github.io/pistachio/"><img src="https://img.shields.io/badge/docs-seba2390.github.io%2Fpistachio-00664A" alt="Documentation"></a>
   <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue" alt="License"></a>
 </p>
 
@@ -50,7 +51,8 @@ when idle.
   new release is out, Update installs it in place (only when you say yes), and the new version
   shows what changed.
 
-See [docs/FEATURES.md](docs/FEATURES.md) for the full list and keyboard shortcuts.
+The [documentation](https://seba2390.github.io/pistachio/) explains each feature and Settings
+page. See [docs/FEATURES.md](docs/FEATURES.md) for the full list and keyboard shortcuts.
 
 
 ## Install
@@ -90,20 +92,20 @@ npm i -g @earendil-works/pi-coding-agent
   - Debian, Ubuntu:
 
     ```bash
-    curl -fLO https://github.com/seba2390/pistachio/releases/download/v0.5.6/pistachio_0.5.6-1_$(dpkg --print-architecture).deb && sudo apt install ./pistachio_0.5.6-1_$(dpkg --print-architecture).deb
+    curl -fLO https://github.com/seba2390/pistachio/releases/download/v0.5.7/pistachio_0.5.7-1_$(dpkg --print-architecture).deb && sudo apt install ./pistachio_0.5.7-1_$(dpkg --print-architecture).deb
     ```
 
   - Fedora and other RPM-based systems:
 
     ```bash
-    sudo dnf install https://github.com/seba2390/pistachio/releases/download/v0.5.6/pistachio-0.5.6-1.$(uname -m).rpm
+    sudo dnf install https://github.com/seba2390/pistachio/releases/download/v0.5.7/pistachio-0.5.7-1.$(uname -m).rpm
     ```
 
   - Any other distribution (installs for your user only, no root, and adds "Pistachio" to your
     app launcher):
 
     ```bash
-    curl -fL https://github.com/seba2390/pistachio/releases/download/v0.5.6/pistachio-v0.5.6-linux-$(uname -m).tar.gz | tar xz && pistachio-v0.5.6-linux-$(uname -m)/install.sh
+    curl -fL https://github.com/seba2390/pistachio/releases/download/v0.5.7/pistachio-v0.5.7-linux-$(uname -m).tar.gz | tar xz && pistachio-v0.5.7-linux-$(uname -m)/install.sh
     ```
 
   Or download the files yourself from [Releases](https://github.com/seba2390/pistachio/releases).

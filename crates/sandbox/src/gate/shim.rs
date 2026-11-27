@@ -125,6 +125,7 @@ fn through_gate(tool: &str, args: &[String], socket: &Path) -> Option<i32> {
             project: None,
             stdin,
             account: None,
+            approved: None,
         };
         let mut line = serde_json::to_string(&request).ok()?;
         line.push('\n');

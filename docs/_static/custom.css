@@ -1,0 +1,16 @@
+/* The app icon in the sidebar: a little smaller than Furo's default. */
+.sidebar-logo {
+  max-width: 96px;
+}
+
+/* Settings are written as definition lists: give each term the weight of a setting's name. */
+article dl.simple > dt,
+article dl.myst > dt {
+  font-weight: 600;
+}
+
+/* The demo video on the home page. */
+article video {
+  border-radius: 8px;
+  border: 1px solid var(--color-background-border);
+}

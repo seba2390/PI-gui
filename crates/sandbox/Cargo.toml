@@ -11,6 +11,7 @@ repository.workspace = true
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+sha2 = "0.10"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # The kernel's own sandbox for unprivileged processes, where bubblewrap can't run.

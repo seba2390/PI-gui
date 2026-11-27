@@ -6,6 +6,42 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.5.7] - 2026-11-27
+
+### Added
+
+- A documentation site, https://seba2390.github.io/pistachio/: each feature, and a page for each
+  Settings page.
+
+### Security
+
+- The sandbox's git gate (pushing, pulling and `gh` with your logins) no longer runs git in the
+  agent's repository at all. It keeps its own copy of each remote, per project, out of the
+  sandbox's reach, and git with your keys works only there: fetches, pulls, clones, submodules
+  and LFS downloads come in through that copy, and pushes go out from it (the commits are handed
+  over as plain data). Settings the agent writes into its repository can no longer start
+  programs with your keys, however they are set up, and the push question describes exactly what
+  is pushed. Before, a folder set up as a bare repository, `git ls-remote <address>`, or changing
+  `.git/config` at the right moment could get around the gate's checks.
+- `gh` runs outside any repository, with the repository and branch named for it; body files are
+  read inside the sandbox.
+- A command runs only if it is still what you allowed: if the repository changed while you were
+  asked, it stops and says so.
+
+### Fixed
+
+- The gate's error messages about which GitHub account to use no longer name the accounts (they
+  go back to the model).
+- A push through the gate uploads the commits' LFS files first, as git-lfs's own hook does (the
+  gate runs git with hooks off, so they were left behind).
+- The gate's `gh` works with older gh versions, such as Ubuntu's own package, which have no
+  `gh auth status --json`: it said gh wasn't logged in.
+
+### Changed
+
+- `gh pr create` through the gate needs `--title` and `--body` (or `--body-file`); `--fill` isn't
+  available. Pushes take branches and tags by name.
+
 ## [0.5.6] - 2026-11-27
 
 ### Added
@@ -725,7 +761,8 @@ chats, skills and model management. Changes since the last private build:
 - A corrupt `hosts.json` is kept as a backup.
 - A remembered terminal height can no longer squeeze out the chat.
 
-[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.5.6...HEAD
+[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.5.7...HEAD
+[0.5.7]: https://github.com/seba2390/pistachio/compare/v0.5.6...v0.5.7
 [0.5.6]: https://github.com/seba2390/pistachio/compare/v0.5.5...v0.5.6
 [0.5.5]: https://github.com/seba2390/pistachio/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/seba2390/pistachio/compare/v0.5.3...v0.5.4

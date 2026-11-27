@@ -3,5 +3,8 @@
 *.pending-snap
 .DS_Store
 
+# Documentation site build (sphinx-build -M html docs docs/_build)
+/docs/_build/
+
 # Demo-mode timelines (script/demo)
 *.timeline.jsonl

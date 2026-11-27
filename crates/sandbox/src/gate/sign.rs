@@ -41,6 +41,8 @@ fn gpg(request: &Request) -> Result<Option<Plan>, String> {
         stdin: Some(payload),
         accounts: Vec::new(),
         account: None,
+        job: None,
+        after: None,
     }))
 }
 
@@ -112,6 +114,8 @@ fn ssh(request: &Request) -> Result<Option<Plan>, String> {
         stdin: None,
         accounts: Vec::new(),
         account: None,
+        job: None,
+        after: None,
     }))
 }
 
@@ -185,6 +189,7 @@ mod tests {
             project: Some(PathBuf::from("/work/app")),
             stdin: stdin.map(str::to_owned),
             account: None,
+            approved: None,
         }
     }
 

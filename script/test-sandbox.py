@@ -53,7 +53,10 @@ def steps(home, project):
         # Remembered: not asked again.
         ("bash", {"command": f"git ls-remote --heads {PUBLIC}"}, True, "refs/heads/"),
         ("bash", {"command": "git push --receive-pack=evil origin main"}, False, "Pistachio"),
-        ("bash", {"command": f"git config core.fsmonitor evil && git fetch {PUBLIC}"}, False, "core.fsmonitor"),
+        # A setting the agent plants runs only in the sandbox (it can't write the home folder):
+        # the gate's git never reads the repository's settings.
+        ("bash", {"command": f"git config core.fsmonitor 'touch {home}/planted-ran; false' && "
+                             f"git fetch -q {PUBLIC}; git rev-parse FETCH_HEAD"}, True, "7fd1a60"),
     ]
 
 
@@ -171,6 +174,9 @@ def main():
     if len(results) != len(plan["steps"]):
         failed += 1
         print(f"FAIL  {len(results)} results for {len(plan['steps'])} calls")
+    if os.path.exists(os.path.join(home, "planted-ran")):
+        failed += 1
+        print("FAIL  a setting of the repository ran outside the sandbox")
     if os.path.exists(os.path.join(home, "outside.txt")) or os.path.exists(os.path.join(home, "notes.txt")):
         failed += 1
         print("FAIL  a file was written outside the project")
