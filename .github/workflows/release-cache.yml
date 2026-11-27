@@ -7,8 +7,7 @@ name: Release build cache
 # Weekly too: caches not used for 7 days are deleted.
 on:
   push:
-    # TEMPORARY 0.5.11: to try this workflow on its branch before it is on main; removed before merging.
-    branches: [main, "0.5.11"]
+    branches: [main]
     paths-ignore: ["docs/**", "**.md"]
   workflow_dispatch:
   schedule:
@@ -87,3 +86,4 @@ jobs:
           name: build-log-${{ matrix.platform }}
           path: target/ci-logs
           if-no-files-found: ignore
+          retention-days: 14

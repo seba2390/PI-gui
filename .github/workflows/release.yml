@@ -68,6 +68,7 @@ jobs:
           name: build-log-macos
           path: target/ci-logs
           if-no-files-found: ignore
+          retention-days: 14
       - name: Bundle Pistachio.app
         run: |
           mkdir -p target/release
@@ -84,6 +85,9 @@ jobs:
         with:
           name: asset-macos
           path: ${{ env.ASSET }}
+          # Publish needs them only in this run; the release keeps them (and doesn't count
+          # toward the Actions storage quota, which 90 days of copies filled).
+          retention-days: 1
 
   linux:
     name: Linux (${{ matrix.arch }})
@@ -142,6 +146,7 @@ jobs:
           name: build-log-linux-${{ matrix.arch }}
           path: target/ci-logs
           if-no-files-found: ignore
+          retention-days: 14
       - name: Package (.tar.gz, .deb, .rpm)
         run: |
           mkdir -p dist
@@ -169,6 +174,9 @@ jobs:
         with:
           name: asset-linux-${{ matrix.arch }}
           path: dist/*
+          # Publish needs them only in this run; the release keeps them (and doesn't count
+          # toward the Actions storage quota, which 90 days of copies filled).
+          retention-days: 1
 
   # On a newer Ubuntu than the build's: the software renderer of 22.04 (Mesa 23.2) leaves the app's
   # X11 window black. That of 24.04 does not.
@@ -203,6 +211,7 @@ jobs:
           name: displays-${{ matrix.arch }}
           path: displays
           if-no-files-found: ignore
+          retention-days: 14
 
   windows:
     name: Windows (x86_64)
@@ -245,6 +254,7 @@ jobs:
           name: build-log-windows
           path: target/ci-logs
           if-no-files-found: ignore
+          retention-days: 14
       - name: Package
         shell: bash
         run: |
@@ -259,6 +269,9 @@ jobs:
         with:
           name: asset-windows
           path: ${{ env.ASSET }}
+          # Publish needs them only in this run; the release keeps them (and doesn't count
+          # toward the Actions storage quota, which 90 days of copies filled).
+          retention-days: 1
 
   publish:
     name: Publish release
