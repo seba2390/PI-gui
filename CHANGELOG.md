@@ -6,6 +6,8 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.5.7] - 2026-11-27
+
 ### Added
 
 - A documentation site, https://seba2390.github.io/pistachio/: each feature, and a page for each
@@ -757,7 +759,8 @@ chats, skills and model management. Changes since the last private build:
 - A corrupt `hosts.json` is kept as a backup.
 - A remembered terminal height can no longer squeeze out the chat.
 
-[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.5.6...HEAD
+[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.5.7...HEAD
+[0.5.7]: https://github.com/seba2390/pistachio/compare/v0.5.6...v0.5.7
 [0.5.6]: https://github.com/seba2390/pistachio/compare/v0.5.5...v0.5.6
 [0.5.5]: https://github.com/seba2390/pistachio/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/seba2390/pistachio/compare/v0.5.3...v0.5.4
