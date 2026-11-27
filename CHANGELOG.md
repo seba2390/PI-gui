@@ -8,11 +8,23 @@ All notable changes to PI-gui are listed here. The format follows
 
 ### Security
 
-- The sandbox's git gate (pushing, pulling and `gh` with your keys) now makes git use exactly the
-  repository whose settings it checked. Before, a folder in the project set up as a bare repository
-  could have its own settings obeyed outside the sandbox, and `git ls-remote <address>` didn't
-  check the repository's settings at all; either could start a program with your keys. `gh repo
-  create` is now refused in a repository whose settings could start programs, like the rest.
+- The sandbox's git gate (pushing, pulling and `gh` with your logins) no longer runs git in the
+  agent's repository at all. It keeps its own copy of each remote, per project, out of the
+  sandbox's reach, and git with your keys works only there: fetches, pulls, clones, submodules
+  and LFS downloads come in through that copy, and pushes go out from it (the commits are handed
+  over as plain data). Settings the agent writes into its repository can no longer start
+  programs with your keys, however they are set up, and the push question describes exactly what
+  is pushed. Before, a folder set up as a bare repository, `git ls-remote <address>`, or changing
+  `.git/config` at the right moment could get around the gate's checks.
+- `gh` runs outside any repository, with the repository and branch named for it; body files are
+  read inside the sandbox.
+- A command runs only if it is still what you allowed: if the repository changed while you were
+  asked, it stops and says so.
+
+### Changed
+
+- `gh pr create` through the gate needs `--title` and `--body` (or `--body-file`); `--fill` isn't
+  available. Pushes take branches and tags by name.
 
 ## [0.5.6] - 2026-11-27
 

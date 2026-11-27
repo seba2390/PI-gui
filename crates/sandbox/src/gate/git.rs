@@ -1490,18 +1490,16 @@ fn through(
                 Vec::new()
             };
             mirror.fetch(&options)?;
+            // The mirror's HEAD is the remote's default branch (what a clone or a fetch of an
+            // address gets).
             if get.head || mirror.resolve("refs/remotes/origin/HEAD").is_none() {
                 let _ = mirror.git_output(&["remote", "set-head", "origin", "--auto"]);
-                if let Ok(head) =
-                    mirror.git_output(&["symbolic-ref", "-q", "refs/remotes/origin/HEAD"])
-                    && let Some(branch) = head.strip_prefix("refs/remotes/origin/")
-                {
-                    let _ = mirror.git_output(&[
-                        "symbolic-ref",
-                        "HEAD",
-                        &format!("refs/heads/{branch}"),
-                    ]);
-                }
+            }
+            if let Ok(head) = mirror.git_output(&["symbolic-ref", "-q", "refs/remotes/origin/HEAD"])
+                && let Some(branch) = head.strip_prefix("refs/remotes/origin/")
+            {
+                let _ =
+                    mirror.git_output(&["symbolic-ref", "HEAD", &format!("refs/heads/{branch}")]);
             }
             if let Some((options, revs)) = &get.lfs {
                 let explicit = options
@@ -2230,6 +2228,120 @@ mod tests {
             std::fs::read_to_string(fresh.join("lib/deep/file")).expect("the nested submodule"),
             "deep"
         );
+    }
+
+    /// git with git-lfs's filters (the tests' git has no settings of the user's).
+    fn lfs_git(dir: &Path, args: &[&str]) {
+        let mut all = vec![
+            "-c",
+            "filter.lfs.clean=git-lfs clean -- %f",
+            "-c",
+            "filter.lfs.smudge=git-lfs smudge -- %f",
+            "-c",
+            "filter.lfs.process=git-lfs filter-process",
+            "-c",
+            "filter.lfs.required=true",
+        ];
+        all.extend(args);
+        git(dir, &all);
+    }
+
+    #[test]
+    fn lfs_files_come_and_go_through_the_mirror() {
+        if !super::super::relay::lfs_installed() {
+            return;
+        }
+        let setup = repo("main", 0);
+        // "GitHub" gets a file kept with LFS, from another clone.
+        let other = setup.root.join("other");
+        git(
+            &setup.root,
+            &["clone", "-q", setup.remote.to_str().unwrap(), "other"],
+        );
+        std::fs::write(
+            other.join(".gitattributes"),
+            "*.bin filter=lfs diff=lfs merge=lfs -text
+",
+        )
+        .expect("write");
+        std::fs::write(other.join("big.bin"), "their big file").expect("write");
+        lfs_git(&other, &["add", "-A"]);
+        lfs_git(&other, &["commit", "-q", "-m", "big"]);
+        git(&other, &["push", "-q", "--no-verify", "origin", "main"]);
+        let remote_url = format!("file://{}", setup.remote.display());
+        git(&other, &["lfs", "push", "--all", &remote_url, "main"]);
+        // Fetched without the file, then the file through the gate.
+        let env = setup.env.clone();
+        let pull = |args: &[&str]| {
+            let mut request = request(&setup.work, args);
+            request.project = Some(setup.work.clone());
+            let plan = plan(&request, &env).unwrap().unwrap();
+            execute(plan.job.as_ref().unwrap(), &request, &env)
+        };
+        assert_eq!(setup.run(&["fetch"]).1, 0);
+        lfs_git(
+            &setup.work,
+            &[
+                "-c",
+                "filter.lfs.smudge=git-lfs smudge --skip -- %f",
+                "-c",
+                "filter.lfs.process=git-lfs filter-process --skip",
+                "merge",
+                "-q",
+                "--ff-only",
+                "origin/main",
+            ],
+        );
+        assert_ne!(
+            std::fs::read_to_string(setup.work.join("big.bin")).unwrap(),
+            "their big file"
+        );
+        assert_eq!(
+            pull(&[
+                "-c",
+                "filter.lfs.process=git-lfs filter-process",
+                "-c",
+                "filter.lfs.required=true",
+                "lfs",
+                "pull"
+            ]),
+            0
+        );
+        assert_eq!(
+            std::fs::read_to_string(setup.work.join("big.bin")).unwrap(),
+            "their big file"
+        );
+        // A new file goes up.
+        std::fs::write(setup.work.join("mine.bin"), "my big file").expect("write");
+        lfs_git(&setup.work, &["add", "mine.bin"]);
+        lfs_git(&setup.work, &["commit", "-q", "-m", "mine"]);
+        assert_eq!(pull(&["lfs", "push", "origin", "main"]), 0);
+        let oid = {
+            use sha2::Digest as _;
+            super::super::relay::hex(&sha2::Sha256::digest(b"my big file"))
+        };
+        assert!(
+            setup
+                .remote
+                .join(format!("lfs/objects/{}/{}/{oid}", &oid[..2], &oid[2..4]))
+                .is_file(),
+            "the file reached the remote"
+        );
+        // A repository that sends LFS files to another server: refused.
+        git(&other, &["pull", "-q", "--no-rebase", "origin", "main"]);
+        std::fs::write(
+            other.join(".lfsconfig"),
+            "[lfs]\n\turl = https://evil.example/lfs\n",
+        )
+        .expect("write");
+        git(&other, &["add", ".lfsconfig"]);
+        git(&other, &["commit", "-q", "-m", "elsewhere"]);
+        git(&other, &["push", "-q", "--no-verify", "origin", "main"]);
+        assert_ne!(setup.run(&["pull", "--no-rebase", "-q"]).1, 0);
+        std::fs::write(setup.work.join("more.bin"), "more").expect("write");
+        lfs_git(&setup.work, &["add", "more.bin"]);
+        lfs_git(&setup.work, &["commit", "-q", "-m", "more"]);
+        assert_ne!(pull(&["lfs", "push", "origin", "main"]), 0);
     }
 
     #[test]

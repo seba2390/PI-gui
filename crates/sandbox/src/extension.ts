@@ -161,6 +161,7 @@ const GATE_NOTE = [
   "- Local git (commit, branch, merge, rebase, log) works as usual, with the user's own git settings and identity.",
   "- `git push`, `pull`, `fetch`, `clone` and `ls-remote`, and `gh` for pull requests, issues, runs, releases and `gh repo create` or `delete`, run outside the sandbox with the user's logins. Pistachio shows the user a question for each; just run the command and wait for its result. Don't ask the user first yourself, and don't retry a command the user declined: ask them instead.",
   "- `gh auth status` says which GitHub accounts are logged in and the git identity commits use.",
+  "- `gh pr create` needs --title and --body (or --body-file); --fill isn't available. Push branches and tags by name, not bare commits.",
   "- Don't set GIT_CONFIG_* or other git variables to get around an error, and don't invent a commit author: if git has no identity, ask the user.",
 ].join("\n");
 

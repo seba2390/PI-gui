@@ -310,7 +310,12 @@ impl Mirror {
                 .to_owned()
         };
         let env = self.git_output(&["lfs", "env"]).unwrap_or_default();
-        let theirs = host(&self.url);
+        // The remote's address as git uses it (the user's own `insteadOf` applied).
+        let theirs = host(
+            &self
+                .git_output(&["remote", "get-url", "origin"])
+                .unwrap_or_else(|_| self.url.clone()),
+        );
         for line in env.lines() {
             let Some((name, value)) = line.split_once('=') else {
                 continue;
@@ -502,7 +507,7 @@ impl Mirror {
 }
 
 /// `bytes` in lowercase hexadecimal.
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     let mut text = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
         let _ = write!(text, "{byte:02x}");
