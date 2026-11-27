@@ -16,6 +16,8 @@ All notable changes to PI-gui are listed here. The format follows
   never asks for passwords or keys. It is offered while the sandbox is on, and has a switch in
   Settings → Tools → Code (on by default).
 
+## [0.5.9] - 2026-11-27
+
 ### Fixed
 
 - The gate no longer names GitHub accounts in what it prints back to the model: not in the
@@ -785,7 +787,8 @@ chats, skills and model management. Changes since the last private build:
 - A corrupt `hosts.json` is kept as a backup.
 - A remembered terminal height can no longer squeeze out the chat.
 
-[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.5.8...HEAD
+[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.5.9...HEAD
+[0.5.9]: https://github.com/seba2390/pistachio/compare/v0.5.8...v0.5.9
 [0.5.8]: https://github.com/seba2390/pistachio/compare/v0.5.7...v0.5.8
 [0.5.7]: https://github.com/seba2390/pistachio/compare/v0.5.6...v0.5.7
 [0.5.6]: https://github.com/seba2390/pistachio/compare/v0.5.5...v0.5.6
