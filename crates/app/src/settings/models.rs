@@ -12,6 +12,7 @@ use pi_config::{ModelsFile, ProviderInfo};
 
 use super::view::{SettingsEvent, SettingsView};
 use crate::chat::models_dialog::{self, Open};
+use crate::local_models::RunState;
 use crate::pi_place::PiPlace;
 use gpui_kit::prelude::FluentBuilder as _;
 
@@ -256,10 +257,15 @@ fn row(
     let muted = cx.theme().muted_foreground;
     let palette = crate::theme::palette(cx);
     let (icon, detail) = models_dialog::describe(provider, &connected.available);
-    let (color, state) = match connected.online.get(&provider.id) {
-        Some(true) => (Some(palette.success), "Online"),
-        Some(false) => (Some(palette.error), "Offline"),
-        None => (None, ""),
+    // A model Pistachio runs here is as its engine is; it is not asked.
+    let run = run_state(provider, cx);
+    let (color, state) = match (&run, connected.online.get(&provider.id)) {
+        (Some((_, RunState::Running)), _) => (Some(palette.success), "Running"),
+        (Some((_, RunState::Starting)), _) => (Some(palette.warning), "Starting…"),
+        (Some((_, RunState::Stopped)), _) => (Some(muted), "Stopped"),
+        (None, Some(true)) => (Some(palette.success), "Online"),
+        (None, Some(false)) => (Some(palette.error), "Offline"),
+        (None, None) => (None, ""),
     };
     let id = provider.id.clone();
     let open = {
@@ -327,6 +333,32 @@ fn row(
                     }),
             )
     };
+    let play = run.map(|(url, state)| {
+        let label = provider.label().to_owned();
+        let (icon, name): (Icon, String) = match state {
+            RunState::Running => (Icon::new(IconName::Pause), format!("Stop {label}")),
+            RunState::Starting => (Icon::new(IconName::Loader), format!("{label} is starting")),
+            RunState::Stopped => (AppIcon::Play.into(), format!("Start {label}")),
+        };
+        let selector = format!("run:{id}");
+        div().flex_none().debug_selector(|| selector.clone()).child(
+            Button::new(SharedString::from(selector.clone()))
+                .quiet(cx)
+                .small()
+                .icon(icon.text_color(palette.accent_icon))
+                .accessibility_label(name)
+                .disabled(state == RunState::Starting || connected.busy)
+                .on_click(move |_, _, cx| {
+                    if let Some(models) = crate::local_models::local_models(cx) {
+                        models.update(cx, |models, cx| match state {
+                            RunState::Running => models.stop_at(&url, cx),
+                            RunState::Stopped => models.start_at(&url, cx),
+                            RunState::Starting => {}
+                        });
+                    }
+                }),
+        )
+    });
     v_flex()
         .w_full()
         .gap_1p5()
@@ -336,6 +368,7 @@ fn row(
                 .w_full()
                 .gap_1()
                 .child(div().flex_1().min_w_0().child(card))
+                .children(play)
                 .child(trash),
         )
         .when(removing, |this| {
@@ -436,6 +469,16 @@ fn confirm(
                 .disabled(connected.busy)
                 .on_click(keep),
         )
+}
+
+/// Whether the engine runs, of a model Pistachio set up on this device for `provider`, and its
+/// address.
+fn run_state(provider: &ProviderInfo, cx: &App) -> Option<(String, RunState)> {
+    let models = crate::local_models::local_models(cx)?;
+    let models = models.read(cx);
+    addresses(provider)
+        .into_iter()
+        .find_map(|url| models.run_state_at(&url).map(|state| (url, state)))
 }
 
 /// What this app set up on this device for `provider`, which removing it deletes.

@@ -136,6 +136,8 @@ pub struct ModelsDialog {
     this_way: Option<Way>,
     /// How far deploying a new model on this device got.
     deploy: DeployStep,
+    /// Hardware scans asked for, so each one's progress starts from the beginning.
+    scans: usize,
     /// The known servers on this device, once it was chosen.
     this_device: Option<Scan>,
     /// The known servers on the other device last asked for.
@@ -234,6 +236,7 @@ impl ModelsDialog {
             device: None,
             this_way: None,
             deploy: DeployStep::Start,
+            scans: 0,
             this_device: None,
             other_device: None,
             address,
@@ -313,13 +316,18 @@ impl ModelsDialog {
     }
 
     fn back(&mut self, cx: &mut Context<Self>) {
-        // From attaching or deploying on this device to choosing between them.
-        if matches!(self.screen, Screen::Hosted)
-            && self.device == Some(Device::This)
-            && self.this_way.is_some()
-            && self.suggests_models()
-        {
-            self.this_way = None;
+        // The pages of a locally hosted model: attaching or deploying, then this device or
+        // another, then the device's choice.
+        if matches!(self.screen, Screen::Hosted) && self.device.is_some() {
+            if self.device == Some(Device::This)
+                && self.this_way.is_some()
+                && self.suggests_models()
+            {
+                self.this_way = None;
+            } else {
+                self.device = None;
+                self.this_way = None;
+            }
             self.address_error = None;
             cx.notify();
             return;

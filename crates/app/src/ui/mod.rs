@@ -54,3 +54,24 @@ pub fn light(color: gpui_kit::Hsla) -> gpui_kit::Div {
         .rounded_full()
         .bg(color)
 }
+
+/// `text` that opens `url` in the browser when clicked.
+pub fn web_link(
+    id: impl Into<gpui_kit::ElementId>,
+    text: impl Into<gpui_kit::SharedString>,
+    url: String,
+    cx: &gpui_kit::App,
+) -> gpui_kit::Stateful<gpui_kit::Div> {
+    use gpui_kit::{
+        InteractiveElement as _, ParentElement as _, StatefulInteractiveElement as _, Styled as _,
+    };
+    let color = crate::theme::palette(cx).accent;
+    gpui_kit::div()
+        .id(id.into())
+        .min_w_0()
+        .text_color(color)
+        .cursor_pointer()
+        .hover(|style| style.underline())
+        .child(text.into())
+        .on_click(move |_, _, cx| cx.open_url(&url))
+}

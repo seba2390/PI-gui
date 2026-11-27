@@ -17,16 +17,20 @@ All notable changes to PI-gui are listed here. The format follows
   is downloaded; every file is pinned and checked against its SHA-256. A model that runs is
   connected like any server, is started when a chat sends to it (the message waits until it
   answers) and stops when Pistachio quits.
-- **Attach or deploy on this device.** Locally hosted model → This device now asks whether to
-  **Attach to existing model** (Ollama, LM Studio, vLLM… and a server by its port) or **Deploy new
-  model**. Deploying starts with **Scan local hardware**, which shows its progress and then lists
-  the processor, memory, graphics, free disk and build tools found; **Suggest models** then shows
-  Fast, Balanced and Most capable, each with its inference engine, checkpoint and quantization,
-  memory and speed here.
+- **Attach or deploy on this device.** Locally hosted model is now a series of pages: This device
+  or Another device, then on this device **Attach to existing model** (Ollama, LM Studio, vLLM…
+  and a server by its port) or **Deploy new model**. Deploying starts with **Scan local
+  hardware**, which shows a progress bar through what it looks at and then lists the processor,
+  memory, graphics, free disk and build tools found; **Suggest models** then shows Fast, Balanced
+  and Most capable, each with its inference engine, quantization, memory, speed here and checkpoint.
+  The engine and the checkpoint link to their pages, also in the download dialog, and the button
+  says **Download and run**.
 - **Connected models by where they run.** Settings → pi & models groups them into This device,
   Other devices and API connections, and each has a trash button that removes it after asking. A
   model Pistachio downloaded is also stopped and deleted from this computer, with its engine
-  unless another local model uses it; for anything else only the connection is removed.
+  unless another local model uses it; for anything else only the connection is removed. A model
+  Pistachio set up on this device also has a play / stop button that starts its engine (loading
+  the model) or stops it, without deleting anything.
 
 ### Fixed
 

@@ -5,7 +5,9 @@ use gpui_kit::component::button::Button;
 use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _, h_flex, v_flex,
 };
-use gpui_kit::{App, Div, ParentElement as _, SharedString, Styled as _, Window, div, px};
+use gpui_kit::{
+    App, Div, IntoElement as _, ParentElement as _, SharedString, Styled as _, Window, div, px,
+};
 
 use super::dialog::open_form_dialog;
 use super::{AppIcon, QuietButton as _};
@@ -19,6 +21,8 @@ pub struct Part {
     /// What it is for.
     pub note: String,
     pub size: u64,
+    /// Its page, which the name links to.
+    pub link: Option<String>,
 }
 
 /// What a download is.
@@ -47,7 +51,15 @@ impl Details {
     pub fn render(&self, cx: &App) -> Div {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
-        let parts = self.parts.iter().map(|part| {
+        let parts = self.parts.iter().enumerate().map(|(ix, part)| {
+            let name = match &part.link {
+                Some(url) => {
+                    super::web_link(("download-part", ix), part.name.clone(), url.clone(), cx)
+                        .text_sm()
+                        .into_any_element()
+                }
+                None => div().text_sm().child(part.name.clone()).into_any_element(),
+            };
             h_flex()
                 .w_full()
                 .gap_3()
@@ -63,7 +75,7 @@ impl Details {
                     v_flex()
                         .flex_1()
                         .min_w_0()
-                        .child(div().text_sm().child(part.name.clone()))
+                        .child(name)
                         .child(div().text_xs().text_color(muted).child(part.note.clone())),
                 )
                 .child(
@@ -118,7 +130,20 @@ pub fn download_label(size: u64) -> String {
 
 /// The button in a list that downloads `name`, after asking.
 pub fn download_button(id: impl Into<SharedString>, name: &str, size: u64) -> Button {
-    let label = download_label(size);
+    labeled_button(id, name, download_label(size))
+}
+
+/// What a button that downloads `size` bytes and then runs what it got says.
+pub fn download_and_run_label(size: u64) -> String {
+    format!("Download and run {}", size_label(size))
+}
+
+/// The button in a list that downloads `name` and runs it, after asking.
+pub fn download_and_run_button(id: impl Into<SharedString>, name: &str, size: u64) -> Button {
+    labeled_button(id, name, download_and_run_label(size))
+}
+
+fn labeled_button(id: impl Into<SharedString>, name: &str, label: String) -> Button {
     Button::new(id.into())
         .icon(AppIcon::Download)
         .accessibility_label(format!("{label}, {name}"))
@@ -135,7 +160,46 @@ pub fn ask_to_download(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let title: SharedString = format!("Download {name}?").into();
+    let label = download_label(details.size);
+    ask(
+        format!("Download {name}?"),
+        label,
+        details,
+        start,
+        window,
+        cx,
+    );
+}
+
+/// Asks whether to download `name` and run it, showing what is downloaded; `start` is called on
+/// a yes.
+pub fn ask_to_download_and_run(
+    name: &str,
+    details: Details,
+    start: impl Fn(&mut App) + Clone + 'static,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let label = download_and_run_label(details.size);
+    ask(
+        format!("Download and run {name}?"),
+        label,
+        details,
+        start,
+        window,
+        cx,
+    );
+}
+
+fn ask(
+    title: String,
+    label: String,
+    details: Details,
+    start: impl Fn(&mut App) + Clone + 'static,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let title: SharedString = title.into();
     open_form_dialog(None, window, cx, move |dialog, _, cx| {
         let start = start.clone();
         dialog
@@ -158,7 +222,7 @@ pub fn ask_to_download(
                         Button::new("download-start")
                             .form_action(cx)
                             .icon(AppIcon::Download)
-                            .label(download_label(details.size))
+                            .label(label.clone())
                             .on_click(move |_, window, cx| {
                                 window.close_dialog(cx);
                                 start(cx);
@@ -184,6 +248,10 @@ mod tests {
         assert_eq!(download_label(670_576_784), "Download 671 MB");
         assert_eq!(download_label(1_036_613_791), "Download 1.0 GB");
         assert_eq!(download_label(93_939), "Download 94 KB");
+        assert_eq!(
+            super::download_and_run_label(2_600_000_000),
+            "Download and run 2.6 GB"
+        );
     }
 
     /// Nothing is downloaded without a yes.
@@ -197,6 +265,7 @@ mod tests {
                 let details = Details {
                     intro: "A model.".into(),
                     parts: vec![Part {
+                        link: None,
                         icon: AppIcon::Brain.into(),
                         name: "Model".into(),
                         note: "All of it".into(),

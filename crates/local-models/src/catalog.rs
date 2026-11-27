@@ -97,6 +97,23 @@ impl Engine {
         self.families.is_empty() || self.families.contains(&model.id)
     }
 
+    /// The engine's project page: the GitHub repository it is downloaded from, else its first
+    /// source.
+    pub fn home_page(&self) -> Option<String> {
+        let pinned = match &self.install {
+            Install::Archive { assets, .. } => {
+                assets.values().next().map(|asset| asset.url.as_str())
+            }
+            Install::Build { source, .. } => Some(source.url.as_str()),
+            Install::Python { .. } => None,
+        };
+        pinned
+            .into_iter()
+            .chain(self.sources.iter().map(String::as_str))
+            .find_map(github_repo)
+            .or_else(|| self.sources.first().cloned())
+    }
+
     /// The version installed, for its folder name.
     pub fn version(&self) -> &str {
         match &self.install {
@@ -105,6 +122,14 @@ impl Engine {
             | Install::Python { version, .. } => version,
         }
     }
+}
+
+/// `https://github.com/<owner>/<repo>` of any GitHub URL in a repository.
+fn github_repo(url: &str) -> Option<String> {
+    let rest = url.strip_prefix("https://github.com/")?;
+    let mut parts = rest.split('/').filter(|part| !part.is_empty());
+    let (owner, repo) = (parts.next()?, parts.next()?);
+    Some(format!("https://github.com/{owner}/{repo}"))
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -209,6 +234,11 @@ pub struct Build {
 
 impl Build {
     /// `GGUF`, `MLX`.
+    /// The build's page on Hugging Face.
+    pub fn page(&self) -> String {
+        format!("https://huggingface.co/{}", self.repo)
+    }
+
     pub fn format_label(&self) -> &'static str {
         match self.format {
             Format::Gguf => "GGUF",
@@ -241,6 +271,26 @@ pub struct Speed {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn links_to_the_pages_of_engines_and_models() {
+        let catalog = catalog();
+        let page = |id: &str| catalog.engine(id).unwrap().home_page().unwrap();
+        assert_eq!(page("llama-cpp"), "https://github.com/ggml-org/llama.cpp");
+        assert_eq!(
+            page("ik-llama-cpp"),
+            "https://github.com/ikawrakow/ik_llama.cpp"
+        );
+        assert_eq!(
+            page("rapid-mlx"),
+            "https://github.com/raullenchai/Rapid-MLX"
+        );
+        let build = &catalog.models[0].builds[0];
+        assert_eq!(
+            build.page(),
+            format!("https://huggingface.co/{}", build.repo)
+        );
+    }
 
     fn hex64(text: &str) -> bool {
         text.len() == 64

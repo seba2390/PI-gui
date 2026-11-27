@@ -310,10 +310,12 @@ fn locally_hosted_on_this_device(cx: &mut TestAppContext) {
     cx.update(|_, cx| assert!(dialog.read(cx).this_device.is_none()));
     assert!(cx.debug_bounds("local:Ollama").is_none());
     click("device:this", cx);
-    // Attach or deploy first; nothing is looked for yet.
+    // A page of its own: attach or deploy; nothing is looked for yet.
+    assert!(cx.debug_bounds("device:other").is_none());
     assert!(cx.debug_bounds("way:deploy").is_some());
     cx.update(|_, cx| assert!(dialog.read(cx).this_device.is_none()));
     click("way:attach", cx);
+    assert!(cx.debug_bounds("way:deploy").is_none());
     cx.update(|_, cx| {
         assert_eq!(
             dialog.read(cx).this_device.as_ref().unwrap().host,
@@ -344,6 +346,8 @@ fn locally_hosted_on_this_device(cx: &mut TestAppContext) {
     click("models-back", cx);
     assert!(cx.debug_bounds("local:Ollama").is_none());
     assert!(cx.debug_bounds("way:attach").is_some());
+    click("models-back", cx);
+    assert!(cx.debug_bounds("device:this").is_some());
 }
 
 /// Deploying on this device scans its hardware when asked, shows what it found, and suggests
@@ -401,6 +405,7 @@ fn suggests_local_models(cx: &mut TestAppContext) {
         let card: &'static str = format!("suggestion:{tier}").leak();
         assert!(cx.debug_bounds(card).is_some(), "{tier}");
     }
+    assert!(cx.debug_bounds("local-Fast-default-checkpoint").is_some());
     let asking = |cx: &mut VisualTestContext| {
         cx.update(|window, _| {
             gpui_kit::test::TestWindowExt::try_find(window, "download-start").is_some()
@@ -431,6 +436,8 @@ fn another_device_by_its_address(cx: &mut TestAppContext) {
         assert_eq!(dialog.other_device.as_ref().unwrap().host, "127.0.0.2");
     });
     assert!(cx.debug_bounds("other:Ollama").is_some());
+    click("models-back", cx);
+    assert!(cx.debug_bounds("device:other").is_some());
     click("models-back", cx);
     click("start:provider", cx);
     click("built-in:openai", cx);

@@ -36,12 +36,14 @@ fn details(model: &Model) -> Details {
         ),
         parts: vec![
             Part {
+                link: None,
                 icon: AppIcon::Brain.into(),
                 name: model.name.into(),
                 note: format!("The model · {}", weights.file.name),
                 size: weights.file.size,
             },
             Part {
+                link: None,
                 icon: AppIcon::Library.into(),
                 name: "Tokenizer".into(),
                 note: format!(

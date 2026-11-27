@@ -19,7 +19,10 @@ use local_models::{Choice, Hardware, Progress, Server, Setup, Suggestion, catalo
 
 use crate::config::AppConfig;
 use crate::ui::AppIcon;
-use crate::ui::download::{Details, Part as DownloadPart, ask_to_download};
+use crate::ui::download::{Details, Part as DownloadPart, ask_to_download_and_run};
+
+/// How long a scan of this computer takes at least, so its progress can be followed.
+pub const SCAN_TIME: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// What is known of this computer.
 pub enum Scan {
@@ -45,6 +48,15 @@ pub enum Status {
     Installing(Option<Progress>),
     /// Downloaded, not running.
     Installed,
+    Starting,
+    Running,
+}
+
+/// Whether a setup's engine runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunState {
+    Stopped,
+    /// Started, loading the model.
     Starting,
     Running,
 }
@@ -182,9 +194,7 @@ impl LocalModels {
         let root = self.root.clone();
         let env = cx.global::<AppConfig>().child_env.clone();
         // Long enough to see that it looked; a scan is often quicker.
-        let shown = cx
-            .background_executor()
-            .timer(std::time::Duration::from_millis(600));
+        let shown = cx.background_executor().timer(SCAN_TIME);
         cx.spawn(async move |this, cx| {
             let scan = cx
                 .background_spawn(async move {
@@ -246,6 +256,34 @@ impl LocalModels {
     /// The address of a running setup.
     pub fn url(&self, choice: &Choice) -> Option<String> {
         self.setup(&choice.key()).map(Setup::base_url)
+    }
+
+    /// Whether the setup listening at `base_url` runs; `None` when Pistachio set none up there.
+    pub fn run_state_at(&self, base_url: &str) -> Option<RunState> {
+        let key = setups::at(&self.setups, base_url)?.key();
+        Some(match self.running.get(&key) {
+            Some(Run::Starting(_)) => RunState::Starting,
+            Some(Run::Ready(_)) => RunState::Running,
+            None => RunState::Stopped,
+        })
+    }
+
+    /// Starts the engine of the setup listening at `base_url`, which loads its model.
+    pub fn start_at(&mut self, base_url: &str, cx: &mut Context<Self>) {
+        if let Some(key) = setups::at(&self.setups, base_url).map(Setup::key) {
+            self.start(&key, false, cx);
+        }
+    }
+
+    /// Stops the engine of the setup listening at `base_url`; its files stay.
+    pub fn stop_at(&mut self, base_url: &str, cx: &mut Context<Self>) {
+        if let Some(key) = setups::at(&self.setups, base_url).map(Setup::key)
+            && matches!(self.running.get(&key), Some(Run::Ready(_)))
+        {
+            // Dropping an engine stops it.
+            self.running.remove(&key);
+            cx.notify();
+        }
     }
 
     /// What removing the setup listening at `base_url` deletes, when Pistachio set one up there.
@@ -329,7 +367,7 @@ impl LocalModels {
         let details = details(&root, choice, &parts);
         let name = format!("{} with {}", choice.model.name, choice.engine.name);
         let (this, choice) = (this.downgrade(), choice.clone());
-        ask_to_download(
+        ask_to_download_and_run(
             &name,
             details,
             move |cx| {
@@ -585,6 +623,11 @@ fn details(root: &std::path::Path, choice: &Choice, parts: &[Part]) -> Details {
             name: part.name.clone(),
             note: part.note.clone(),
             size: part.size,
+            link: if part.engine {
+                choice.engine.home_page()
+            } else {
+                Some(choice.build.page())
+            },
         })
         .collect();
     // A build makes more than it downloads.

@@ -16,8 +16,8 @@ use super::start_screen::{Back, available, grid};
 use super::{ModelsDialog, card, label, probe};
 use crate::local_models::{LocalModels, Scan as Machine, Status};
 use crate::pi_place::PiPlace;
-use crate::ui::download::download_button;
-use crate::ui::{AppIcon, FadingText};
+use crate::ui::download::download_and_run_button;
+use crate::ui::{AppIcon, FadingText, QuietButton as _, web_link};
 use local_models::hardware::Fact;
 use local_models::{Choice, Suggestion};
 
@@ -101,6 +101,7 @@ impl ModelsDialog {
     /// Looks at this computer's hardware (again); models are suggested once asked for.
     fn scan_hardware(&mut self, cx: &mut Context<Self>) {
         self.deploy = DeployStep::Hardware;
+        self.scans += 1;
         if let Some(models) = crate::local_models::local_models(cx) {
             models.update(cx, LocalModels::scan_now);
         }
@@ -290,36 +291,34 @@ impl ModelsDialog {
                 "Another device",
                 "By its address".into(),
             ));
-        let below = match self.device {
-            None => label(
-                "Ollama, LM Studio, llama.cpp, MLX, vLLM, Jan, Docker Model Runner, or any server \
-                 that speaks OpenAI's, Anthropic's or Gemini's API.",
-                cx,
-            )
-            .into_any_element(),
-            Some(Device::This) => self.render_this_device(cx),
-            Some(Device::Other) => self.render_other_device(cx),
+        // Each choice opens a page of its own; Back goes to the one before.
+        let (title, body) = match (self.device, self.this_way) {
+            (None, _) => (
+                "Locally hosted model",
+                v_flex()
+                    .gap_3()
+                    .child(devices)
+                    .child(label(
+                        "Ollama, LM Studio, llama.cpp, MLX, vLLM, Jan, Docker Model Runner, or \
+                         any server that speaks OpenAI's, Anthropic's or Gemini's API.",
+                        cx,
+                    ))
+                    .into_any_element(),
+            ),
+            (Some(Device::Other), _) => ("Another device", self.render_other_device(cx)),
+            (Some(Device::This), None) => ("This device", self.render_ways(cx).into_any_element()),
+            (Some(Device::This), Some(Way::Attach)) if !self.suggests_models() => {
+                ("This device", self.render_attach(cx))
+            }
+            (Some(Device::This), Some(Way::Attach)) => {
+                ("Attach to existing model", self.render_attach(cx))
+            }
+            (Some(Device::This), Some(Way::Deploy)) => ("Deploy new model", self.render_deploy(cx)),
         };
         v_flex()
             .gap_3()
-            .child(Self::render_top("Locally hosted model", None, cx))
-            .child(devices)
-            .child(below)
-            .into_any_element()
-    }
-
-    fn render_this_device(&self, cx: &mut Context<Self>) -> AnyElement {
-        let body = match self.this_way {
-            None => None,
-            Some(Way::Attach) => Some(self.render_attach(cx)),
-            Some(Way::Deploy) => Some(self.render_deploy(cx)),
-        };
-        v_flex()
-            .gap_4()
-            .when(self.suggests_models(), |this| {
-                this.child(self.render_ways(cx))
-            })
-            .children(body)
+            .child(Self::render_top(title, None, cx))
+            .child(body)
             .into_any_element()
     }
 
@@ -340,7 +339,7 @@ impl ModelsDialog {
                         title,
                         SharedString::default(),
                         None,
-                        self.this_way == Some(way),
+                        false,
                         cx,
                     )
                     .on_click(cx.listener(move |this, _, _, cx| this.choose_way(way, cx))),
@@ -358,14 +357,12 @@ impl ModelsDialog {
                     ))
                     .child(way_card(Way::Deploy, AppIcon::Download, "Deploy new model")),
             )
-            .when(self.this_way.is_none(), |this| {
-                this.child(label(
-                    "Attach connects to a server that already runs here, like Ollama or LM \
-                     Studio. Deploy looks at this device's hardware, suggests models that run \
-                     well on it, and downloads and runs the one you pick.",
-                    cx,
-                ))
-            })
+            .child(label(
+                "Attach connects to a server that already runs here, like Ollama or LM Studio. \
+                 Deploy looks at this device's hardware, suggests models that run well on it, \
+                 and downloads and runs the one you pick.",
+                cx,
+            ))
     }
 
     /// The known servers on this device, and a server on another port.
@@ -417,42 +414,34 @@ impl ModelsDialog {
             Machine::Done { hardware, .. } if asked => (false, Some(hardware.facts())),
             Machine::NotYet | Machine::Done { .. } => (false, None),
         };
+        let accent = crate::theme::palette(cx).accent_icon;
         let scan_button = div()
             .flex_none()
             .debug_selector(|| "scan-hardware".into())
             .child(
                 Button::new("scan-hardware")
-                    .icon(IconName::Cpu)
+                    .icon(Icon::new(IconName::Cpu).text_color(accent))
                     .label(if facts.is_some() {
                         "Scan again"
                     } else {
                         "Scan local hardware"
                     })
                     .when(facts.is_some(), |button| button.outline().xsmall())
-                    .when(facts.is_none(), |button| button.primary())
+                    .when(facts.is_none(), |button| button.form_other(cx))
                     .disabled(scanning)
                     .on_click(cx.listener(|this, _, _, cx| this.scan_hardware(cx))),
             );
         let facts_found = facts.is_some();
         let hardware: AnyElement = match facts {
-            _ if scanning => h_flex()
-                .debug_selector(|| "scanning-hardware".into())
-                .gap_2()
-                .child(Spinner::new().small())
-                .child(label(
-                    "Scanning this device's processor, memory, graphics and disk…",
-                    cx,
-                ))
-                .into_any_element(),
+            _ if scanning => self.render_scanning(cx),
             None => v_flex()
-                .gap_2()
-                .items_start()
+                .gap_3()
                 .child(label(
                     "Pistachio looks at this device's processor, memory, graphics and free \
                      disk to suggest models that run well here. Nothing leaves this device.",
                     cx,
                 ))
-                .child(scan_button)
+                .child(h_flex().w_full().justify_center().child(scan_button))
                 .into_any_element(),
             Some(facts) => v_flex()
                 .gap_1p5()
@@ -469,17 +458,20 @@ impl ModelsDialog {
             if self.deploy == DeployStep::Suggestions {
                 self.render_suggestions(&models, cx)
             } else {
-                div()
-                    .debug_selector(|| "suggest-models".into())
+                h_flex()
+                    .w_full()
+                    .justify_center()
                     .child(
-                        Button::new("suggest-models")
-                            .primary()
-                            .icon(AppIcon::Sparkles)
-                            .label("Suggest models")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.deploy = DeployStep::Suggestions;
-                                cx.notify();
-                            })),
+                        div().debug_selector(|| "suggest-models".into()).child(
+                            Button::new("suggest-models")
+                                .form_other(cx)
+                                .icon(Icon::from(AppIcon::Sparkles).text_color(accent))
+                                .label("Suggest models")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.deploy = DeployStep::Suggestions;
+                                    cx.notify();
+                                })),
+                        ),
                     )
                     .into_any_element()
             }
@@ -488,6 +480,65 @@ impl ModelsDialog {
             .gap_4()
             .child(hardware)
             .children(suggest)
+            .into_any_element()
+    }
+
+    /// A bar that fills while the hardware is scanned, saying what is looked at.
+    fn render_scanning(&self, cx: &mut Context<Self>) -> AnyElement {
+        const STEPS: [&str; 5] = [
+            "Reading the processor…",
+            "Measuring the memory…",
+            "Looking for graphics…",
+            "Checking the free disk…",
+            "Looking for build tools…",
+        ];
+        let theme = cx.theme();
+        let (track, muted) = (theme.border, theme.muted_foreground);
+        let fill = crate::theme::palette(cx).accent;
+        v_flex()
+            .debug_selector(|| "scanning-hardware".into())
+            .w_full()
+            .gap_2()
+            .px_3()
+            .py_3()
+            .rounded_lg()
+            .border_1()
+            .border_color(track)
+            .child(div().w_full().with_animation(
+                ("scan-progress", self.scans),
+                Animation::new(crate::local_models::SCAN_TIME),
+                move |this, delta| {
+                    #[allow(
+                        clippy::cast_possible_truncation,
+                        clippy::cast_sign_loss,
+                        clippy::cast_precision_loss
+                    )]
+                    let step = ((delta * STEPS.len() as f32) as usize).min(STEPS.len() - 1);
+                    this.child(
+                        v_flex()
+                            .w_full()
+                            .gap_2()
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .gap_2()
+                                    .text_xs()
+                                    .child(Spinner::new().small().color(fill))
+                                    .child(div().flex_1().child(STEPS[step]))
+                                    .child(
+                                        div()
+                                            .text_color(muted)
+                                            .child(format!("{:.0}%", delta * 100.)),
+                                    ),
+                            )
+                            .child(
+                                div().w_full().h(px(6.)).rounded_full().bg(track).child(
+                                    div().h_full().w(relative(delta)).rounded_full().bg(fill),
+                                ),
+                            ),
+                    )
+                },
+            ))
             .into_any_element()
     }
 
@@ -652,8 +703,22 @@ impl ModelsDialog {
                 )
             });
         }
-        let engine = choice.engine.name.clone();
-        let checkpoint = choice.build.repo.clone();
+        let engine = match choice.engine.home_page() {
+            Some(url) => web_link(format!("{id}-engine"), choice.engine.name.clone(), url, cx)
+                .into_any_element(),
+            None => FadingText::new(choice.engine.name.clone()).into_any_element(),
+        };
+        let checkpoint = web_link(
+            format!("{id}-checkpoint"),
+            choice.build.repo.clone(),
+            choice.build.page(),
+            cx,
+        )
+        .debug_selector({
+            let id = id.clone();
+            move || format!("{id}-checkpoint")
+        })
+        .into_any_element();
         let quant = format!("{} {}", choice.build.quant, choice.build.format_label());
         let memory = format!("~{:.1} GB of RAM", choice.memory as f64 / 1e9);
         let tps = format!("~{:.0} tokens/s ({speed})", choice.tps);
@@ -662,7 +727,7 @@ impl ModelsDialog {
                 let (models, choice) = (models.clone(), choice.clone());
                 let name = choice.model.name.clone();
                 let button = if size > 0 {
-                    download_button(id.clone(), &name, size)
+                    download_and_run_button(id.clone(), &name, size)
                 } else {
                     Button::new(SharedString::from(id.clone()))
                         .label("Set up")
@@ -723,7 +788,7 @@ impl ModelsDialog {
                     .into_any_element()
             }
         };
-        let fact = |icon: Icon, name: &'static str, value: String| {
+        let fact = |icon: Icon, name: &'static str, value: AnyElement| {
             h_flex()
                 .flex_1()
                 .min_w_0()
@@ -734,9 +799,10 @@ impl ModelsDialog {
                         .flex_1()
                         .min_w_0()
                         .child(div().text_xs().text_color(muted).child(name))
-                        .child(div().text_xs().child(FadingText::new(value))),
+                        .child(div().text_xs().min_w_0().truncate().child(value)),
                 )
         };
+        let text = |value: String| FadingText::new(value).into_any_element();
         h_flex()
             .w_full()
             .gap_3()
@@ -752,13 +818,13 @@ impl ModelsDialog {
                         h_flex()
                             .gap_2()
                             .child(fact(AppIcon::Server.into(), "Inference engine", engine))
-                            .child(fact(AppIcon::Package.into(), "Quantization", quant)),
+                            .child(fact(AppIcon::Package.into(), "Quantization", text(quant))),
                     )
                     .child(
                         h_flex()
                             .gap_2()
-                            .child(fact(AppIcon::MemoryStick.into(), "Memory", memory))
-                            .child(fact(AppIcon::Gauge.into(), "Speed here", tps)),
+                            .child(fact(AppIcon::MemoryStick.into(), "Memory", text(memory)))
+                            .child(fact(AppIcon::Gauge.into(), "Speed here", text(tps))),
                     )
                     .child(fact(AppIcon::Link.into(), "Checkpoint", checkpoint))
                     .children((!notes.is_empty()).then(|| label(notes.join(" · "), cx))),

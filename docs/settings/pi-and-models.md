@@ -50,7 +50,9 @@ The servers and API keys in `models.json` on this computer, grouped by where the
 answers; click one to change it. The trash button removes it after asking: an API connection or
 a server on another device is only removed from `models.json`, and so is a server on this device
 that Pistachio did not set up (like Ollama). A model Pistachio downloaded and runs on this device
-is also stopped and deleted, with its engine unless another local model uses it. Sign-ins made
+is also stopped and deleted, with its engine unless another local model uses it. Such a model
+also has a play / stop button: play starts its engine and loads the model (the row says
+**Starting…** until it answers), stop ends it; its files stay. Sign-ins made
 with `/login` are not listed here.
 
 **Add models…** (also **Add or change models…** in the model menu of the message box) starts
@@ -64,17 +66,20 @@ Locally hosted model
   KoboldCpp on their usual ports. Any other server is connected by its port or address;
   Pistachio finds out whether it speaks OpenAI's, Anthropic's or Gemini's API.
 
+  Each choice opens a page of its own, and the back arrow returns to the one before.
+
   **Deploy new model** suggests models for this computer. **Scan local hardware** looks at the
-  processor, the memory, the graphics, the free disk and the build tools, and lists what it
-  found; nothing leaves the computer. **Suggest models** then offers up to three: **Fast**,
-  **Balanced** and **Most capable**, each faster and less capable than the next. Each shows the
+  processor, the memory, the graphics, the free disk and the build tools, with a progress bar
+  that says what it is looking at, and lists what it found; nothing leaves the computer.
+  **Suggest models** then offers up to three: **Fast**, **Balanced** and **Most capable**, each faster and less capable than the next. Each shows the
   inference engine that runs it best here, the checkpoint and its quantization, the memory it
-  takes and its speed here (measured or estimated): a
+  takes and its speed here (measured or estimated); the engine and the checkpoint link to their
+  pages. Each comes with a
   default engine that installs without any steps (llama.cpp, Rapid-MLX on Macs, Splash on newer
   Macs, BigMoeOnEdge for models larger than the memory) and, where one is clearly faster, a
-  specialized engine that is built on this computer (ik_llama.cpp, TurboFieldfare). The download
-  button says how much it is; pressing it shows exactly what is downloaded (the engine and the
-  model's files, their sizes and licenses) and asks first. Everything is pinned to a version and
+  specialized engine that is built on this computer (ik_llama.cpp, TurboFieldfare). The **Download and
+  run** button says how much it is; pressing it shows exactly what is downloaded (the engine and
+  the model's files, linked to their pages, with their sizes and licenses) and asks first. Everything is pinned to a version and
   checked against its SHA-256, and kept in `~/.pi/agent/pistachio/local-models`. Once it runs,
   the model is connected like any other server. It runs for this computer only, is started when
   a chat sends to it, and stops when Pistachio quits.
