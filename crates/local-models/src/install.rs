@@ -154,7 +154,7 @@ pub fn missing(root: &Path, choice: &Choice) -> Vec<Part> {
         };
         parts.push(Part {
             engine: false,
-            name: format!("{} ({})", choice.model.name, build.quant),
+            name: format!("{} · {}", choice.model.name, build.quant),
             note,
             size: build.size,
         });

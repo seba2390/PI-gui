@@ -18,6 +18,12 @@ All notable changes to PI-gui are listed here. The format follows
   connected like any server, is started when a chat sends to it (the message waits until it
   answers) and stops when Pistachio quits.
 
+### Fixed
+
+- A llama.cpp server is now added to `models.json` as `llama-cpp`, not `llama.cpp`: pi 1.5 has
+  a built-in provider with that ID, which took the entry's place, so sending to it failed with
+  "Provider is not configured: llama.cpp".
+
 ## [0.5.10] - 2026-11-27
 
 ### Added

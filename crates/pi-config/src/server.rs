@@ -868,6 +868,11 @@ pub fn error_message(body: &str) -> Option<String> {
     Some(line)
 }
 
+/// Providers pi has built in under these IDs (`llama.cpp` since pi 1.5). One in `models.json`
+/// with the same ID is taken over by pi's, which is configured on its own, so pi says the
+/// provider "is not configured" and nothing reaches the server.
+const PI_PROVIDERS: &[&str] = &["llama.cpp"];
+
 /// A provider ID for a new server: its program's name, else its host, made one word, and unlike
 /// the ones `taken`.
 pub fn provider_id(kind: Kind, base_url: &str, taken: &[&str]) -> String {
@@ -901,6 +906,8 @@ pub fn provider_id(kind: Kind, base_url: &str, taken: &[&str]) -> String {
     }
     let id = match id.trim_matches(['-', '.']) {
         "" => "server".to_owned(),
+        // pi's own provider of that name, which needs its own sign-in, would take its place.
+        id if PI_PROVIDERS.contains(&id) => id.replace('.', "-"),
         id => id.to_owned(),
     };
     let free = |id: &str| !taken.contains(&id);
@@ -1242,6 +1249,7 @@ mod tests {
         assert_eq!(id(Kind::Ollama, "http://localhost:11434/v1"), "ollama-2");
         assert_eq!(id(Kind::LmStudio, "http://localhost:1234/v1"), "lm-studio");
         assert_eq!(id(Kind::Other, "http://localhost:9/v1"), "local");
+        assert_eq!(id(Kind::LlamaCpp, "http://127.0.0.1:8080/v1"), "llama-cpp");
         assert_eq!(
             id(Kind::Vllm, "http://192.168.1.89:8888/v1"),
             "vllm-192.168.1.89"
