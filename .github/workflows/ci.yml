@@ -45,7 +45,11 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev \
             libx11-xcb-dev libxcb1-dev libfontconfig-dev libfreetype-dev libzstd-dev libasound2-dev
+      # Saved from main only: a pull request's cache serves only that pull request, and the
+      # 10 GB the repository has for caches is better kept for main's (which pull requests use).
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # sherpa-onnx-sys downloads its prebuilt libraries into target/sherpa-onnx-prebuilt and
       # skips the download whenever that folder's lib/ exists. rust-cache keeps the folder and
       # the build script's fingerprint but not the library files, so linking then fails. If
@@ -71,7 +75,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      # Saved from main only: a pull request's cache serves only that pull request, and the
+      # 10 GB the repository has for caches is better kept for main's (which pull requests use).
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # sherpa-onnx-sys downloads its prebuilt libraries into target/sherpa-onnx-prebuilt and
       # skips the download whenever that folder's lib/ exists. rust-cache keeps the folder and
       # the build script's fingerprint but not the library files, so linking then fails. If
