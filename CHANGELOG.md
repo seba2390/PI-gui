@@ -6,6 +6,42 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.5.6] - 2026-11-27
+
+### Added
+
+- Settings → Tools: the tools the model gets in chats and in Code sessions. At the top of each,
+  how much of the model's context the tools take with every message (about how many tokens, and
+  each tool's share in a bar). Each tool has a one-line summary, where it comes from and its size;
+  "What the model sees" opens exactly what pi tells the model (description, guidelines in the
+  system prompt, parameters). pi itself is asked, so your extensions' tools are listed too.
+- Switches on Settings → Tools: Python in chats (on by default), and pi's `grep`, `find`, `ls`
+  and `codemode` in Code sessions on this computer (off by default). The sandbox checks `grep`,
+  `find` and `ls` like `read`, and `codemode` scripts reach files only through those checked
+  tools.
+- The text Pistachio's own tools give the model (`python`, `web_search`, `web_fetch` and the
+  sandboxed `bash`) can be edited on Settings → Tools (Edit, under "What the model sees"); "Use
+  the original text" undoes it. It applies to conversations started afterwards.
+
+### Changed
+
+- Opening a conversation is faster: the model, thinking level, web search button and context
+  wheel in the message box show at once instead of after pi has started (about a third of a
+  second), from what pi said about the conversation last time or what its file selected.
+- Chats that used web search (and any conversation with a compaction, extension messages or
+  context edits) show their history at once too, read from the session file by pi's rules,
+  instead of waiting for pi.
+
+### Fixed
+
+- Switching to another conversation no longer shows an empty "How can I help?" for a frame
+  before its history.
+
+- Chats use Python for more than numbers: the model is told to run a short program for any small
+  job a program does more reliably than reasoning, such as counting letters or words, sorting or
+  reformatting text, regular expressions, JSON, dates and weekdays, number bases, or trying a
+  small algorithm on examples.
+
 ## [0.5.5] - 2026-11-26
 
 ### Added
@@ -689,7 +725,8 @@ chats, skills and model management. Changes since the last private build:
 - A corrupt `hosts.json` is kept as a backup.
 - A remembered terminal height can no longer squeeze out the chat.
 
-[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.5.5...HEAD
+[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.5.6...HEAD
+[0.5.6]: https://github.com/seba2390/pistachio/compare/v0.5.5...v0.5.6
 [0.5.5]: https://github.com/seba2390/pistachio/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/seba2390/pistachio/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/seba2390/pistachio/compare/v0.5.2...v0.5.3

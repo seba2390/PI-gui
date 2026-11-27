@@ -93,7 +93,7 @@ checks scriptable:
 - Dialogs: `add-host`, `manage-hosts`, `models`, `models-provider:<id>`, `models-server:<address>`,
   `edit-models`.
 - Skills page: `skills`, `new-skill`, `open-skill:<path>`; the Settings page: `settings`
-  (`settings-web`, `settings-speech`, `settings-names`, `settings-documents` and `settings-security` open those pages, `settings-git` its Git and GitHub section; after `settings-web`,
+  (`settings-web`, `settings-speech`, `settings-names`, `settings-documents`, `settings-security` and `settings-tools` open those pages, `settings-git` its Git and GitHub section; after `settings-web`,
   `web-advanced` opens its advanced sections,
   `searxng-setup` asks whether to download SearXNG and `searxng-get` downloads and runs it); `type-name:<text>` plays the
   sidebar's typing animation for the open session 2.5 s after start (nothing is saved).

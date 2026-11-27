@@ -23,6 +23,12 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   typed while pi starts, compacts or is busy sending are listed above the input as “Waiting to
   send”, each with a cancel button. A message you have not sent stays with its session while the app
   runs, also when you open another one.
+- Opening a conversation shows it at once, without waiting for pi to start (a few hundred
+  milliseconds): its history is read from the session file following pi's rules (compactions,
+  extension messages such as web search's, context edits), and the composer shows the model,
+  thinking level, web search mode and context use pi had for it last time (remembered in
+  `~/.pi/agent/pistachio/recall.json`) or, for one pi never opened here, what its file
+  selected. pi's own answer replaces anything that differs.
 - If pi stops (a crash or a failed start), the chat offers **Restart pi** on the same session;
   anything not yet sent, or refused by pi, goes back into the message box.
 - pi gets your login shell's environment (API keys, proxies, cloud settings), also when the app is
@@ -41,7 +47,9 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
     see [Documents](#documents)), and shows as a small page above it; `!` shell commands are
     disabled.
   - **Python** (Chat): the model works numbers out in Python instead of estimating them (a sum,
-    a logarithm, a series, statistics). The code runs in [Monty](https://github.com/pydantic/monty),
+    a logarithm, a series, statistics), and uses it for other small jobs a program does more
+    reliably than reasoning: counting letters or words, sorting and reformatting text, regular
+    expressions, JSON, dates and weekdays, number bases, or trying a small algorithm on examples. The code runs in [Monty](https://github.com/pydantic/monty),
     a Python interpreter written in Rust for code a model writes, started fresh for each call
     (in milliseconds): it has no files, network, environment or programs, only the computation,
     with `math`, `decimal`, `statistics` and more of the standard library, and stops after 5
@@ -511,6 +519,25 @@ the Sandboxing & Security page light up under the pointer and scroll by themselv
   sites), and what the agent may do with your git and GitHub logins without asking (Git and
   GitHub). Also which project files pi loads: pi's `defaultProjectTrust` and the saved
   decisions in its `trust.json`, which can be removed.
+- **Tools:** the tools the model gets in chats and in Code sessions on this computer. Each mode
+  starts with how much of the model's context its tools take with every message: about how many
+  tokens (the characters of each tool's description, parameter schema and system-prompt
+  guidelines, at about 4 characters a token; in chats also the total with web search on), and a
+  bar with each tool's share. Each tool has a one-line summary, where it comes from (pi, Pistachio
+  or an extension) and its size; "What the model sees" opens, word for word, what pi tells the
+  model. In chats it also says when web search's tools are offered (while web search is on).
+  Switches turn Python on or off in chats (on by default; the same as under General) and pi's
+  `grep`, `find`, `ls` and `codemode` in Code sessions on this computer (off by default; passed
+  to pi as `--tools +grep,…`, so the terminal `pi` is not affected). The sandbox checks `grep`,
+  `find` and `ls` like `read` (what they may see, and no searching into hidden folders), and
+  `codemode`'s scripts reach files and commands only through the session's tools, which the
+  same checks cover. The text Pistachio's own tools give the model (`python`, `web_search`,
+  `web_fetch`, the sandboxed `bash`) can be edited there: **Edit** turns the description and
+  guidelines into fields, saved as you type to `~/.pi/agent/pistachio/tools/texts.json`, which
+  the tools read as pi starts (`PISTACHIO_TOOL_TEXTS`); **Use the original text** undoes it.
+  Changes apply to conversations started afterwards. pi is asked for them when the page is shown: a pi that keeps
+  no session, started like a conversation of each mode, reports them through a small extension
+  (`~/.pi/agent/pistachio/tools/tools-probe.ts`) and quits.
 
 The app's own settings live in `~/.pi/agent/pistachio/settings.json`.
 

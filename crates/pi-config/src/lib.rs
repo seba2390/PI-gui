@@ -1,5 +1,6 @@
 //! Editing pi's configuration files for the GUI: `models.json` (custom providers and models,
-//! for the Models dialog), skills ([`skills`]) and the project trust store ([`trust`]).
+//! for the Models dialog), skills ([`skills`]), the project trust store ([`trust`]) and the
+//! tools pi offers ([`tools`]).
 //!
 //! The file is kept as a JSON value with its key order preserved, so adding a model changes
 //! only what was added. See pi's `docs/models.md` and `docs/models-configuration.md` for the
@@ -10,6 +11,7 @@ pub mod providers;
 pub mod server;
 pub mod settings;
 pub mod skills;
+pub mod tools;
 pub mod trust;
 
 use serde_json::{Map, Value, json};

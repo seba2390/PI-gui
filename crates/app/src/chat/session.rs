@@ -23,6 +23,7 @@ use pi_sessions::prompt;
 use transcript::{BashStatus, InFlight, NoticeKind, RunStatus, Transcript};
 
 use super::queued::QueuedPrompts;
+use super::recall::{Recall, Snapshot};
 use crate::config::{AppConfig, ChildEnv};
 
 /// Where the pi process is in its life.
@@ -230,6 +231,8 @@ pub struct PiSession {
     _event_pump: Task<()>,
     /// The resumed session's history as read from its file, shown until pi answers.
     preview: Preview,
+    /// What the composer shows before pi answers (see [`crate::chat::recall`]).
+    early: Early,
     _preview_task: Task<()>,
     /// Where automatic naming is (see [`crate::naming`]).
     naming: Naming,
@@ -237,6 +240,26 @@ pub struct PiSession {
     /// Starts pi once the login shell's environment is known and, on a host, its settings for
     /// this computer's models are written.
     _start_task: Task<()>,
+}
+
+/// Extension statuses the composer shows, remembered with the conversation (see
+/// [`crate::chat::recall`]).
+const RECALLED_STATUS: [&str; 2] = [deepsearch::STATUS_KEY, deepsearch::EFFORT_KEY];
+
+/// Session files up to this size are read as the conversation opens (a few milliseconds),
+/// longer ones in the background.
+const SYNC_PREVIEW_BYTES: u64 = 4 * 1024 * 1024;
+
+/// What the composer shows before pi has answered.
+#[derive(Default)]
+struct Early {
+    /// The model and thinking level pi had for this conversation last time, or that its file
+    /// selected.
+    shown: Option<(Option<Model>, Option<ThinkingLevel>)>,
+    /// `shown` is what pi said about this very conversation.
+    exact: bool,
+    /// pi reported the web search statuses itself.
+    web_reported: bool,
 }
 
 /// The model (`provider`, `id`) and thinking level a side chat takes over.
@@ -271,6 +294,8 @@ enum Naming {
 enum Preview {
     #[default]
     None,
+    /// Being read in the background (a long file).
+    Reading,
     Shown,
     /// pi's history arrived: a late preview must not replace it.
     Superseded,
@@ -341,11 +366,13 @@ impl PiSession {
             inherited: None,
             _event_pump: Task::ready(()),
             preview: Preview::None,
+            early: Early::default(),
             _preview_task: Task::ready(()),
             naming: Naming::NotYet,
             _naming_task: Task::ready(()),
             _start_task: Task::ready(()),
         };
+        this.recall_early(cx);
         this.show_preview(cx);
         match remote_env {
             Ok(env) if config.child_env.ready().is_some() => this.start(&env, cx),
@@ -371,13 +398,16 @@ impl PiSession {
     fn start(&mut self, remote_env: &[(String, String)], cx: &mut Context<Self>) {
         let config = cx.global::<AppConfig>().clone();
         let saved = saved_host(self.host.as_ref(), cx);
-        let (options, _) = spawn_options(
+        let (mut options, mode) = spawn_options(
             &config,
             &self.cwd,
             self.resumed_from.as_deref(),
             saved.as_ref(),
             remote_env,
         );
+        if mode == Mode::Code && saved.is_none() {
+            optional_tool_args(&code_tools(cx), &mut options);
+        }
         self.start_process(&options, cx);
     }
 
@@ -468,6 +498,7 @@ impl PiSession {
             inherited: None,
             _event_pump: Task::ready(()),
             preview: Preview::None,
+            early: Early::default(),
             _preview_task: Task::ready(()),
             naming: Naming::NotYet,
             _naming_task: Task::ready(()),
@@ -573,7 +604,11 @@ impl PiSession {
     }
 
     pub fn model(&self) -> Option<&Model> {
-        self.state.as_ref().and_then(|state| state.model.as_ref())
+        match (&self.state, &self.early.shown) {
+            (Some(state), _) => state.model.as_ref(),
+            (None, Some((model, _))) => model.as_ref(),
+            (None, None) => None,
+        }
     }
 
     pub fn models(&self) -> &[Model] {
@@ -585,7 +620,8 @@ impl PiSession {
         let level = self
             .transcript
             .thinking_level()
-            .or_else(|| self.state.as_ref().map(|state| state.thinking_level))?;
+            .or_else(|| self.state.as_ref().map(|state| state.thinking_level))
+            .or_else(|| self.early.shown.as_ref().and_then(|(_, level)| *level))?;
         Some(self.shown_thinking_level(level))
     }
 
@@ -1155,6 +1191,7 @@ impl PiSession {
                         if let Ok(state) = state {
                             this.state = Some(state);
                         }
+                        this.remember(false, cx);
                     }
                     Err(error) => this.report(&error, cx),
                 }
@@ -1205,6 +1242,9 @@ impl PiSession {
     pub fn set_thinking_level(&mut self, level: ThinkingLevel, cx: &mut Context<Self>) {
         if let Some(state) = &mut self.state {
             state.thinking_level = level;
+            self.remember(false, cx);
+        } else if let Some((_, early)) = &mut self.early.shown {
+            *early = Some(level);
         }
         cx.notify();
         self.run(cx, async move |client| {
@@ -1610,6 +1650,7 @@ impl PiSession {
                 if let Ok(state) = state {
                     this.state = Some(state);
                 }
+                this.remember(false, cx);
                 cx.emit(SessionEvent::MetaChanged);
                 cx.notify();
             });
@@ -1776,6 +1817,105 @@ impl PiSession {
         self.push_notice(NoticeKind::Error, text, cx);
     }
 
+    /// Shows what pi said about this conversation's composer last time (its model, thinking
+    /// level, context usage, web search mode, its folder's commands) until pi answers again.
+    fn recall_early(&mut self, cx: &mut Context<Self>) {
+        if self.host.is_some() {
+            return;
+        }
+        let Some(early) = cx
+            .try_global::<Recall>()
+            .and_then(|recall| recall.early(&self.cwd, self.resumed_from.as_deref()))
+        else {
+            return;
+        };
+        self.models = early.models;
+        self.commands = early.commands;
+        // A conversation pi never answered for here: its folder's defaults until the preview
+        // has read what the conversation itself selected (see `guess_early`).
+        let exact = early.snapshot.is_some();
+        let Some(snapshot) = early.snapshot.or(early.defaults) else {
+            return;
+        };
+        self.thinking_levels = snapshot.thinking_levels;
+        self.stats = snapshot.stats.filter(|_| exact);
+        self.extension_status = snapshot.status;
+        self.early.shown = Some((
+            snapshot
+                .model
+                .filter(|_| exact || self.resumed_from.is_none()),
+            snapshot.thinking_level,
+        ));
+        self.early.exact = exact;
+    }
+
+    /// For a resumed conversation pi never answered for here: the model, thinking level and
+    /// web search mode its file selected, as pi restores them (a model only when pi listed
+    /// it before, so it is known to be usable).
+    fn guess_early(&mut self, selection: &pi_sessions::branch::Selection) {
+        if self.early.exact || self.state.is_some() {
+            return;
+        }
+        if self.mode == Mode::Chat && !self.early.web_reported {
+            self.extension_status = web_status(&selection.custom, &self.extension_status);
+        }
+        let model = selection.model.as_ref().and_then(|(provider, id)| {
+            self.models
+                .iter()
+                .find(|model| model.provider == *provider && model.id == *id)
+                .cloned()
+        });
+        let Some(model) = model else {
+            return;
+        };
+        let defaults = self.early.shown.as_ref().and_then(|(_, level)| *level);
+        let level = selection
+            .thinking_level
+            .as_deref()
+            .and_then(|level| serde_json::from_value(serde_json::json!(level)).ok())
+            .or(defaults)
+            .map(|level| {
+                if model.reasoning {
+                    level
+                } else {
+                    ThinkingLevel::Off
+                }
+            });
+        self.early.shown = Some((Some(model), level));
+    }
+
+    /// Remembers what pi says about this conversation's composer, to show it at once when
+    /// the conversation (or, when `new`, a new one in this folder) is opened again.
+    fn remember(&self, new: bool, cx: &mut Context<Self>) {
+        let (None, Some(state)) = (&self.host, &self.state) else {
+            return;
+        };
+        let snapshot = Snapshot {
+            model: state.model.clone(),
+            thinking_level: Some(state.thinking_level),
+            thinking_levels: self.thinking_levels.clone(),
+            stats: self.stats.clone(),
+            status: self
+                .extension_status
+                .iter()
+                .filter(|(key, _)| RECALLED_STATUS.contains(&key.as_str()))
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+        };
+        // A new conversation's file has nothing in it until the first message.
+        let file = self.session_file().filter(|_| !self.is_new());
+        Recall::update(cx, |recall| {
+            recall.remember(
+                &self.cwd,
+                file.as_deref(),
+                new,
+                &self.models,
+                &self.commands,
+                snapshot,
+            )
+        });
+    }
+
     /// Shows a resumed local session's history right away, read from its file on the
     /// background executor, instead of waiting a second or so for pi to start and send it.
     /// pi's history replaces the preview when it arrives, unless they are the same.
@@ -1783,28 +1923,62 @@ impl PiSession {
         let (None, Some(file)) = (&self.host, self.resumed_from.clone()) else {
             return;
         };
+        // Read right away when it takes a few milliseconds, so the conversation's first
+        // frame already shows its history: read later, that frame would be empty.
+        let small = std::fs::metadata(&file).is_ok_and(|meta| meta.len() <= SYNC_PREVIEW_BYTES);
+        if small {
+            let (messages, selection) = read_preview(&file);
+            self.apply_preview(messages, selection, cx);
+            return;
+        }
+        self.preview = Preview::Reading;
         self._preview_task = cx.spawn(async move |this, cx| {
-            let messages = cx
+            let (messages, selection) = cx
                 .background_executor()
                 .spawn(async move { read_preview(&file) })
                 .await;
-            let Some(messages) = messages else {
-                return;
-            };
             let _ = this.update(cx, |this, cx| {
-                if this.preview != Preview::None {
-                    return;
+                if this.preview == Preview::Reading {
+                    this.preview = Preview::None;
                 }
-                let notices = this.notices();
-                this.transcript = Transcript::from_messages(&messages);
-                for notice in notices {
-                    this.transcript.push_notice(notice.kind, notice.text);
-                }
-                this.preview = Preview::Shown;
+                this.apply_preview(messages, selection, cx);
+                cx.emit(SessionEvent::MetaChanged);
                 cx.emit(SessionEvent::Reloaded);
                 cx.notify();
             });
         });
+    }
+
+    fn apply_preview(
+        &mut self,
+        messages: Option<Vec<AgentMessage>>,
+        selection: Option<pi_sessions::branch::Selection>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(selection) = selection {
+            self.guess_early(&selection);
+        }
+        let Some(messages) = messages else {
+            return;
+        };
+        if self.preview != Preview::None {
+            return;
+        }
+        let notices = self.notices();
+        self.transcript = Transcript::from_messages(&messages);
+        for notice in notices {
+            self.transcript.push_notice(notice.kind, notice.text);
+        }
+        self.preview = Preview::Shown;
+        cx.notify();
+    }
+
+    /// Whether this is a resumed conversation whose history has not arrived yet (it shows
+    /// nothing rather than a new conversation's greeting).
+    pub fn loads_history(&self) -> bool {
+        self.resumed_from.is_some()
+            && self.transcript.items().is_empty()
+            && matches!(self.lifecycle, Lifecycle::Starting)
     }
 
     /// Notices in the transcript (e.g. an extension that failed to load while pi started).
@@ -1889,6 +2063,8 @@ impl PiSession {
                         name.or_else(|| this.state.as_ref().and_then(|s| s.session_name.clone())),
                     );
                 }
+                this.early.shown = None;
+                this.remember(!resumed, cx);
                 this.flush_outbox(cx);
                 this.report_busy(cx);
                 if this.lifecycle == Lifecycle::Ready {
@@ -1940,6 +2116,7 @@ impl PiSession {
                 if let Ok(state) = state {
                     this.state = Some(state);
                 }
+                this.remember(false, cx);
                 if this.session_file() != old_file {
                     cx.emit(SessionEvent::SessionFileChanged);
                 }
@@ -2038,13 +2215,21 @@ impl PiSession {
             ExtensionUiMethod::SetStatus {
                 status_key,
                 status_text,
-            } => match status_text {
-                Some(text) => drop(
-                    self.extension_status
-                        .insert(status_key.clone(), text.clone()),
-                ),
-                None => drop(self.extension_status.remove(status_key)),
-            },
+            } => {
+                match status_text {
+                    Some(text) => drop(
+                        self.extension_status
+                            .insert(status_key.clone(), text.clone()),
+                    ),
+                    None => drop(self.extension_status.remove(status_key)),
+                }
+                if RECALLED_STATUS.contains(&status_key.as_str()) {
+                    self.early.web_reported = true;
+                    if self.state.is_some() {
+                        self.remember(false, cx);
+                    }
+                }
+            }
             ExtensionUiMethod::SetWidget {
                 widget_key,
                 widget_lines,
@@ -2110,13 +2295,97 @@ fn saved_host(host: Option<&HostId>, cx: &gpui_kit::App) -> Option<remote::Saved
 /// On a remote `host`, pi runs there through the host's shared ssh connection, in `cwd` on the
 /// remote, via the login shell (see [`remote::Ssh::command`]); remote sessions are always Code.
 /// The active branch's messages from a session file, or `None` when pi has to rebuild them
-/// (see [`pi_sessions::branch`]) or the file can't be read.
-fn read_preview(file: &Path) -> Option<Vec<AgentMessage>> {
-    let text = std::fs::read_to_string(file).ok()?;
-    pi_sessions::branch::active_messages(&text)?
-        .into_iter()
-        .map(|message| serde_json::from_value(message).ok())
-        .collect()
+/// (see [`pi_sessions::branch`]), and what the branch selected; both `None` when the file
+/// can't be read.
+fn read_preview(
+    file: &Path,
+) -> (
+    Option<Vec<AgentMessage>>,
+    Option<pi_sessions::branch::Selection>,
+) {
+    let Some(branch) = std::fs::read_to_string(file)
+        .ok()
+        .and_then(|text| pi_sessions::branch::Branch::parse(&text))
+    else {
+        return (None, None);
+    };
+    let messages = branch.messages().and_then(|messages| {
+        messages
+            .into_iter()
+            .map(|message| serde_json::from_value(message).ok())
+            .collect()
+    });
+    let mut selection = branch.selection(deepsearch::STATUS_KEY);
+    // Without a level of its own, pi resumes a conversation at its settings' default.
+    if selection.thinking_level.is_none() {
+        let default = pi_sessions::agent_dir()
+            .and_then(|dir| std::fs::read_to_string(dir.join("settings.json")).ok())
+            .and_then(|text| pi_config::settings::startup_defaults(&text).ok())
+            .and_then(|defaults| defaults.thinking_level);
+        selection.thinking_level = Some(default.unwrap_or_else(|| "medium".to_owned()));
+    }
+    (messages, Some(selection))
+}
+
+/// The web search statuses the extension sets for a chat with these entries of its own, as
+/// it reads them when the chat is resumed, starting from `defaults` (a new chat's).
+fn web_status(
+    entries: &[serde_json::Value],
+    defaults: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let get = |key: &str| defaults.get(key).map(String::as_str);
+    let mut mode = get(deepsearch::STATUS_KEY)
+        .and_then(WebMode::parse)
+        .unwrap_or(WebMode::Off);
+    let mut effort = get(deepsearch::EFFORT_KEY)
+        .and_then(Effort::parse)
+        .unwrap_or_default();
+    for data in entries {
+        if let Some(chosen) = data["mode"].as_str().and_then(WebMode::parse) {
+            mode = chosen;
+        } else if let Some(enabled) = data["enabled"].as_bool() {
+            // Chats from before the modes existed stored `enabled`.
+            mode = if enabled { WebMode::Deep } else { WebMode::Off };
+        }
+        if let Some(chosen) = data["effort"].as_str().and_then(Effort::parse) {
+            effort = chosen;
+        }
+    }
+    let mut status = BTreeMap::new();
+    if mode != WebMode::Off {
+        status.insert(deepsearch::STATUS_KEY.to_owned(), mode.as_str().to_owned());
+    }
+    if mode == WebMode::Deep {
+        status.insert(
+            deepsearch::EFFORT_KEY.to_owned(),
+            effort.as_str().to_owned(),
+        );
+    }
+    status
+}
+
+/// pi's options for a conversation in `mode` on this computer that keeps no session file:
+/// the same tools and extensions as a real one, to ask pi about them (Settings → Tools). A
+/// Code one runs in pi's agent folder, so no project adds its own.
+pub(crate) fn probe_options(config: &AppConfig, mode: Mode) -> SpawnOptions {
+    let cwd = match mode {
+        Mode::Chat => {
+            if let Err(error) = std::fs::create_dir_all(&config.chat_dir) {
+                log::warn!(
+                    "could not create the chat folder {}: {error}",
+                    config.chat_dir.display()
+                );
+            }
+            config.chat_dir.clone()
+        }
+        Mode::Code => pi_sessions::agent_dir()
+            .filter(|dir| dir.is_dir())
+            .or_else(|| config.home.clone())
+            .unwrap_or_else(std::env::temp_dir),
+    };
+    let (mut options, _) = spawn_options(config, &cwd, None, None, &[]);
+    options.extra_args.push("--no-session".into());
+    options
 }
 
 fn spawn_options(
@@ -2136,6 +2405,11 @@ fn spawn_options(
     options.session = session_file.map(Path::to_path_buf);
     let Some(host) = host else {
         let mode = config.mode_of(cwd);
+        // Pistachio's own tools read the text written for the model in Settings → Tools.
+        options.env.push((
+            pi_config::tools::TEXTS_ENV.into(),
+            config.tools_dir.join(pi_config::tools::TEXTS_FILE).into(),
+        ));
         if mode == Mode::Chat {
             chat_args(config, &mut options);
         } else {
@@ -2159,6 +2433,29 @@ fn spawn_options(
     // The local ssh client just needs some existing folder to run in.
     options.cwd = config.home.clone().unwrap_or_else(std::env::temp_dir);
     (options, Mode::Code)
+}
+
+/// The optional Code tools turned on in Settings → Tools (see
+/// [`pi_config::tools::OPTIONAL_CODE_TOOLS`]).
+pub(crate) fn code_tools(cx: &gpui_kit::App) -> Vec<String> {
+    cx.try_global::<crate::settings::AppSettings>()
+        .map_or_else(Vec::new, |settings| settings.code_tools.clone())
+}
+
+/// `--tools +grep,+find` for `tools` (pi adds them to its default tools); only the optional
+/// ones are passed. Code sessions on this computer only: there the sandbox checks them, like
+/// `read`.
+pub(crate) fn optional_tool_args(tools: &[String], options: &mut SpawnOptions) {
+    let added = tools
+        .iter()
+        .filter(|tool| pi_config::tools::OPTIONAL_CODE_TOOLS.contains(&tool.as_str()))
+        .map(|tool| format!("+{tool}"))
+        .collect::<Vec<_>>();
+    if !added.is_empty() {
+        options
+            .extra_args
+            .extend(["--tools".into(), added.join(",").into()]);
+    }
 }
 
 /// `--skill` for each skill that comes with the app (see [`crate::builtin_skills`]). Chats
@@ -2333,6 +2630,76 @@ mod tests {
         assert_eq!(super::fork_entry(&messages, 3, "x"), None);
     }
 
+    /// The optional Code tools turned on reach pi as additions to its defaults; others are not
+    /// passed.
+    #[test]
+    fn optional_code_tools_are_added_to_pis_defaults() {
+        let mut options = pi_rpc::SpawnOptions::new("/tmp");
+        super::optional_tool_args(&[], &mut options);
+        assert!(options.extra_args.is_empty(), "nothing when none are on");
+        let tools = ["grep", "codemode", "rm-rf-tool"].map(str::to_owned);
+        super::optional_tool_args(&tools, &mut options);
+        assert_eq!(
+            options.extra_args,
+            [
+                std::ffi::OsString::from("--tools"),
+                std::ffi::OsString::from("+grep,+codemode")
+            ]
+        );
+    }
+
+    /// Every local pi learns where the text written for the model in Settings → Tools is.
+    #[test]
+    fn local_sessions_get_the_tool_texts() {
+        let config = AppConfig::for_tests("pi".into());
+        let (options, _) = super::spawn_options(&config, &config.chat_dir, None, None, &[]);
+        let texts = config.tools_dir.join(pi_config::tools::TEXTS_FILE);
+        assert!(
+            options
+                .env
+                .contains(&(pi_config::tools::TEXTS_ENV.into(), texts.into()))
+        );
+    }
+
+    /// A resumed chat's web search mode, read from its file like the extension reads it.
+    #[test]
+    fn web_status_follows_the_extension() {
+        use serde_json::json;
+        use std::collections::BTreeMap;
+        let (mode, effort) = (deepsearch::STATUS_KEY, deepsearch::EFFORT_KEY);
+        let defaults = BTreeMap::from([(mode.to_owned(), "search".to_owned())]);
+        assert_eq!(
+            super::web_status(&[], &defaults),
+            defaults,
+            "the default mode"
+        );
+        assert_eq!(
+            super::web_status(&[json!({"mode": "off", "effort": "max"})], &defaults),
+            BTreeMap::new()
+        );
+        assert_eq!(
+            super::web_status(
+                &[
+                    json!({"mode": "deep", "effort": "max"}),
+                    json!({"effort": "light"})
+                ],
+                &BTreeMap::new()
+            ),
+            BTreeMap::from([
+                (mode.to_owned(), "deep".to_owned()),
+                (effort.to_owned(), "light".to_owned())
+            ])
+        );
+        // Chats from before the modes stored `enabled`.
+        assert_eq!(
+            super::web_status(&[json!({"enabled": true})], &BTreeMap::new()),
+            BTreeMap::from([
+                (mode.to_owned(), "deep".to_owned()),
+                (effort.to_owned(), "standard".to_owned())
+            ])
+        );
+    }
+
     #[test]
     fn chat_sessions_launch_with_only_web_and_python_tools() {
         let config = AppConfig::for_tests("pi".into());
@@ -2468,7 +2835,7 @@ mod tests {
             if path.extension().is_none_or(|ext| ext != "jsonl") {
                 continue;
             }
-            let Some(preview) = super::read_preview(&path) else {
+            let (Some(preview), _) = super::read_preview(&path) else {
                 left_to_pi += 1;
                 continue;
             };

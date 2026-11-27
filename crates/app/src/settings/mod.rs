@@ -8,6 +8,7 @@ mod documents;
 mod local_search;
 mod models;
 mod security;
+mod tools;
 pub mod view;
 mod web_advanced;
 
@@ -145,6 +146,9 @@ pub struct AppSettings {
     pub namer: crate::naming::Namer,
     /// The local model that names conversations (a `naming::catalog` id).
     pub naming_model: String,
+    /// pi's optional tools turned on in Code sessions on this computer (Settings → Tools; see
+    /// `pi_config::tools::OPTIONAL_CODE_TOOLS`). None by default.
+    pub code_tools: Vec<String>,
     /// Settings this version doesn't know (a newer one wrote them), kept for the next save.
     #[serde(flatten)]
     pub unknown: serde_json::Map<String, serde_json::Value>,
@@ -172,6 +176,7 @@ impl Default for AppSettings {
             auto_names: false,
             namer: crate::naming::Namer::default(),
             naming_model: crate::naming::catalog::DEFAULT_MODEL.to_owned(),
+            code_tools: Vec::new(),
             unknown: serde_json::Map::new(),
         }
     }
