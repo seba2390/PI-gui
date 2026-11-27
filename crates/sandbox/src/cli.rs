@@ -438,16 +438,14 @@ fn gate(dir: &Path, args: &[OsString]) -> i32 {
                     .clone()
                     .or_else(|| plan.account.clone())
                     .or_else(|| (plan.accounts.len() == 1).then(|| plan.accounts[0].clone()));
+                // Account names stay out of what is printed (it goes back to the model).
                 let Some(account) = chosen.filter(|account| plan.accounts.contains(account)) else {
-                    eprintln!(
-                        "[Pistachio] Which GitHub account to use wasn't chosen ({}).",
-                        plan.accounts.join(", ")
-                    );
+                    eprintln!("[Pistachio] Which GitHub account to use wasn't chosen.");
                     return 2;
                 };
                 let host = plan.target.split('/').next().unwrap_or("github.com");
                 let Some(token) = crate::gate::gh::token(host, &account) else {
-                    eprintln!("[Pistachio] gh has no login for {account} on {host}.");
+                    eprintln!("[Pistachio] gh has no login for the chosen account on {host}.");
                     return 1;
                 };
                 if host == "github.com" {

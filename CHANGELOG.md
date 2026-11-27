@@ -30,6 +30,8 @@ All notable changes to PI-gui are listed here. The format follows
 
 ### Fixed
 
+- The gate's error messages about which GitHub account to use no longer name the accounts (they
+  go back to the model).
 - A push through the gate uploads the commits' LFS files first, as git-lfs's own hook does (the
   gate runs git with hooks off, so they were left behind).
 - The gate's `gh` works with older gh versions, such as Ubuntu's own package, which have no
