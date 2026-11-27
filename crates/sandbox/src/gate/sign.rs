@@ -41,6 +41,7 @@ fn gpg(request: &Request) -> Result<Option<Plan>, String> {
         stdin: Some(payload),
         accounts: Vec::new(),
         account: None,
+        repo: None,
     }))
 }
 
@@ -112,6 +113,7 @@ fn ssh(request: &Request) -> Result<Option<Plan>, String> {
         stdin: None,
         accounts: Vec::new(),
         account: None,
+        repo: None,
     }))
 }
 

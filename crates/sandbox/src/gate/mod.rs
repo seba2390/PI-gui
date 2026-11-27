@@ -140,6 +140,28 @@ pub struct Plan {
     /// The account a rule chose.
     #[serde(default)]
     pub account: Option<String>,
+    /// The repository the gate checked, which git is then made to use ([`command`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<Pinned>,
+}
+
+/// A repository git is held to: `GIT_DIR` and `GIT_WORK_TREE`. Without them git looks for its
+/// repository itself and can find another one than the gate checked: a subfolder that is a bare
+/// repository, or a broken `.git` it skips on its way up.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Pinned {
+    pub git_dir: PathBuf,
+    pub work_tree: PathBuf,
+}
+
+impl Plan {
+    /// Makes git use `repo`, the one whose settings were checked.
+    pub fn pin(&mut self, repo: &config::Repo) {
+        self.repo = Some(Pinned {
+            git_dir: repo.git_dir.clone(),
+            work_tree: repo.top.clone(),
+        });
+    }
 }
 
 /// The gate's answer to a wrapper: run it in the sandbox as usual, ask the user, or refuse.
@@ -229,6 +251,7 @@ fn site_plan(request: &Request) -> Option<Plan> {
         stdin: None,
         accounts: Vec::new(),
         account: None,
+        repo: None,
     })
 }
 
@@ -313,6 +336,8 @@ pub fn hardened_env(hooks: &Path) -> Vec<(String, String)> {
         ("protocol.ext.allow", "never".to_owned()),
         ("protocol.file.allow", "never".to_owned()),
         ("submodule.recurse", "false".to_owned()),
+        // A folder that is a bare repository is not taken for one (only with `GIT_DIR`).
+        ("safe.bareRepository", "explicit".to_owned()),
     ];
     let mut env = vec![("GIT_CONFIG_COUNT".to_owned(), settings.len().to_string())];
     for (index, (key, value)) in settings.into_iter().enumerate() {
@@ -331,7 +356,8 @@ pub fn hardened_env(hooks: &Path) -> Vec<(String, String)> {
 }
 
 /// The command for `plan`, outside the sandbox, with [`hardened_env`]. Git's own variables from
-/// this process's environment are dropped (a repository or folder they name would be obeyed).
+/// this process's environment are dropped (a repository or folder they name would be obeyed), and
+/// git is held to the repository the gate checked ([`Plan::repo`]).
 pub fn command(plan: &Plan, hooks: &Path) -> Command {
     let mut command = Command::new(&plan.program);
     command.args(&plan.args).current_dir(&plan.cwd);
@@ -342,13 +368,18 @@ pub fn command(plan: &Plan, hooks: &Path) -> Command {
         }
     }
     command.envs(hardened_env(hooks));
+    if let Some(repo) = &plan.repo {
+        command
+            .env("GIT_DIR", &repo.git_dir)
+            .env("GIT_WORK_TREE", &repo.work_tree);
+    }
     command
 }
 
 /// Output of a quick git command outside the sandbox (counting commits for the question), or
 /// `None`.
 pub(crate) fn git_output(repo: &Path, args: &[&str], hooks: &Path) -> Option<String> {
-    let plan = Plan {
+    let mut plan = Plan {
         title: String::new(),
         details: Vec::new(),
         warnings: Vec::new(),
@@ -361,7 +392,11 @@ pub(crate) fn git_output(repo: &Path, args: &[&str], hooks: &Path) -> Option<Str
         stdin: None,
         accounts: Vec::new(),
         account: None,
+        repo: None,
     };
+    if let Some(found) = config::Repo::find(repo) {
+        plan.pin(&found);
+    }
     let output = command(&plan, hooks)
         .stdin(std::process::Stdio::null())
         .output()
@@ -504,6 +539,7 @@ mod tests {
             stdin: None,
             accounts: Vec::new(),
             account: None,
+            repo: None,
         };
         let request = Request {
             tool: "git".into(),
@@ -568,6 +604,7 @@ mod tests {
             stdin: None,
             accounts: vec!["me".into(), "me-at-work".into()],
             account: None,
+            repo: None,
         };
         let rule = matching_rule(&plan, &request, &settings, None).expect("allowed");
         assert_eq!(rule.account.as_deref(), Some("me-at-work"));
@@ -612,6 +649,8 @@ mod tests {
         assert_eq!(get("GIT_CONFIG_KEY_0"), Some("core.hooksPath"));
         assert_eq!(get("GIT_CONFIG_VALUE_0"), Some("/tmp/none"));
         assert_eq!(get("GIT_TERMINAL_PROMPT"), Some("0"));
-        assert_eq!(get("GIT_CONFIG_COUNT"), Some("5"));
+        assert_eq!(get("GIT_CONFIG_COUNT"), Some("6"));
+        assert_eq!(get("GIT_CONFIG_KEY_5"), Some("safe.bareRepository"));
+        assert_eq!(get("GIT_CONFIG_VALUE_5"), Some("explicit"));
     }
 }

@@ -79,7 +79,7 @@ pub fn plan(request: &Request) -> Result<Option<Plan>, String> {
         project: &project,
         hooks: &hooks,
     };
-    let plan = match kind {
+    let mut plan = match kind {
         "clone" => clone(&cx, rest)?,
         "fetch" => fetch(&cx, rest)?,
         "pull" => pull(&cx, rest)?,
@@ -88,6 +88,11 @@ pub fn plan(request: &Request) -> Result<Option<Plan>, String> {
         "submodule" => submodule_update(&cx, &rest[1..])?,
         _ => lfs(&cx, &rest[0], &rest[1..])?,
     };
+    // In a repository git reads its settings whatever the command (`ls-remote <address>` too):
+    // they are checked, and git is held to that repository. A clone makes a new one.
+    if kind != "clone" && Repo::find(&dir).is_some() {
+        plan.pin(&cx.repo(command)?);
+    }
     Ok(Some(plan))
 }
 
@@ -134,6 +139,7 @@ impl Cx<'_> {
             stdin: None,
             accounts: Vec::new(),
             account: None,
+            repo: None,
         }
     }
 
@@ -1020,6 +1026,58 @@ mod tests {
         assert!(refused.contains("core.sshcommand"), "{refused}");
         // Its local work still runs (in the sandbox).
         assert_eq!(plan(&request(&work, &["status"])), Ok(None));
+    }
+
+    #[test]
+    fn listing_an_address_in_a_repository_checks_its_settings() {
+        let (_dir, work) = repo("main", 0);
+        git(&work, &["config", "core.sshCommand", "evil"]);
+        let refused = plan(&request(&work, &["ls-remote", "git@github.com:b/c.git"])).unwrap_err();
+        assert!(refused.contains("core.sshcommand"), "{refused}");
+    }
+
+    /// What `git config --get <key>` says when the gate runs `plan`'s git.
+    fn gated_setting(plan: &Plan, key: &str) -> Option<String> {
+        let probe = Plan {
+            args: vec!["config".into(), "--get".into(), key.into()],
+            ..plan.clone()
+        };
+        let output = super::super::command(&probe, &super::super::hooks_dir())
+            .output()
+            .expect("git");
+        output
+            .status
+            .success()
+            .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    }
+
+    #[test]
+    fn git_uses_the_repository_the_gate_checked() {
+        let (_dir, work) = repo("main", 0);
+        // A subfolder that is a bare repository: git would take it for the repository and obey
+        // its settings, which the gate never read.
+        git(&work, &["init", "-q", "--bare", "evil"]);
+        let evil = work.join("evil");
+        git(&evil, &["config", "core.sshCommand", "evil"]);
+        let fetch = plan(&request(&evil, &["fetch"])).unwrap().unwrap();
+        assert_eq!(
+            fetch.repo.as_ref().map(|repo| repo.work_tree.as_path()),
+            Some(work.as_path())
+        );
+        assert_eq!(gated_setting(&fetch, "core.sshCommand"), None);
+        assert_eq!(
+            gated_setting(&fetch, "remote.origin.url").as_deref(),
+            Some("git@github.com:a/app.git")
+        );
+
+        // A broken `.git` that git would skip on its way up to a repository not checked: git
+        // fails rather than look further.
+        let sub = work.join("sub");
+        std::fs::create_dir_all(sub.join(".git")).expect("mkdir");
+        let broken = plan(&request(&sub, &["fetch", "git@github.com:a/app.git"]))
+            .unwrap()
+            .unwrap();
+        assert_eq!(gated_setting(&broken, "remote.origin.url"), None);
     }
 
     #[test]

@@ -6,6 +6,14 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- The sandbox's git gate (pushing, pulling and `gh` with your keys) now makes git use exactly the
+  repository whose settings it checked. Before, a folder in the project set up as a bare repository
+  could have its own settings obeyed outside the sandbox, and `git ls-remote <address>` didn't
+  check the repository's settings at all; either could start a program with your keys. `gh repo
+  create` is now refused in a repository whose settings could start programs, like the rest.
+
 ## [0.5.6] - 2026-11-27
 
 ### Added

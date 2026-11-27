@@ -254,10 +254,8 @@ pub fn plan_with(request: &Request, accounts: &dyn Accounts) -> Result<Option<Pl
             project.display()
         ));
     }
-    if (group, command) == ("repo", "create") {
-        return repo_create(request, &project, accounts).map(Some);
-    }
-    // gh reads the repository's remotes with git, so its settings must be safe too.
+    // gh reads the repository's remotes with git, so its settings must be safe too, and the git
+    // it starts is held to that repository.
     let repo = Repo::find(&request.cwd);
     if let Some(repo) = &repo {
         let found = repo.unsafe_settings();
@@ -268,8 +266,17 @@ pub fn plan_with(request: &Request, accounts: &dyn Accounts) -> Result<Option<Pl
             ));
         }
     }
+    let pin = |mut plan: Plan| {
+        if let Some(repo) = &repo {
+            plan.pin(repo);
+        }
+        plan
+    };
+    if (group, command) == ("repo", "create") {
+        return repo_create(request, &project, accounts).map(|plan| Some(pin(plan)));
+    }
     if (group, command) == ("repo", "delete") {
-        return repo_delete(request, repo.as_ref(), accounts).map(Some);
+        return repo_delete(request, repo.as_ref(), accounts).map(|plan| Some(pin(plan)));
     }
     let target = match repo_option {
         Some(name) if name.matches('/').count() >= 2 => name.to_lowercase(),
@@ -314,7 +321,7 @@ pub fn plan_with(request: &Request, accounts: &dyn Accounts) -> Result<Option<Pl
         .to_owned();
     plan.accounts = logged_in(accounts, &host)?;
     name_the_account(&mut plan);
-    Ok(plan.into())
+    Ok(Some(pin(plan)))
 }
 
 /// The accounts on `host`, or why there are none.
@@ -349,6 +356,7 @@ fn gh_plan(request: &Request, title: String, class: Class, target: String) -> Pl
         stdin: None,
         accounts: Vec::new(),
         account: None,
+        repo: None,
     }
 }
 
