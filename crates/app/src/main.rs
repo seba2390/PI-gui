@@ -16,6 +16,7 @@ mod config;
 mod demo;
 mod document_parsers;
 mod hosts;
+mod local_models;
 mod model_store;
 mod naming;
 mod panels;
@@ -109,6 +110,7 @@ fn main() {
         actions::init(cx);
         cx.set_global(config);
         search_server::init(cx);
+        local_models::init(cx);
         settings::apply_pi_program(cx);
         cx.set_global(ui_state::UiState::load(
             ui_state::UiState::path().as_deref(),

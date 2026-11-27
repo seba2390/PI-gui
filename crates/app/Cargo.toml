@@ -17,6 +17,7 @@ gpui-kit.workspace = true
 deepsearch.workspace = true
 python-tool.workspace = true
 documents.workspace = true
+local-models.workspace = true
 sandbox.workspace = true
 pi-config.workspace = true
 pi-rpc.workspace = true
