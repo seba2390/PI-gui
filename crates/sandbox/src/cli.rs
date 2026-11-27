@@ -420,10 +420,10 @@ fn gate(dir: &Path, args: &[OsString]) -> i32 {
             if let Some(approved) = &request.approved
                 && !approved.same_question(&plan)
             {
+                // Not the new title: it can name the GitHub account (this goes back to the model).
                 eprintln!(
-                    "[Pistachio] The repository changed while the user was asked; this is now: {}. \
-                     Run the command again.",
-                    plan.title
+                    "[Pistachio] The repository changed while the user was asked, so this isn't \
+                     what they allowed any more. Run the command again."
                 );
                 return 1;
             }
