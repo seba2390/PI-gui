@@ -23,8 +23,8 @@ All notable changes to PI-gui are listed here. The format follows
   hardware**, which shows a progress bar through what it looks at and then lists the processor,
   memory, graphics, free disk and build tools found; **Suggest models** then shows Fast, Balanced
   and Most capable, each with its inference engine, quantization, memory, speed here and checkpoint.
-  The suggestions start collapsed to their name and why they fit; the arrow at the bottom of each
-  opens how it runs. The engine and the checkpoint link to their pages, also in the download
+  The suggestions start collapsed to their name and a centered **Download and run** (or Run,
+  Connect) button; the full-width arrow at the bottom of each opens why it fits and how it runs. The engine and the checkpoint link to their pages, also in the download
   dialog, and the button says **Download and run**.
 - **Connected models by where they run.** Settings → pi & models groups them into This device,
   Other devices and API connections, and each has a trash button that removes it after asking. A

@@ -405,11 +405,15 @@ fn suggests_local_models(cx: &mut TestAppContext) {
         let card: &'static str = format!("suggestion:{tier}").leak();
         assert!(cx.debug_bounds(card).is_some(), "{tier}");
     }
-    // Collapsed until opened.
-    assert!(cx.debug_bounds("local-Fast-default").is_none());
+    // Collapsed until opened, with the way to run it at the top.
+    assert!(cx.debug_bounds("local-Fast-default").is_some());
+    assert!(cx.debug_bounds("local-Fast-default-checkpoint").is_none());
     click("expand:Fast", cx);
     assert!(cx.debug_bounds("local-Fast-default-checkpoint").is_some());
-    assert!(cx.debug_bounds("local-Balanced-default").is_none());
+    assert!(
+        cx.debug_bounds("local-Balanced-default-checkpoint")
+            .is_none()
+    );
     let asking = |cx: &mut VisualTestContext| {
         cx.update(|window, _| {
             gpui_kit::test::TestWindowExt::try_find(window, "download-start").is_some()

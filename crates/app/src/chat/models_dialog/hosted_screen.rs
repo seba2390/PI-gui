@@ -612,13 +612,16 @@ impl ModelsDialog {
         let expanded = self.expanded.contains(&tier);
         let toggle = div()
             .w_full()
-            .flex()
-            .justify_center()
             .debug_selector(move || format!("expand:{tier}"))
             .child(
                 Button::new(SharedString::from(format!("expand:{tier}")))
                     .quiet(cx)
-                    .xsmall()
+                    .w_full()
+                    .h(px(24.))
+                    .rounded_none()
+                    .rounded_b_lg()
+                    .border_t_1()
+                    .border_color(border)
                     .icon(
                         Icon::new(if expanded {
                             IconName::ChevronUp
@@ -645,47 +648,85 @@ impl ModelsDialog {
             (suggestion.default.as_ref(), default, false),
             (suggestion.specialized.as_ref(), special, true),
         ];
-        v_flex()
-            .debug_selector(move || format!("suggestion:{tier}"))
-            .w_full()
-            .gap_1p5()
-            .px_3()
-            .pt_2()
-            .pb_0p5()
-            .rounded_lg()
-            .border_1()
-            .border_color(border)
-            .child(
+        // The way it runs by default (else the specialized one) is downloaded and run from the
+        // top of the card, also while it is closed.
+        let main = rows
+            .iter()
+            .position(|(choice, status, _)| choice.is_some() && status.is_some());
+        let main_action = main.and_then(|ix| {
+            let (choice, status, specialized) = &rows[ix];
+            let role = if *specialized {
+                "specialized"
+            } else {
+                "default"
+            };
+            let id = format!("local-{tier}-{role}");
+            let action = self.choice_action(models, &id, (*choice)?, status.clone()?, busy, cx);
+            Some(
                 h_flex()
-                    .gap_2()
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_xs()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(accent)
-                            .child(tier),
-                    )
-                    .child(div().text_sm().child(suggestion.model.name.clone()))
-                    .child(
-                        div()
-                            .min_w_0()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(suggestion.model.params.clone()),
-                    ),
+                    .w_full()
+                    .justify_center()
+                    .child(div().debug_selector(move || id).child(action)),
             )
+        });
+        let details = v_flex()
+            .gap_1p5()
             .child(
                 div()
                     .text_xs()
                     .text_color(muted)
                     .child(suggestion.model.why.clone()),
             )
-            .children(rows.into_iter().filter(|_| expanded).filter_map(
-                |(choice, status, specialized)| {
-                    Some(self.render_choice(models, tier, choice?, status?, specialized, busy, cx))
+            .children(rows.into_iter().enumerate().filter_map(
+                |(ix, (choice, status, specialized))| {
+                    Some(self.render_choice(
+                        models,
+                        tier,
+                        choice?,
+                        status?,
+                        specialized,
+                        Some(ix) != main,
+                        busy,
+                        cx,
+                    ))
                 },
-            ))
+            ));
+        v_flex()
+            .debug_selector(move || format!("suggestion:{tier}"))
+            .w_full()
+            .rounded_lg()
+            .border_1()
+            .border_color(border)
+            .child(
+                v_flex()
+                    .w_full()
+                    .gap_2()
+                    .px_3()
+                    .pt_2()
+                    .pb_2()
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .text_xs()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(accent)
+                                    .child(tier),
+                            )
+                            .child(div().text_sm().child(suggestion.model.name.clone()))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .child(suggestion.model.params.clone()),
+                            ),
+                    )
+                    .children(main_action)
+                    .when(expanded, |this| this.child(details)),
+            )
             .child(toggle)
     }
 
@@ -699,6 +740,7 @@ impl ModelsDialog {
         choice: &Choice,
         status: Status,
         specialized: bool,
+        with_action: bool,
         busy: bool,
         cx: &mut Context<Self>,
     ) -> Div {
@@ -747,7 +789,66 @@ impl ModelsDialog {
         let quant = format!("{} {}", choice.build.quant, choice.build.format_label());
         let memory = format!("~{:.1} GB of RAM", choice.memory as f64 / 1e9);
         let tps = format!("~{:.0} tokens/s ({speed})", choice.tps);
-        let action: AnyElement = match status {
+        let fact = |icon: Icon, name: &'static str, value: AnyElement| {
+            h_flex()
+                .flex_1()
+                .min_w_0()
+                .gap_2()
+                .child(icon.small().text_color(muted))
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .child(div().text_xs().text_color(muted).child(name))
+                        .child(div().text_xs().min_w_0().truncate().child(value)),
+                )
+        };
+        let text = |value: String| FadingText::new(value).into_any_element();
+        h_flex()
+            .w_full()
+            .gap_3()
+            .pt_1p5()
+            .border_t_1()
+            .border_color(cx.theme().border)
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_1p5()
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(fact(AppIcon::Server.into(), "Inference engine", engine))
+                            .child(fact(AppIcon::Package.into(), "Quantization", text(quant))),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(fact(AppIcon::MemoryStick.into(), "Memory", text(memory)))
+                            .child(fact(AppIcon::Gauge.into(), "Speed here", text(tps))),
+                    )
+                    .child(fact(AppIcon::Link.into(), "Checkpoint", checkpoint))
+                    .children((!notes.is_empty()).then(|| label(notes.join(" · "), cx))),
+            )
+            .when(with_action, |this| {
+                let action = self.choice_action(models, &id, choice, status, busy, cx);
+                this.child(div().flex_none().debug_selector(move || id).child(action))
+            })
+    }
+
+    /// What can be done with `choice` as it stands: download and run it, run it, connect to it.
+    #[allow(clippy::too_many_arguments)]
+    fn choice_action(
+        &self,
+        models: &Entity<LocalModels>,
+        id: &str,
+        choice: &Choice,
+        status: Status,
+        busy: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let id = id.to_owned();
+        match status {
             Status::Missing(size) => {
                 let (models, choice) = (models.clone(), choice.clone());
                 let name = choice.model.name.clone();
@@ -812,49 +913,7 @@ impl ModelsDialog {
                     }))
                     .into_any_element()
             }
-        };
-        let fact = |icon: Icon, name: &'static str, value: AnyElement| {
-            h_flex()
-                .flex_1()
-                .min_w_0()
-                .gap_2()
-                .child(icon.small().text_color(muted))
-                .child(
-                    v_flex()
-                        .flex_1()
-                        .min_w_0()
-                        .child(div().text_xs().text_color(muted).child(name))
-                        .child(div().text_xs().min_w_0().truncate().child(value)),
-                )
-        };
-        let text = |value: String| FadingText::new(value).into_any_element();
-        h_flex()
-            .w_full()
-            .gap_3()
-            .pt_1p5()
-            .border_t_1()
-            .border_color(cx.theme().border)
-            .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .gap_1p5()
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .child(fact(AppIcon::Server.into(), "Inference engine", engine))
-                            .child(fact(AppIcon::Package.into(), "Quantization", text(quant))),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .child(fact(AppIcon::MemoryStick.into(), "Memory", text(memory)))
-                            .child(fact(AppIcon::Gauge.into(), "Speed here", text(tps))),
-                    )
-                    .child(fact(AppIcon::Link.into(), "Checkpoint", checkpoint))
-                    .children((!notes.is_empty()).then(|| label(notes.join(" · "), cx))),
-            )
-            .child(div().flex_none().debug_selector(move || id).child(action))
+        }
     }
 
     fn render_other_device(&self, cx: &mut Context<Self>) -> AnyElement {
