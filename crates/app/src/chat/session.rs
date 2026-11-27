@@ -398,13 +398,16 @@ impl PiSession {
     fn start(&mut self, remote_env: &[(String, String)], cx: &mut Context<Self>) {
         let config = cx.global::<AppConfig>().clone();
         let saved = saved_host(self.host.as_ref(), cx);
-        let (options, _) = spawn_options(
+        let (mut options, mode) = spawn_options(
             &config,
             &self.cwd,
             self.resumed_from.as_deref(),
             saved.as_ref(),
             remote_env,
         );
+        if mode == Mode::Code && saved.is_none() {
+            optional_tool_args(&code_tools(cx), &mut options);
+        }
         self.start_process(&options, cx);
     }
 
@@ -2402,6 +2405,11 @@ fn spawn_options(
     options.session = session_file.map(Path::to_path_buf);
     let Some(host) = host else {
         let mode = config.mode_of(cwd);
+        // Pistachio's own tools read the text written for the model in Settings → Tools.
+        options.env.push((
+            pi_config::tools::TEXTS_ENV.into(),
+            config.tools_dir.join(pi_config::tools::TEXTS_FILE).into(),
+        ));
         if mode == Mode::Chat {
             chat_args(config, &mut options);
         } else {
@@ -2425,6 +2433,29 @@ fn spawn_options(
     // The local ssh client just needs some existing folder to run in.
     options.cwd = config.home.clone().unwrap_or_else(std::env::temp_dir);
     (options, Mode::Code)
+}
+
+/// The optional Code tools turned on in Settings → Tools (see
+/// [`pi_config::tools::OPTIONAL_CODE_TOOLS`]).
+pub(crate) fn code_tools(cx: &gpui_kit::App) -> Vec<String> {
+    cx.try_global::<crate::settings::AppSettings>()
+        .map_or_else(Vec::new, |settings| settings.code_tools.clone())
+}
+
+/// `--tools +grep,+find` for `tools` (pi adds them to its default tools); only the optional
+/// ones are passed. Code sessions on this computer only: there the sandbox checks them, like
+/// `read`.
+pub(crate) fn optional_tool_args(tools: &[String], options: &mut SpawnOptions) {
+    let added = tools
+        .iter()
+        .filter(|tool| pi_config::tools::OPTIONAL_CODE_TOOLS.contains(&tool.as_str()))
+        .map(|tool| format!("+{tool}"))
+        .collect::<Vec<_>>();
+    if !added.is_empty() {
+        options
+            .extra_args
+            .extend(["--tools".into(), added.join(",").into()]);
+    }
 }
 
 /// `--skill` for each skill that comes with the app (see [`crate::builtin_skills`]). Chats
@@ -2597,6 +2628,37 @@ mod tests {
         );
         assert_eq!(super::fork_entry(&messages, 1, "other"), None);
         assert_eq!(super::fork_entry(&messages, 3, "x"), None);
+    }
+
+    /// The optional Code tools turned on reach pi as additions to its defaults; others are not
+    /// passed.
+    #[test]
+    fn optional_code_tools_are_added_to_pis_defaults() {
+        let mut options = pi_rpc::SpawnOptions::new("/tmp");
+        super::optional_tool_args(&[], &mut options);
+        assert!(options.extra_args.is_empty(), "nothing when none are on");
+        let tools = ["grep", "codemode", "rm-rf-tool"].map(str::to_owned);
+        super::optional_tool_args(&tools, &mut options);
+        assert_eq!(
+            options.extra_args,
+            [
+                std::ffi::OsString::from("--tools"),
+                std::ffi::OsString::from("+grep,+codemode")
+            ]
+        );
+    }
+
+    /// Every local pi learns where the text written for the model in Settings → Tools is.
+    #[test]
+    fn local_sessions_get_the_tool_texts() {
+        let config = AppConfig::for_tests("pi".into());
+        let (options, _) = super::spawn_options(&config, &config.chat_dir, None, None, &[]);
+        let texts = config.tools_dir.join(pi_config::tools::TEXTS_FILE);
+        assert!(
+            options
+                .env
+                .contains(&(pi_config::tools::TEXTS_ENV.into(), texts.into()))
+        );
     }
 
     /// A resumed chat's web search mode, read from its file like the extension reads it.

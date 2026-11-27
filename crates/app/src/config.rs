@@ -147,6 +147,9 @@ pub struct AppConfig {
     pub documents_dir: PathBuf,
     /// The pi extension of chats' `python` tool (see [`python_tool`]).
     pub python_dir: PathBuf,
+    /// Settings → Tools: the probe extension and the texts written for the model there
+    /// (see [`pi_config::tools`]).
+    pub tools_dir: PathBuf,
     /// The sandbox's settings and pi extension (see [`sandbox`]).
     pub sandbox_dir: PathBuf,
     /// Where the skills that come with the app are written (see [`crate::builtin_skills`]).
@@ -190,6 +193,7 @@ impl AppConfig {
             deepsearch_dir: std::env::temp_dir().join("pistachio-test-deepsearch"),
             documents_dir: std::env::temp_dir().join("pistachio-test-documents"),
             python_dir: std::env::temp_dir().join("pistachio-test-python"),
+            tools_dir: std::env::temp_dir().join("pistachio-test-tools"),
             sandbox_dir: std::env::temp_dir().join("pistachio-test-sandbox"),
             builtin_skills_dir: std::env::temp_dir().join("pistachio-test-skills"),
             exe: Some(PathBuf::from("/app/pistachio")),
@@ -216,6 +220,10 @@ impl AppConfig {
             python_dir: pi_sessions::app_dir().map_or_else(
                 || std::env::temp_dir().join("pistachio-python"),
                 |dir| dir.join("python"),
+            ),
+            tools_dir: pi_sessions::app_dir().map_or_else(
+                || std::env::temp_dir().join("pistachio-tools"),
+                |dir| dir.join("tools"),
             ),
             sandbox_dir: sandbox::default_dir(),
             builtin_skills_dir: pi_sessions::app_dir().map_or_else(

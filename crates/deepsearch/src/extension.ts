@@ -6,10 +6,25 @@
 // has its report checked, and says in the session which text is the final one. Pistachio writes this file on start; edits here are overwritten. Settings and each mode's
 // instructions live next to it in config.json, prompt-search.md and prompt-deep.md.
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Type } from "typebox";
+
+// What the user wrote for the model in place of a tool's own text (Settings → Tools).
+function edited(name: string): { description?: string; guidelines?: string[] } {
+  try {
+    const file = process.env.PISTACHIO_TOOL_TEXTS;
+    const text = file ? JSON.parse(readFileSync(file, "utf8"))?.[name] : undefined;
+    const lines = text?.guidelines;
+    return {
+      description: typeof text?.description === "string" ? text.description : undefined,
+      guidelines: Array.isArray(lines) && lines.every((line: unknown) => typeof line === "string") ? lines : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
 
 const BIN = process.env.PISTACHIO_DEEPSEARCH_BIN;
 const KEY = "pistachio-deepsearch";
@@ -375,8 +390,10 @@ export default function (pi: any) {
     name: "web_search",
     label: "Web search",
     description:
+      edited("web_search").description ??
       "Search the web. Returns result titles, URLs and short snippets. Snippets are previews, not evidence: read promising pages with web_fetch.",
     promptSnippet: "Search the web for current or external information",
+    ...(edited("web_search").guidelines ? { promptGuidelines: edited("web_search").guidelines } : {}),
     defaultActive: false,
     parameters: Type.Object({
       query: Type.String({ description: "A short, specific search-engine query (keywords, not a sentence)" }),
@@ -397,8 +414,10 @@ export default function (pi: any) {
     name: "web_fetch",
     label: "Read web page",
     description:
+      edited("web_fetch").description ??
       "Read a web page or PDF and return its main text as Markdown. Long pages are cut down to the sections most relevant to `focus`; reading a page again gives the sections you have not seen.",
     promptSnippet: "Read a web page found with web_search",
+    ...(edited("web_fetch").guidelines ? { promptGuidelines: edited("web_fetch").guidelines } : {}),
     defaultActive: false,
     parameters: Type.Object({
       url: Type.String({ description: "The http(s) URL to read, e.g. from web_search results" }),

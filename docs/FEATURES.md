@@ -525,8 +525,17 @@ the Sandboxing & Security page light up under the pointer and scroll by themselv
   guidelines, at about 4 characters a token; in chats also the total with web search on), and a
   bar with each tool's share. Each tool has a one-line summary, where it comes from (pi, Pistachio
   or an extension) and its size; "What the model sees" opens, word for word, what pi tells the
-  model. In chats it also says when web search's tools and Python are offered, and in Code which
-  tools pi has but does not offer. pi is asked for them when the page is shown: a pi that keeps
+  model. In chats it also says when web search's tools are offered (while web search is on).
+  Switches turn Python on or off in chats (on by default; the same as under General) and pi's
+  `grep`, `find`, `ls` and `codemode` in Code sessions on this computer (off by default; passed
+  to pi as `--tools +grep,…`, so the terminal `pi` is not affected). The sandbox checks `grep`,
+  `find` and `ls` like `read` (what they may see, and no searching into hidden folders), and
+  `codemode`'s scripts reach files and commands only through the session's tools, which the
+  same checks cover. The text Pistachio's own tools give the model (`python`, `web_search`,
+  `web_fetch`, the sandboxed `bash`) can be edited there: **Edit** turns the description and
+  guidelines into fields, saved as you type to `~/.pi/agent/pistachio/tools/texts.json`, which
+  the tools read as pi starts (`PISTACHIO_TOOL_TEXTS`); **Use the original text** undoes it.
+  Changes apply to conversations started afterwards. pi is asked for them when the page is shown: a pi that keeps
   no session, started like a conversation of each mode, reports them through a small extension
   (`~/.pi/agent/pistachio/tools/tools-probe.ts`) and quits.
 

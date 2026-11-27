@@ -4,15 +4,88 @@
 //! a pi that keeps no session reports them through a status line ([`STATUS_KEY`]), which
 //! [`parse`] reads.
 
+use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use serde_json::Value;
+use serde_json::{Map, Value, json};
 
 /// The probe extension's source.
 pub const PROBE_SOURCE: &str = include_str!("tools_probe.ts");
 /// The status the probe reports the tools in.
 pub const STATUS_KEY: &str = "pistachio-tools";
+/// The environment variable that tells Pistachio's extensions where [`Texts`] are.
+pub const TEXTS_ENV: &str = "PISTACHIO_TOOL_TEXTS";
+/// The file of [`Texts`] in the tools folder.
+pub const TEXTS_FILE: &str = "texts.json";
+
+/// pi's tools that Code sessions can add, each off unless turned on (Settings → Tools).
+pub const OPTIONAL_CODE_TOOLS: [&str; 4] = ["grep", "find", "ls", "codemode"];
+
+/// What the user wrote, in Settings → Tools, for the model in place of a tool's own text: its
+/// description and its guidelines (Pistachio's own tools read it as they load).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Text {
+    pub description: Option<String>,
+    pub guidelines: Option<Vec<String>>,
+}
+
+/// [`Text`] per tool name.
+pub type Texts = BTreeMap<String, Text>;
+
+/// The texts in `path`; none when it is missing or can't be read.
+pub fn load_texts(path: &Path) -> Texts {
+    let Some(Value::Object(tools)) = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+    else {
+        return Texts::new();
+    };
+    tools
+        .into_iter()
+        .map(|(name, text)| {
+            let description = text["description"].as_str().map(str::to_owned);
+            let guidelines = text["guidelines"].as_array().map(|lines| {
+                lines
+                    .iter()
+                    .filter_map(|line| line.as_str().map(str::to_owned))
+                    .collect()
+            });
+            (
+                name,
+                Text {
+                    description,
+                    guidelines,
+                },
+            )
+        })
+        .collect()
+}
+
+/// Writes `texts` to `path` (atomically: a temp file renamed over it).
+pub fn save_texts(path: &Path, texts: &Texts) -> io::Result<()> {
+    let object: Map<String, Value> = texts
+        .iter()
+        .map(|(name, text)| {
+            let mut entry = Map::new();
+            if let Some(description) = &text.description {
+                entry.insert("description".into(), json!(description));
+            }
+            if let Some(guidelines) = &text.guidelines {
+                entry.insert("guidelines".into(), json!(guidelines));
+            }
+            (name.clone(), Value::Object(entry))
+        })
+        .collect();
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
+    let text = serde_json::to_string_pretty(&Value::Object(object)).map_err(io::Error::other)?;
+    std::fs::write(&tmp, text + "\n")?;
+    std::fs::rename(tmp, path)
+}
+
 /// Where built-in tools come from (pi's `sourceInfo.path` prefix).
 const BUILTIN_PREFIX: &str = "builtin:";
 
@@ -186,6 +259,34 @@ mod tests {
         assert_eq!(parse(r#"{"name":"read"}"#), None);
         assert_eq!(parse(r#"[{"description":"no name"}]"#), None);
         assert_eq!(parse("[]"), Some(Vec::new()));
+    }
+
+    #[test]
+    fn texts_are_saved_and_read_back() {
+        let dir = std::env::temp_dir().join(format!("pi-config-texts-{}", std::process::id()));
+        let path = dir.join(TEXTS_FILE);
+        assert_eq!(load_texts(&path), Texts::new(), "none without a file");
+        let texts = Texts::from([
+            (
+                "python".to_owned(),
+                Text {
+                    description: Some("Run Python.".into()),
+                    guidelines: Some(vec!["Use it.".into()]),
+                },
+            ),
+            (
+                "bash".to_owned(),
+                Text {
+                    description: None,
+                    guidelines: Some(Vec::new()),
+                },
+            ),
+        ]);
+        save_texts(&path, &texts).expect("written");
+        assert_eq!(load_texts(&path), texts);
+        std::fs::write(&path, "not json").unwrap();
+        assert_eq!(load_texts(&path), Texts::new());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

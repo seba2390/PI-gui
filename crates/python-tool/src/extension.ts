@@ -9,6 +9,21 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Type } from "typebox";
 
+// What the user wrote for the model in place of a tool's own text (Settings → Tools).
+function edited(name: string): { description?: string; guidelines?: string[] } {
+  try {
+    const file = process.env.PISTACHIO_TOOL_TEXTS;
+    const text = file ? JSON.parse(readFileSync(file, "utf8"))?.[name] : undefined;
+    const lines = text?.guidelines;
+    return {
+      description: typeof text?.description === "string" ? text.description : undefined,
+      guidelines: Array.isArray(lines) && lines.every((line: unknown) => typeof line === "string") ? lines : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
 const BIN = process.env.PISTACHIO_PYTHON_BIN;
 const DIR = process.env.PISTACHIO_PYTHON_DIR;
 const TOOL = "python";
@@ -86,6 +101,7 @@ export default function (pi: any) {
     name: TOOL,
     label: "Python",
     description:
+      edited(TOOL).description ??
       "Run Python code and get what it prints plus the value of its last expression. Use it for any calculation " +
       "beyond trivial mental arithmetic (sums, products, powers, logarithms, trigonometry, series, statistics, " +
       "unit conversions, dates), so numbers are computed, not estimated. Use it just as readily for any other small " +
@@ -100,7 +116,7 @@ export default function (pi: any) {
       "use decimal.Decimal for exact decimal arithmetic. Runs stop after 5 seconds.",
     promptSnippet:
       "Run small Python programs: compute numbers instead of estimating them, and count, transform, check or enumerate things exactly",
-    promptGuidelines: [
+    promptGuidelines: edited(TOOL).guidelines ?? [
       "When a question needs a numerical result (arithmetic, a formula, a series, statistics), compute it with the python tool and give the computed value; say how the expression was read when it is ambiguous.",
       "Also use the python tool whenever a short program would answer more reliably than working it out in your head: counting characters or words, manipulating or sorting text, regular expressions, JSON, dates and weekdays, number bases and encodings, testing a small function or algorithm on examples, or trying out cases exhaustively. Run the code rather than predicting its output.",
     ],

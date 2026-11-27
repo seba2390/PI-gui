@@ -13,6 +13,13 @@ All notable changes to PI-gui are listed here. The format follows
   each tool's share in a bar). Each tool has a one-line summary, where it comes from and its size;
   "What the model sees" opens exactly what pi tells the model (description, guidelines in the
   system prompt, parameters). pi itself is asked, so your extensions' tools are listed too.
+- Switches on Settings → Tools: Python in chats (on by default), and pi's `grep`, `find`, `ls`
+  and `codemode` in Code sessions on this computer (off by default). The sandbox checks `grep`,
+  `find` and `ls` like `read`, and `codemode` scripts reach files only through those checked
+  tools.
+- The text Pistachio's own tools give the model (`python`, `web_search`, `web_fetch` and the
+  sandboxed `bash`) can be edited on Settings → Tools (Edit, under "What the model sees"); "Use
+  the original text" undoes it. It applies to conversations started afterwards.
 
 ### Changed
 

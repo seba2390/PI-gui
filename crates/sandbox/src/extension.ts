@@ -17,10 +17,25 @@
 // The rules are read again whenever the settings change, so changes apply to the next tool call.
 // Pistachio writes this file on start; edits here are overwritten.
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, realpathSync, statSync, unlinkSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, statSync, unlinkSync } from "node:fs";
 import { createServer } from "node:net";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+
+// What the user wrote for the model in place of a tool's own text (Settings → Tools).
+function edited(name: string): { description?: string; guidelines?: string[] } {
+  try {
+    const file = process.env.PISTACHIO_TOOL_TEXTS;
+    const text = file ? JSON.parse(readFileSync(file, "utf8"))?.[name] : undefined;
+    const lines = text?.guidelines;
+    return {
+      description: typeof text?.description === "string" ? text.description : undefined,
+      guidelines: Array.isArray(lines) && lines.every((line: unknown) => typeof line === "string") ? lines : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
 
 const BIN = process.env.PISTACHIO_SANDBOX_BIN;
 const DIR = process.env.PISTACHIO_SANDBOX_DIR;
@@ -269,6 +284,9 @@ export default async function (pi: any) {
         env: { ...env, PISTACHIO_SANDBOX_DIR: DIR, ...(gate ? { PISTACHIO_GATE_SOCKET: gate } : {}) },
       }),
     });
+    const text = edited("bash");
+    if (text.description !== undefined) bash.description = text.description;
+    if (text.guidelines !== undefined) bash.promptGuidelines = text.guidelines;
     pi.registerTool(bash);
   }
 
