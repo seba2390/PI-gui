@@ -132,6 +132,9 @@ checks scriptable:
   `diff-expand-all` opens the Changes tab with every file expanded, and `expand-tools` expands
   every tool call in the chat (like Ctrl+O); `view-file:<path>` opens a file (relative to the
   folder) in the Files tab's viewer.
+- Docked above the composer: `question` and `question-plain` (the sandbox gate's question, with
+  and without a warning), `help-request` and `help-request-open` (a `request_user_help` pill,
+  folded and opened).
 - Sessions and popovers: `latest`, `new-chat` (like ⌘N), `attach`, `context`; `find:<text>` opens the find bar
   searching for `<text>`; `attach:<path>` attaches a file and `send:<text>` sends `<text>` as a
   message, once what is attached is read; `image-viewer:<n>` opens the picture viewer on the session's

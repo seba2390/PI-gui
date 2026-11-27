@@ -57,12 +57,22 @@ def steps(home, project):
         # the gate's git never reads the repository's settings.
         ("bash", {"command": f"git config core.fsmonitor 'touch {home}/planted-ran; false' && "
                              f"git fetch -q {PUBLIC}; git rev-parse FETCH_HEAD"}, True, "7fd1a60"),
+        # request_user_help: offered while the sandbox is on; the pill shows the command blocked
+        # last (HELP_ANSWERS answers it and checks that).
+        ("bash", {"command": f"touch {home}/needs-help"}, False, ""),
+        ("request_user_help", {"title": "Create needs-help", "reason": "The sandbox blocks the home folder.",
+                               "suggested_command": "touch ~/needs-help"}, True, "marked this done"),
+        ("request_user_help", {"title": "Again", "reason": "r"}, True, "dismissed"),
     ]
 
 
 PUBLIC = "https://github.com/octocat/Hello-World.git"
 # The answers to the gate's questions, in order.
 ANSWERS = ["Allow", "Don't allow", "Always for this project"]
+HELP_MARK = "pistachio-help:"
+# The answers to request_user_help, in order, and the command each request must show as blocked
+# (cleared once shown).
+HELP_ANSWERS = [("Done", "needs-help"), ("Dismiss", None)]
 
 
 class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
@@ -131,7 +141,7 @@ def main():
     env = dict(os.environ, HOME=home, PI_CODING_AGENT_DIR=agent, PISTACHIO_SANDBOX_DIR=sandbox_dir,
                PISTACHIO_SANDBOX_BIN=BIN, ANTHROPIC_API_KEY="sk-secret")
     pi = subprocess.Popen(
-        ["pi", "--mode", "rpc", "--model", "fake/m", "--no-session", "--tools", "read,bash,edit,write,grep,find,ls",
+        ["pi", "--mode", "rpc", "--model", "fake/m", "--no-session", "--tools", "+grep,+find,+ls",
          "--extension", extension],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, cwd=project, env=env,
         text=True)
@@ -143,12 +153,25 @@ def main():
     results = []
     failed = 0
     asked = 0
+    helped = 0
     try:
         while True:
             event = events.get(timeout=60)
             if event["type"] == "extension_error":
                 raise AssertionError(f"extension error: {event.get('error')}")
-            if event["type"] == "extension_ui_request" and event.get("method") == "select":
+            if event["type"] == "extension_ui_request" and event.get("method") == "select" \
+                    and event["title"].startswith(HELP_MARK):
+                request = json.loads(event["title"][len(HELP_MARK):])
+                answer, command = HELP_ANSWERS[min(helped, len(HELP_ANSWERS) - 1)]
+                blocked = (request.get("blocked") or {}).get("command")
+                if (command is None) != (blocked is None) or (command and command not in blocked):
+                    failed += 1
+                    print(f"FAIL  help request {helped + 1} showed {blocked!r} as blocked")
+                helped += 1
+                print(f"      help: {request['title']} → {answer}")
+                pi.stdin.write(json.dumps({"type": "extension_ui_response", "id": event["id"], "value": answer}) + "\n")
+                pi.stdin.flush()
+            elif event["type"] == "extension_ui_request" and event.get("method") == "select":
                 answer = ANSWERS[asked] if asked < len(ANSWERS) else "Don't allow"
                 asked += 1
                 print(f"      asked: {event['title'].splitlines()[0]} → {answer}")
@@ -168,6 +191,9 @@ def main():
         failed += not good
         line = text.strip().splitlines()[0] if text.strip() else ""
         print(f"{'ok  ' if good else 'FAIL'}  {name:5} {json.dumps(args)[:70]:72} → {line[:90]}")
+    if helped != len(HELP_ANSWERS):
+        failed += 1
+        print(f"FAIL  {helped} help requests, not {len(HELP_ANSWERS)}")
     if asked != len(ANSWERS):
         failed += 1
         print(f"FAIL  the gate asked {asked} times, not {len(ANSWERS)}")

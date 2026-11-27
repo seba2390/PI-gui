@@ -35,6 +35,25 @@ In a session, a shield next to the folder in the message box shows the sandbox (
 (or with one again) and opens this page. When the sandbox blocks a call, the chat says so under
 it, with a button that allows reading (or changing) the folder it tried to use.
 
+### Asking you for help
+
+When the sandbox blocks something the task needs and there is no reasonable way to do it inside
+the sandbox (installing a system tool, say), the model can hand that step to you with
+`request_user_help`. A pill slides up above the message box: **Needs your help:** and what to do.
+The button on its edge (or a click on the title) opens the details:
+
+- **What the model says:** why it needs this, and a command it suggests, if it has one.
+- **What the sandbox blocked:** the command the sandbox stopped last in this turn, the folder it
+  ran in and its error, as the sandbox saw them, not as the model tells it.
+
+**Copy command** copies the suggested command (or else the blocked one) for you to run yourself,
+if you agree with it. **Done** tells the model you did it; **Dismiss** (or Esc) tells it you
+won't, and it is told not to ask again or work around the sandbox. Nothing runs for you, and the
+pill never asks for passwords or keys. Stopping the agent removes it.
+
+The tool is offered only while the sandbox is on for the session's folder, and has a switch in
+[Settings → Tools → Code](tools.md#code).
+
 ## Files
 
 ```{image} /_static/screenshots/security-files-light.webp

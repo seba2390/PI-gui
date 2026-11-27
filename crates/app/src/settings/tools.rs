@@ -108,9 +108,10 @@ impl ToolCatalog {
     fn refresh(&mut self, mode: Mode, cx: &mut Context<Self>) {
         let config = cx.global::<AppConfig>().clone();
         let code_tools = crate::chat::session::code_tools(cx);
+        let help_tool = crate::chat::session::help_tool(cx);
         let task = cx.spawn(async move |this, cx| {
             config.child_env.wait().await;
-            let listing = match probe(&config, mode, &code_tools, cx).await {
+            let listing = match probe(&config, mode, &code_tools, help_tool, cx).await {
                 Ok(tools) => Listing::Listed(tools),
                 Err(error) => {
                     log::warn!("could not list pi's tools: {error}");
@@ -268,6 +269,7 @@ async fn probe(
     config: &AppConfig,
     mode: Mode,
     code_tools: &[String],
+    help_tool: bool,
     cx: &mut AsyncApp,
 ) -> Result<Vec<Tool>, String> {
     let dir = &config.tools_dir;
@@ -276,6 +278,7 @@ async fn probe(
     let mut options = crate::chat::session::probe_options(config, mode);
     if mode == Mode::Code {
         crate::chat::session::optional_tool_args(code_tools, &mut options);
+        crate::chat::session::help_tool_env(help_tool, &mut options);
     }
     options
         .extra_args
@@ -367,7 +370,8 @@ pub(super) fn page() -> SettingPage {
                 .title("Code")
                 .description(
                     "pi's tools and your extensions', in sessions on this computer. The optional \
-                     ones are off until you turn them on; the sandbox checks them like read.",
+                     ones are off until you turn them on; the sandbox checks them like read. \
+                     request_user_help is offered only while the sandbox is on.",
                 )
                 .item(
                     SettingItem::render(|_, window, cx| section(Mode::Code, window, cx)).keywords(
@@ -380,6 +384,9 @@ pub(super) fn page() -> SettingPage {
                             "find",
                             "ls",
                             "codemode",
+                            "request_user_help",
+                            "help",
+                            "sandbox",
                             "extension",
                             "code",
                             "tokens",
@@ -399,26 +406,78 @@ enum Offer {
     WithWebSearch,
     /// When its switch is on (Python in chats, the optional Code tools).
     Switch(bool),
+    /// When its switch is on and the sandbox too (`request_user_help`).
+    WithSandbox { on: bool, sandbox: bool },
 }
 
 impl Offer {
     /// Whether it goes along with every message (and counts in the meter).
     fn counted(self) -> bool {
-        matches!(self, Self::Always | Self::Switch(true))
+        matches!(
+            self,
+            Self::Always
+                | Self::Switch(true)
+                | Self::WithSandbox {
+                    on: true,
+                    sandbox: true
+                }
+        )
+    }
+
+    /// Its switch, if it has one: whether it is on.
+    fn switch(self) -> Option<bool> {
+        match self {
+            Self::Switch(on) | Self::WithSandbox { on, .. } => Some(on),
+            Self::Always | Self::WithWebSearch => None,
+        }
+    }
+
+    /// Switched off.
+    fn off(self) -> bool {
+        self.switch() == Some(false)
+    }
+
+    /// Offered only sometimes: while web search is on, or (switched on) while the sandbox is.
+    fn sometimes(self) -> bool {
+        matches!(
+            self,
+            Self::WithWebSearch
+                | Self::WithSandbox {
+                    on: true,
+                    sandbox: false
+                }
+        )
     }
 }
 
+/// The switches and the sandbox, as they stand, for [`offer`].
+struct Switches<'a> {
+    python: bool,
+    code_tools: &'a [String],
+    help: bool,
+    sandbox: bool,
+}
+
 /// How `tool` is offered in `mode`; `None` for one pi has but never offers there.
-fn offer(mode: Mode, tool: &Tool, python_on: bool, code_tools: &[String]) -> Option<Offer> {
+fn offer(mode: Mode, tool: &Tool, switches: &Switches) -> Option<Offer> {
     let name = tool.name.as_str();
     match mode {
         Mode::Chat if deepsearch::TOOL_NAMES.contains(&name) => Some(Offer::WithWebSearch),
-        Mode::Chat if name == python_tool::TOOL_NAME => Some(Offer::Switch(python_on)),
-        Mode::Code if OPTIONAL_CODE_TOOLS.contains(&name) => {
-            Some(Offer::Switch(code_tools.iter().any(|tool| tool == name)))
-        }
+        Mode::Chat if name == python_tool::TOOL_NAME => Some(Offer::Switch(switches.python)),
+        Mode::Code if OPTIONAL_CODE_TOOLS.contains(&name) => Some(Offer::Switch(
+            switches.code_tools.iter().any(|tool| tool == name),
+        )),
+        Mode::Code if name == sandbox::help::TOOL => Some(Offer::WithSandbox {
+            on: switches.help,
+            sandbox: switches.sandbox,
+        }),
         _ => tool.active.then_some(Offer::Always),
     }
+}
+
+/// Whether the sandbox is on (Settings → Sandboxing & Security), for tools offered only then.
+fn sandbox_on(cx: &mut App) -> bool {
+    sandbox::SUPPORTED && crate::security::security(cx).read(cx).settings.enabled
 }
 
 /// Whether the tool comes with Pistachio, so its text can be edited.
@@ -432,8 +491,13 @@ fn ours(tool: &Tool, app_dir: Option<&Path>) -> bool {
 fn section(mode: Mode, window: &mut Window, cx: &mut App) -> AnyElement {
     let catalog = tool_catalog(cx);
     catalog.update(cx, |catalog, cx| catalog.ask(cx));
-    let python_on = python_tool::enabled(&cx.global::<AppConfig>().python_dir);
     let code_tools = crate::chat::session::code_tools(cx);
+    let switches = Switches {
+        python: python_tool::enabled(&cx.global::<AppConfig>().python_dir),
+        code_tools: &code_tools,
+        help: crate::chat::session::help_tool(cx),
+        sandbox: sandbox_on(cx),
+    };
     let app_dir = pi_sessions::app_dir();
     let listing = match mode {
         Mode::Chat => catalog.read(cx).chat.clone(),
@@ -455,7 +519,7 @@ fn section(mode: Mode, window: &mut Window, cx: &mut App) -> AnyElement {
     let mut shown: Vec<(&Tool, Offer)> = Vec::new();
     let mut left_out = Vec::new();
     for tool in &tools {
-        match offer(mode, tool, python_on, &code_tools) {
+        match offer(mode, tool, &switches) {
             Some(offer) => shown.push((tool, offer)),
             None => left_out.push(tool.name.as_str()),
         }
@@ -464,7 +528,7 @@ fn section(mode: Mode, window: &mut Window, cx: &mut App) -> AnyElement {
     shown.sort_by_key(|(tool, offer)| {
         (
             !offer.counted(),
-            matches!(offer, Offer::Switch(false)),
+            offer.off(),
             std::cmp::Reverse(tool.context_chars()),
         )
     });
@@ -546,10 +610,12 @@ fn shades(tools: &[(&Tool, Offer)], cx: &App) -> Vec<Hsla> {
     let mut steady = 0;
     tools
         .iter()
-        .map(|(_, offer)| match offer {
-            Offer::WithWebSearch => accent.opacity(0.12),
-            Offer::Switch(false) => cx.theme().muted_foreground.opacity(0.35),
-            Offer::Always | Offer::Switch(true) => {
+        .map(|(_, offer)| {
+            if offer.sometimes() {
+                accent.opacity(0.12)
+            } else if offer.off() {
+                cx.theme().muted_foreground.opacity(0.35)
+            } else {
                 let color = accent.opacity(STRENGTH[steady.min(STRENGTH.len() - 1)]);
                 steady += 1;
                 color
@@ -566,13 +632,13 @@ fn meter(mode: Mode, tools: &[(&Tool, Offer)], colors: &[Hsla], cx: &App) -> Any
     let in_bar: Vec<(&Tool, Offer, Hsla)> = tools
         .iter()
         .zip(colors)
-        .filter(|((_, offer), _)| !matches!(offer, Offer::Switch(false)))
+        .filter(|((_, offer), _)| !offer.off())
         .map(|((tool, offer), color)| (*tool, *offer, *color))
         .collect();
     let sum = |sometimes: bool| -> usize {
         in_bar
             .iter()
-            .filter(|(_, offer, _)| (*offer == Offer::WithWebSearch) == sometimes)
+            .filter(|(_, offer, _)| offer.sometimes() == sometimes)
             .map(|(tool, ..)| tool.context_chars())
             .sum()
     };
@@ -627,8 +693,10 @@ fn meter(mode: Mode, tools: &[(&Tool, Offer)], colors: &[Hsla], cx: &App) -> Any
                 .text_color(muted)
                 .child("tokens with every message"),
         );
-    let detail = if sometimes > 0 {
+    let detail = if sometimes > 0 && mode == Mode::Chat {
         format!("≈ {} with web search on", tokens(always + sometimes))
+    } else if sometimes > 0 {
+        format!("≈ {} with the sandbox on", tokens(always + sometimes))
     } else {
         format!("{} characters", thousands(always))
     };
@@ -663,13 +731,14 @@ fn meter(mode: Mode, tools: &[(&Tool, Offer)], colors: &[Hsla], cx: &App) -> Any
 /// hollow for one switched off.
 fn dot(color: Hsla, offer: Offer, cx: &App) -> Div {
     let dot = div().flex_none().size(px(8.)).rounded_full();
-    match offer {
-        Offer::WithWebSearch => dot
-            .bg(color)
+    if offer.sometimes() {
+        dot.bg(color)
             .border_1()
-            .border_color(palette(cx).accent.opacity(0.6)),
-        Offer::Switch(false) => dot.border_1().border_color(color),
-        Offer::Always | Offer::Switch(true) => dot.bg(color),
+            .border_color(palette(cx).accent.opacity(0.6))
+    } else if offer.off() {
+        dot.border_1().border_color(color)
+    } else {
+        dot.bg(color)
     }
 }
 
@@ -718,6 +787,9 @@ fn summary(tool: &Tool) -> String {
         "ls" => "Lists a folder's contents.",
         "codemode" => {
             "Writes a short script that calls several tools at once and keeps only what matters."
+        }
+        sandbox::help::TOOL => {
+            "Asks you to do a step the sandbox blocks (it runs nothing) and tells the model your answer."
         }
         "powershell" => "Runs a PowerShell command.",
         "web_search" => "Searches the web: titles, links and short snippets.",
@@ -794,7 +866,7 @@ struct Edit {
 fn row(info: &RowInfo, tool: &Tool, edit: Option<Edit>, cx: &App) -> AnyElement {
     let theme = cx.theme();
     let (muted, mono) = (theme.muted_foreground, theme.mono_font_family.clone());
-    let off = info.offer == Offer::Switch(false);
+    let off = info.offer.off();
     let tag = |text: String, color: Hsla| {
         div()
             .flex_none()
@@ -834,8 +906,8 @@ fn row(info: &RowInfo, tool: &Tool, edit: Option<Edit>, cx: &App) -> AnyElement 
                 tool_catalog(cx).update(cx, |catalog, cx| catalog.toggle_open(mode, &name, cx));
             }
         });
-    let switch = match info.offer {
-        Offer::Switch(on) => Some(crate::ui::hover_switch(
+    let switch = info.offer.switch().map(|on| {
+        crate::ui::hover_switch(
             SharedString::from(format!("tool-switch-{}-{}", mode_id(mode), tool.name)),
             on,
             {
@@ -844,9 +916,8 @@ fn row(info: &RowInfo, tool: &Tool, edit: Option<Edit>, cx: &App) -> AnyElement 
             },
             Some(format!("Offer {} to the model", tool.name).into()),
             cx,
-        )),
-        _ => None,
-    };
+        )
+    });
     let size = if off {
         "off".to_owned()
     } else {
@@ -893,6 +964,12 @@ fn row(info: &RowInfo, tool: &Tool, edit: Option<Edit>, cx: &App) -> AnyElement 
                                         palette(cx).accent,
                                     ))
                                 })
+                                .when(matches!(info.offer, Offer::WithSandbox { .. }), |this| {
+                                    this.child(tag(
+                                        "While the sandbox is on".into(),
+                                        palette(cx).accent,
+                                    ))
+                                })
                                 .when(info.changed, |this| {
                                     this.child(tag("Edited".into(), palette(cx).warning))
                                 }),
@@ -926,7 +1003,7 @@ fn row(info: &RowInfo, tool: &Tool, edit: Option<Edit>, cx: &App) -> AnyElement 
         .into_any_element()
 }
 
-/// Turns Python (chats) or an optional Code tool on or off.
+/// Turns Python (chats), an optional Code tool or `request_user_help` on or off.
 fn switch_tool(mode: Mode, name: &str, on: bool, cx: &mut App) {
     match mode {
         Mode::Chat => {
@@ -937,6 +1014,10 @@ fn switch_tool(mode: Mode, name: &str, on: bool, cx: &mut App) {
                     dir.display()
                 );
             }
+            tool_catalog(cx).update(cx, |_, cx| cx.notify());
+        }
+        Mode::Code if name == sandbox::help::TOOL => {
+            AppSettings::update(cx, |settings| settings.help_tool = on);
             tool_catalog(cx).update(cx, |_, cx| cx.notify());
         }
         Mode::Code => {
@@ -1151,7 +1232,9 @@ mod tests {
     use pi_config::tools::Tool;
     use pi_sessions::Mode;
 
-    use super::{Offer, guideline_lines, list, offer, origin, summary, thousands, tokens};
+    use super::{
+        Offer, Switches, guideline_lines, list, offer, origin, summary, thousands, tokens,
+    };
 
     fn tool(name: &str, extension: Option<&str>, active: bool) -> Tool {
         Tool {
@@ -1183,44 +1266,104 @@ mod tests {
 
     #[test]
     fn how_tools_are_offered() {
-        let none: [String; 0] = [];
-        let on = ["grep".to_owned()];
+        let none: &[String] = &[];
+        let on: &[String] = &["grep".to_owned()];
         assert_eq!(
-            offer(Mode::Chat, &tool("web_search", None, false), true, &none),
+            offer(
+                Mode::Chat,
+                &tool("web_search", None, false),
+                &switches(true, none)
+            ),
             Some(Offer::WithWebSearch)
         );
         assert_eq!(
-            offer(Mode::Chat, &tool("python", None, true), false, &none),
+            offer(
+                Mode::Chat,
+                &tool("python", None, true),
+                &switches(false, none)
+            ),
             Some(Offer::Switch(false))
         );
         assert_eq!(
-            offer(Mode::Chat, &tool("python", None, false), true, &none),
+            offer(
+                Mode::Chat,
+                &tool("python", None, false),
+                &switches(true, none)
+            ),
             Some(Offer::Switch(true))
         );
         // Chats never offer pi's file tools, though pi lists them.
         assert_eq!(
-            offer(Mode::Chat, &tool("read", None, false), true, &none),
+            offer(
+                Mode::Chat,
+                &tool("read", None, false),
+                &switches(true, none)
+            ),
             None
         );
         // The optional Code tools follow their switches, whatever pi reported.
         assert_eq!(
-            offer(Mode::Code, &tool("grep", None, false), true, &on),
+            offer(Mode::Code, &tool("grep", None, false), &switches(true, on)),
             Some(Offer::Switch(true))
         );
         assert_eq!(
-            offer(Mode::Code, &tool("codemode", None, true), true, &on),
+            offer(
+                Mode::Code,
+                &tool("codemode", None, true),
+                &switches(true, on)
+            ),
             Some(Offer::Switch(false))
         );
         assert_eq!(
-            offer(Mode::Code, &tool("read", None, true), true, &none),
+            offer(Mode::Code, &tool("read", None, true), &switches(true, none)),
             Some(Offer::Always)
         );
         assert_eq!(
-            offer(Mode::Code, &tool("powershell", None, false), true, &none),
+            offer(
+                Mode::Code,
+                &tool("powershell", None, false),
+                &switches(true, none)
+            ),
             None
         );
         assert!(Offer::Switch(true).counted() && !Offer::Switch(false).counted());
         assert!(Offer::Always.counted() && !Offer::WithWebSearch.counted());
+    }
+
+    fn switches(python: bool, code_tools: &[String]) -> Switches<'_> {
+        Switches {
+            python,
+            code_tools,
+            help: true,
+            sandbox: true,
+        }
+    }
+
+    /// `request_user_help` has a switch, and goes with every message only while the sandbox is
+    /// on too (pi reports it inactive when the sandbox is off).
+    #[test]
+    fn the_help_tool_needs_its_switch_and_the_sandbox() {
+        let help = tool(sandbox::help::TOOL, Some("/x/sandbox/extension.ts"), false);
+        let offered = |help_on, sandbox| {
+            offer(
+                Mode::Code,
+                &help,
+                &Switches {
+                    python: true,
+                    code_tools: &[],
+                    help: help_on,
+                    sandbox,
+                },
+            )
+            .expect("offered in Code sessions")
+        };
+        let on = offered(true, true);
+        assert!(on.counted() && on.switch() == Some(true));
+        let no_sandbox = offered(true, false);
+        assert!(!no_sandbox.counted() && no_sandbox.sometimes() && !no_sandbox.off());
+        let off = offered(false, true);
+        assert!(!off.counted() && off.off() && !off.sometimes());
+        assert_eq!(offer(Mode::Chat, &help, &switches(true, &[])), None);
     }
 
     #[test]

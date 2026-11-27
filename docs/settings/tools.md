@@ -53,12 +53,20 @@ pi's tools and your extensions', in sessions on this computer.
 | `find` | Finds files by name pattern (optional) |
 | `ls` | Lists a folder's contents (optional) |
 | `codemode` | Writes a short script that calls several tools at once and keeps only what matters (optional) |
+| `request_user_help` | Asks you to do a step the sandbox blocks, and tells the model your answer (while the sandbox is on) |
 
 The optional tools are off until you turn them on with their switch. They are passed to pi as
 `--tools +grep,…`, so the terminal pi isn't affected. The
 [sandbox](sandboxing-and-security.md) checks `grep`, `find` and `ls` like `read`, and
 `codemode`'s scripts reach files and commands only through the session's tools, which the same
 checks cover.
+
+`request_user_help` comes with Pistachio and is on until you switch it off. It is offered only
+while the [sandbox](sandboxing-and-security.md#asking-you-for-help) is on for the session's
+folder, and changes to its switch apply to conversations started afterwards. The model is told to
+use it only when the sandbox blocks something the task needs and there is no reasonable way to do
+it inside the sandbox: not for ordinary failures, git or GitHub, websites (Pistachio asks about
+those itself) or to try again what you declined.
 
 ## The context meter
 
@@ -93,8 +101,8 @@ Each tool has a one-line summary, where it comes from (pi, Pistachio or an exten
 size. **What the model sees** opens, word for word, what pi tells the model: the description,
 the guidelines in the system prompt and the parameters.
 
-The text of Pistachio's own tools (`python`, `web_search`, `web_fetch` and the sandboxed `bash`)
-can be changed:
+The text of Pistachio's own tools (`python`, `web_search`, `web_fetch`, the sandboxed `bash` and
+`request_user_help`) can be changed:
 
 - **Edit** turns the description and guidelines into fields. They are saved as you type to
   `~/.pi/agent/pistachio/tools/texts.json` and used by conversations started afterwards.

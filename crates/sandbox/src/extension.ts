@@ -14,6 +14,11 @@
 //   (once, or always for this project and remote), and the helper does it (`gate run`): git with
 //   the user's keys works only in the helper's own copy of the remote, never in the agent's
 //   repository. Only what the command prints goes back.
+// - `request_user_help` (Settings → Tools → Code, on unless switched off; offered only while the
+//   sandbox is on for the folder): the model hands the user a step the sandbox blocks. The app
+//   shows a pill with the command the sandbox blocked last, its folder and error, the model's
+//   reason and a command to copy; the user marks it done or dismisses it, and the model gets
+//   the answer. It runs nothing and asks for no credentials.
 //
 // The rules are read again whenever the settings change, so changes apply to the next tool call.
 // Pistachio writes this file on start; edits here are overwritten.
@@ -22,6 +27,7 @@ import { mkdirSync, readFileSync, realpathSync, statSync, unlinkSync } from "nod
 import { createServer } from "node:net";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { Type } from "typebox";
 
 // What the user wrote for the model in place of a tool's own text (Settings → Tools).
 function edited(name: string): { description?: string; guidelines?: string[] } {
@@ -168,6 +174,16 @@ const GATE_NOTE = [
 // Added too while commands reach websites only through Pistachio's proxy.
 const SITES_NOTE =
   "- Websites: commands (curl, pip, npm, cargo, git over HTTPS, …) reach the network through Pistachio's proxy. The first time a site is used, Pistachio asks the user; just run the command and wait. A site the user declined answers 403: don't try other sites or ways around it, ask the user.";
+
+// The help tool's request: a `select` whose title is HELP_MARK and the request as JSON, which
+// Pistachio shows as a pill (see the sandbox crate's `help` module).
+const HELP_TOOL = "request_user_help";
+const HELP_MARK = "pistachio-help:";
+const HELP_DONE = "Done";
+const HELP_DISMISS = "Dismiss";
+const HELP_ON = process.env.PISTACHIO_HELP_TOOL !== "off";
+// What a pill shows of a blocked command's output, at most (its end, where the error is).
+const HELP_ERROR_CHARS = 2000;
 
 const ALLOW = "Allow";
 const ALWAYS = "Always for this project";
@@ -318,6 +334,77 @@ export default async function (pi: any) {
     pi.registerTool(bash);
   }
 
+  // The help tool: offered while it is switched on and the folder's commands run in the sandbox.
+  // The command the sandbox blocked last in this run is what its pill shows.
+  let lastBlocked: { command: string; cwd: string; error: string } | undefined;
+  const applyHelp = (ctx: any) => {
+    const policy = policyFor(ctx?.cwd ?? process.cwd());
+    const others = pi.getActiveTools().filter((name: string) => name !== HELP_TOOL);
+    pi.setActiveTools(HELP_ON && policy?.sandboxed ? [...others, HELP_TOOL] : others);
+  };
+  pi.on("session_start", async (_event: unknown, ctx: any) => applyHelp(ctx));
+  pi.on("agent_end", async () => {
+    lastBlocked = undefined;
+  });
+  const helpText = edited(HELP_TOOL);
+  pi.registerTool({
+    name: HELP_TOOL,
+    label: "Ask for help",
+    defaultActive: false,
+    description:
+      helpText.description ??
+      "Ask the user to do a step that Pistachio's sandbox blocks and that the task needs. The user sees a short " +
+        "request with your title, the command the sandbox blocked last (its folder and error) and your reason, and " +
+        "can copy your suggested command to run it themselves; they mark it done or dismiss it, and you get their " +
+        "answer. This tool runs nothing and never asks for passwords, tokens or other secrets.",
+    promptSnippet: "Ask the user to do a step Pistachio's sandbox blocks, when it can't be done inside the sandbox",
+    promptGuidelines: helpText.guidelines ?? [
+      "Use request_user_help only when Pistachio's sandbox blocked an action the task needs (such as writing outside the folders it allows, reading a hidden path or changing a system setting) and there is no reasonable way to do it inside the sandbox.",
+      "Don't use request_user_help for ordinary command failures (errors, missing programs, failing tests), for git or GitHub (Pistachio asks the user about pushing, pulling and gh itself), for websites (Pistachio asks about new sites itself), or to retry something the user declined.",
+      "Give request_user_help a short title that says what the user should do, and a reason that says what is blocked and why the task needs it; add suggested_command only when one command does it. Never ask for passwords, tokens or other secrets.",
+      "When the user marks a request_user_help done, continue; when they dismiss it, don't ask again or work around the sandbox.",
+    ],
+    parameters: Type.Object({
+      title: Type.String({ description: "A few words: what the user should do, e.g. \"Install the Xcode command line tools\"." }),
+      reason: Type.String({ description: "What the sandbox blocks and why the task needs it, in a sentence or two." }),
+      suggested_command: Type.Optional(
+        Type.String({ description: "A shell command the user can run themselves to do it, if one does. They copy it; it is never run for them." }),
+      ),
+    }),
+    async execute(_id: string, params: any, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: any) {
+      const title = String(params.title ?? "").trim() || "Help with a step the sandbox blocks";
+      const ui = (ctx ?? latest)?.hasUI === false ? undefined : (ctx ?? latest)?.ui;
+      const reply = (text: string, answer: string) => ({ content: [{ type: "text", text }], details: { answer } });
+      if (!ui?.select) return reply("No one can be asked here: say in your answer what the user needs to do.", "none");
+      const request = {
+        title,
+        reason: String(params.reason ?? "").trim(),
+        suggested_command: typeof params.suggested_command === "string" ? params.suggested_command.trim() : undefined,
+        blocked: lastBlocked,
+      };
+      lastBlocked = undefined;
+      let answer: string | undefined;
+      try {
+        answer = await ui.select(HELP_MARK + JSON.stringify(request), [HELP_DONE, HELP_DISMISS], { signal });
+      } catch {
+        answer = undefined;
+      }
+      if (answer === HELP_DONE) {
+        return reply(
+          `The user marked this done: ${title}. Continue the task, checking the result where you can; the sandbox's rules are unchanged unless the user changed them.`,
+          "done",
+        );
+      }
+      if (answer === HELP_DISMISS) {
+        return reply(
+          `The user dismissed this: ${title}. Don't ask again or work around the sandbox: go on without it if you can, otherwise stop and say what is blocked.`,
+          "dismissed",
+        );
+      }
+      return reply(`The request was cancelled without an answer: ${title}.`, "none");
+    },
+  });
+
   pi.on("tool_call", async (event: any, ctx: any) => {
     if (ctx) latest = ctx;
     const tool = event.toolName;
@@ -359,6 +446,7 @@ export default async function (pi: any) {
 
   // The model learns how git and GitHub work here before it tries, instead of from refusals.
   pi.on("before_agent_start", async (event: any, ctx: any) => {
+    applyHelp(ctx);
     if (!gate) return;
     const policy = policyFor(ctx?.cwd ?? process.cwd());
     if (!policy?.sandboxed) return;
@@ -377,8 +465,12 @@ export default async function (pi: any) {
         )
       : /: Operation not permitted|: Read-only file system|not an allowed site|CONNECT tunnel failed/i.test(text);
     if (!blocked) return;
-    const policy = policyFor(ctx?.cwd ?? process.cwd());
+    const cwd = ctx?.cwd ?? process.cwd();
+    const policy = policyFor(cwd);
     if (!policy?.sandboxed) return;
+    if (typeof event.input?.command === "string") {
+      lastBlocked = { command: event.input.command, cwd, error: text.trim().slice(-HELP_ERROR_CHARS) };
+    }
     const network =
       policy.network === "on"
         ? ""

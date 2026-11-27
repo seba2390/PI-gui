@@ -6,6 +6,16 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `request_user_help`, a tool for Code sessions on this computer: when the sandbox blocks a step
+  the task needs and there is no way to do it inside the sandbox, the model can hand it to you. A
+  pill above the message box says "Needs your help: …"; opened, it shows the command the sandbox
+  blocked, its folder and its error apart from the model's reason and the command it suggests.
+  **Copy command**, **Done** and **Dismiss**; the model gets your answer. It runs nothing and
+  never asks for passwords or keys. It is offered while the sandbox is on, and has a switch in
+  Settings → Tools → Code (on by default).
+
 ## [0.5.8] - 2026-11-27
 
 ### Changed

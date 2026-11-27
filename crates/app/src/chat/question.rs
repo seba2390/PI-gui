@@ -59,6 +59,22 @@ enum Line {
 
 pub type OnAnswer = Rc<dyn Fn(&str, &ExtensionUiAnswer, &mut Window, &mut App)>;
 
+/// What is docked: a question, or a request for help from `request_user_help` (a select too,
+/// see [`super::help`]).
+pub enum Card {
+    Question(Entity<Question>),
+    Help(Entity<super::help::Help>),
+}
+
+impl Card {
+    pub fn view(&self) -> AnyView {
+        match self {
+            Self::Question(card) => card.clone().into(),
+            Self::Help(card) => card.clone().into(),
+        }
+    }
+}
+
 /// A question as the chat keeps it: what it needs without reading the card, which may be in the
 /// middle of handling a click when the chat looks.
 pub struct Docked {
@@ -66,13 +82,23 @@ pub struct Docked {
     pub focus: FocusHandle,
     /// When pi stops waiting for the answer.
     pub expires: Option<std::time::Instant>,
-    pub card: Entity<Question>,
+    pub card: Card,
 }
 
 impl Docked {
     pub fn new(request: &ExtensionUiRequest, on_answer: OnAnswer, cx: &mut App) -> Self {
-        let card = cx.new(|cx| Question::new(request, on_answer, cx));
-        let focus = card.read(cx).focus.clone();
+        let (card, focus) = match super::help::Help::request(request) {
+            Some(help) => {
+                let card = cx.new(|cx| super::help::Help::new(&request.id, help, on_answer, cx));
+                let focus = card.read(cx).focus().clone();
+                (Card::Help(card), focus)
+            }
+            None => {
+                let card = cx.new(|cx| Question::new(request, on_answer, cx));
+                let focus = card.read(cx).focus.clone();
+                (Card::Question(card), focus)
+            }
+        };
         Self {
             id: request.id.clone(),
             focus,
@@ -81,6 +107,11 @@ impl Docked {
                 .map(|ms| std::time::Instant::now() + Duration::from_millis(ms)),
             card,
         }
+    }
+
+    /// A request for help: it waits on a tool call, so it goes when the agent stops.
+    pub fn is_help(&self) -> bool {
+        matches!(self.card, Card::Help(_))
     }
 
     pub fn expired(&self) -> bool {
@@ -419,7 +450,7 @@ mod tests {
     use pi_rpc::protocol::{ExtensionUiAnswer, ExtensionUiMethod, ExtensionUiRequest};
     use pretty_assertions::assert_eq;
 
-    use super::{Docked, Kind, OnAnswer};
+    use super::{Card, Docked, Kind, OnAnswer};
     use crate::ui::dialog::testing::{draw, press};
 
     /// Holds a docked question the way the chat does, and like the chat looks at it again when
@@ -434,7 +465,7 @@ mod tests {
             div()
                 .size_full()
                 .pt(gpui_kit::px(40.))
-                .children(self.docked.as_ref().map(|docked| docked.card.clone()))
+                .children(self.docked.as_ref().map(|docked| docked.card.view()))
         }
     }
 
@@ -460,7 +491,9 @@ mod tests {
                     let _ = weak.update(cx, |this: &mut Holder, cx| {
                         let docked = this.docked.take().expect("asked");
                         assert_eq!(docked.id, id);
-                        let _ = docked.card.read(cx).heading.clone();
+                        if let Card::Question(card) = &docked.card {
+                            let _ = card.read(cx).heading.clone();
+                        }
                         sent.borrow_mut().push(answer.clone());
                         cx.notify();
                     });
@@ -476,7 +509,9 @@ mod tests {
                     },
                 };
                 let docked = Docked::new(&request, on_answer, cx);
-                CARD.with(|card| *card.borrow_mut() = Some(docked.card.clone()));
+                if let Card::Question(question) = &docked.card {
+                    CARD.with(|card| *card.borrow_mut() = Some(question.clone()));
+                }
                 window.focus(&docked.focus, cx);
                 Holder {
                     docked: Some(docked),
