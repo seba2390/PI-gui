@@ -9,13 +9,11 @@ article dl.myst > dt {
   font-weight: 600;
 }
 
-/* Screenshots of the app. Each image has the app's background above and below it, fading slowly
-   to transparent (baked into the image), so it blends into the page at the top and bottom and the
-   screenshot itself is never dimmed. There are light and dark ones; Furo shows the matching one. */
+/* Screenshots of the app, in light and dark; Furo shows the one that matches the page. */
 article img.shot {
   display: block;
   width: 100%;
   max-width: 46rem;
   height: auto;
-  margin: 0.25rem auto 0.75rem;
+  margin: 1rem auto 1.5rem;
 }
