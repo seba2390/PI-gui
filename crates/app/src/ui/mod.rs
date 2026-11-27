@@ -66,16 +66,30 @@ pub fn web_link(
     use gpui_kit::{
         InteractiveElement as _, ParentElement as _, StatefulInteractiveElement as _, Styled as _,
     };
-    // Plain text with a faint underline that brightens on hover.
+    // Underlined, with the usual arrow out of a box: it opens in the browser.
     let theme = cx.theme();
-    let (faint, strong) = (theme.border, theme.muted_foreground);
+    let (line, strong) = (theme.muted_foreground, theme.foreground);
     gpui_kit::div()
         .id(id.into())
         .min_w_0()
+        .flex()
+        .items_center()
+        .gap_1()
         .cursor_pointer()
-        .underline()
-        .text_decoration_color(faint)
+        .child(
+            gpui_kit::div()
+                .min_w_0()
+                .truncate()
+                .underline()
+                .text_decoration_color(line)
+                .child(text.into()),
+        )
+        .child(
+            gpui_kit::component::Icon::from(AppIcon::ExternalLink)
+                .size_3()
+                .flex_none()
+                .text_color(line),
+        )
         .hover(move |style| style.text_decoration_color(strong))
-        .child(text.into())
         .on_click(move |_, _, cx| cx.open_url(&url))
 }

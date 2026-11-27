@@ -35,6 +35,7 @@
     "cuda": 0.7,
     "cpu": 0.55
    },
+   "template_kwargs": true,
    "families": [],
    "streams_experts": false,
    "requires": {},
@@ -122,6 +123,7 @@
    "efficiency": {
     "metal": 0.85
    },
+   "template_kwargs": true,
    "families": [],
    "streams_experts": false,
    "requires": {
@@ -166,6 +168,7 @@
    "efficiency": {
     "metal": 1.6
    },
+   "template_kwargs": true,
    "families": [
     "qwen3.6-35b-a3b",
     "inkling-2-mini",
@@ -222,6 +225,7 @@
     "cuda": 0.4,
     "vulkan": 0.3
    },
+   "template_kwargs": true,
    "families": [],
    "streams_experts": true,
    "requires": {},
@@ -296,6 +300,7 @@
     "cuda": 0.75,
     "metal": 0.55
    },
+   "template_kwargs": true,
    "families": [],
    "streams_experts": false,
    "requires": {
@@ -349,6 +354,7 @@
    "efficiency": {
     "metal": 0.5
    },
+   "template_kwargs": false,
    "families": [
     "gemma-4-26b-a4b"
    ],
@@ -395,6 +401,8 @@
    "context": 262144,
    "quality": 64,
    "vision": true,
+   "reasoning": true,
+   "thinking_levels": {},
    "tool_calling": true,
    "sources": [
     "https://artificialanalysis.ai/articles/qwen3-5-small-models",
@@ -538,6 +546,8 @@
    "context": 262144,
    "quality": 55,
    "vision": true,
+   "reasoning": true,
+   "thinking_levels": {},
    "tool_calling": true,
    "sources": [
     "https://artificialanalysis.ai/articles/qwen3-5-small-models",
@@ -654,6 +664,8 @@
    "context": 262144,
    "quality": 58,
    "vision": false,
+   "reasoning": true,
+   "thinking_levels": {},
    "tool_calling": true,
    "sources": [
     "https://huggingface.co/Nanbeige/Nanbeige4.2-3B",
@@ -717,6 +729,11 @@
    "context": 262144,
    "quality": 54,
    "vision": false,
+   "reasoning": true,
+   "thinking_levels": {
+    "low": "low",
+    "high": "high"
+   },
    "tool_calling": true,
    "sources": [
     "https://huggingface.co/XHToken/Spark-X2.6-4B"
@@ -758,6 +775,8 @@
    "context": 131072,
    "quality": 42,
    "vision": true,
+   "reasoning": true,
+   "thinking_levels": {},
    "tool_calling": true,
    "sources": [
     "https://ai.google.dev/gemma/docs/core/model_card_4",
@@ -868,6 +887,12 @@
    "context": 524288,
    "quality": 66,
    "vision": false,
+   "reasoning": true,
+   "thinking_levels": {
+    "low": "low",
+    "medium": "medium",
+    "high": "high"
+   },
    "tool_calling": true,
    "sources": [
     "https://huggingface.co/ifm/K2-Horizon-7B",
@@ -910,6 +935,8 @@
    "context": 262144,
    "quality": 68,
    "vision": true,
+   "reasoning": true,
+   "thinking_levels": {},
    "tool_calling": true,
    "sources": [
     "https://huggingface.co/deepreinforce-ai/Ornith-1.0-9B"
@@ -1037,6 +1064,8 @@
    "context": 262144,
    "quality": 50,
    "vision": false,
+   "reasoning": true,
+   "thinking_levels": {},
    "tool_calling": true,
    "sources": [
     "https://huggingface.co/inclusionAI/Ling-3.0-tiny",
@@ -1147,6 +1176,8 @@
    "context": 262144,
    "quality": 38,
    "vision": false,
+   "reasoning": true,
+   "thinking_levels": {},
    "tool_calling": true,
    "sources": [
     "https://liquid.ai/blog/lfm3",
@@ -1269,6 +1300,8 @@
    "context": 131072,
    "quality": 46,
    "vision": false,
+   "reasoning": true,
+   "thinking_levels": {},
    "tool_calling": true,
    "sources": [
     "https://research.nvidia.com/labs/nemotron/Nemotron-3.5-Bolt-E4B-4GB/"
@@ -1310,6 +1343,8 @@
    "context": 262144,
    "quality": 60,
    "vision": true,
+   "reasoning": true,
+   "thinking_levels": {},
    "tool_calling": true,
    "sources": [
     "https://huggingface.co/prism-ml/Ternary-Bonsai-2-9B-gguf"
@@ -1350,6 +1385,8 @@
    "context": 262144,
    "quality": 63,
    "vision": true,
+   "reasoning": true,
+   "thinking_levels": {},
    "tool_calling": true,
    "sources": [
     "https://ai.google.dev/gemma/docs/core/model_card_4",
@@ -1460,6 +1497,8 @@
    "context": 131072,
    "quality": 58,
    "vision": false,
+   "reasoning": true,
+   "thinking_levels": {},
    "tool_calling": true,
    "sources": [
     "https://huggingface.co/JetBrains/Mellum2.1-12B-A2.5B-Thinking"
@@ -1501,6 +1540,12 @@
    "context": 262144,
    "quality": 80,
    "vision": false,
+   "reasoning": true,
+   "thinking_levels": {
+    "low": "low",
+    "medium": "medium",
+    "high": "xhigh"
+   },
    "tool_calling": true,
    "sources": [
     "https://huggingface.co/prism-ml/Ternary-Bonsai-2.5-27B-GGUF",
@@ -1542,6 +1587,15 @@
    "context": 262144,
    "quality": 82,
    "vision": true,
+   "reasoning": true,
+   "thinking_levels": {
+    "off": "none",
+    "minimal": "minimal",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh"
+   },
    "tool_calling": true,
    "sources": [
     "https://huggingface.co/thinkingmachines/Inkling-2-Mini",
@@ -1707,6 +1761,8 @@
    "context": 262144,
    "quality": 72,
    "vision": true,
+   "reasoning": true,
+   "thinking_levels": {},
    "tool_calling": true,
    "sources": [
     "https://ai.google.dev/gemma/docs/core/model_card_4",
@@ -1853,6 +1909,8 @@
    "context": 262144,
    "quality": 78,
    "vision": true,
+   "reasoning": true,
+   "thinking_levels": {},
    "tool_calling": true,
    "sources": [
     "https://huggingface.co/Qwen/Qwen3.6-35B-A3B",

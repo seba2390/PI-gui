@@ -325,6 +325,38 @@ impl ModelsFile {
         Ok(())
     }
 
+    /// Sets (or with `None` removes) one field of a model that is in the file, like its `compat`.
+    pub fn set_model_field(
+        &mut self,
+        provider: &str,
+        id: &str,
+        key: &str,
+        value: Option<Value>,
+    ) -> Result<(), ConfigError> {
+        let entry = self
+            .provider_mut(provider)?
+            .get_mut("models")
+            .and_then(Value::as_array_mut)
+            .and_then(|models| {
+                models
+                    .iter_mut()
+                    .find(|model| model.get("id").and_then(Value::as_str) == Some(id))
+            })
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| {
+                ConfigError::Invalid(format!("Provider \"{provider}\" has no model \"{id}\"."))
+            })?;
+        match value {
+            Some(value) => {
+                entry.insert(key.to_owned(), value);
+            }
+            None => {
+                entry.shift_remove(key);
+            }
+        }
+        Ok(())
+    }
+
     /// Removes a model from a provider.
     pub fn remove_model(&mut self, provider: &str, id: &str) {
         if let Ok(provider) = self.provider_mut(provider)

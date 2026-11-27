@@ -789,6 +789,30 @@ impl ModelsDialog {
         let quant = format!("{} {}", choice.build.quant, choice.build.format_label());
         let memory = format!("~{:.1} GB of RAM", choice.memory as f64 / 1e9);
         let tps = format!("~{:.0} tokens/s ({speed})", choice.tps);
+        let tokens = |n: u64| format!("{}K", n / 1024);
+        let context = if choice.context < choice.model.context {
+            format!(
+                "{} tokens (the model takes up to {})",
+                tokens(choice.context),
+                tokens(choice.model.context)
+            )
+        } else {
+            format!("{} tokens", tokens(choice.context))
+        };
+        let images = if choice.model.vision {
+            "Yes"
+        } else {
+            "No, text only"
+        }
+        .to_owned();
+        let levels = local_models::thinking::levels(choice.model, choice.engine);
+        let thinking = match choice.model.reasoning {
+            Some(true) if levels.is_empty() => format!("Not with {}", choice.engine.name),
+            Some(true) if levels == ["off", "high"] => "Yes · on or off".to_owned(),
+            Some(true) => format!("Yes · {}", levels.join(", ")),
+            Some(false) => "No".to_owned(),
+            None => "Unknown".to_owned(),
+        };
         let fact = |icon: Icon, name: &'static str, value: AnyElement| {
             h_flex()
                 .flex_1()
@@ -827,7 +851,18 @@ impl ModelsDialog {
                             .child(fact(AppIcon::MemoryStick.into(), "Memory", text(memory)))
                             .child(fact(AppIcon::Gauge.into(), "Speed here", text(tps))),
                     )
-                    .child(fact(AppIcon::Link.into(), "Checkpoint", checkpoint))
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(fact(AppIcon::ScrollText.into(), "Context", text(context)))
+                            .child(fact(AppIcon::Image.into(), "Image input", text(images))),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(fact(AppIcon::Brain.into(), "Thinking", text(thinking)))
+                            .child(fact(AppIcon::Link.into(), "Checkpoint", checkpoint)),
+                    )
                     .children((!notes.is_empty()).then(|| label(notes.join(" · "), cx))),
             )
             .when(with_action, |this| {

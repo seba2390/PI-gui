@@ -25,7 +25,13 @@ All notable changes to PI-gui are listed here. The format follows
   and Most capable, each with its inference engine, quantization, memory, speed here and checkpoint.
   The suggestions start collapsed to their name and a centered **Download and run** (or Run,
   Connect) button; the full-width arrow at the bottom of each opens why it fits and how it runs. The engine and the checkpoint link to their pages, also in the download
-  dialog, and the button says **Download and run**.
+  dialog, and the button says **Download and run**. Opened, a suggestion also shows its context,
+  whether it takes images, and whether it thinks, with the levels pi offers for it here.
+- **Thinking levels for local models.** A model Pistachio downloaded is added to `models.json`
+  with `reasoning` and the `compat` (`chat-template` kwargs) and `thinkingLevelMap` its chat
+  template needs, so the thinking levels in chat and code mode reach it: off or on for most, and
+  their own levels for the four that take `reasoning_effort` (a template raises on a value it does
+  not know). TurboFieldfare cannot pass thinking on, so a model it runs is added without it.
 - **Connected models by where they run.** Settings → pi & models groups them into This device,
   Other devices and API connections, and each has a trash button that removes it after asking. A
   model Pistachio downloaded is also stopped and deleted from this computer, with its engine

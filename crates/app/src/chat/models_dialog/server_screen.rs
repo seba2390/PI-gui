@@ -167,6 +167,39 @@ impl Row {
     }
 }
 
+/// What the catalog knows of the model a server Pistachio runs here offers: whether it thinks
+/// here and the context it was started with, which the server may not say.
+fn local_facts(base_url: &str, offer: &mut Offer, cx: &App) {
+    let Some(models) = crate::local_models::local_models(cx) else {
+        return;
+    };
+    let Some((model, engine, context)) = models.read(cx).chosen_at(base_url) else {
+        return;
+    };
+    for offered in offer
+        .models
+        .iter_mut()
+        .filter(|offered| offered.id == model.id)
+    {
+        offered.reasoning = Some(local_models::thinking::thinks(model, engine));
+        offered.context_window = offered.context_window.or(Some(context));
+    }
+}
+
+/// The catalog id of the model a server Pistachio runs at `base_url` offers, and what pi's
+/// models.json needs for its thinking (`None` when it does not think there).
+fn local_thinking(
+    base_url: &str,
+    cx: &App,
+) -> Option<(String, Option<local_models::thinking::PiThinking>)> {
+    let models = crate::local_models::local_models(cx)?;
+    let (model, engine, _) = models.read(cx).chosen_at(base_url)?;
+    Some((
+        model.id.clone(),
+        local_models::thinking::pi_thinking(model, engine),
+    ))
+}
+
 /// The models in the file, then the others the server offers: those for conversations first.
 fn merge(rows: &mut Vec<Row>, offer: Offer) {
     for row in rows.iter_mut() {
@@ -431,7 +464,11 @@ impl ModelsDialog {
                 set(&screen.id, &id, window, cx);
             };
         match connection {
-            Connection::Online { base_url, offer } => {
+            Connection::Online {
+                base_url,
+                mut offer,
+            } => {
+                local_facts(&base_url, &mut offer, cx);
                 screen.kind = offer.kind;
                 screen.state = State::Online;
                 if new {
@@ -644,10 +681,25 @@ impl ModelsDialog {
                 id
             };
             let mut added = None;
+            let local = local_thinking(&spec.base_url, cx);
             for row in &screen.rows {
                 if row.ticked {
-                    file.set_model(&id, &row.spec(cx)?)
+                    let model = row.spec(cx)?;
+                    file.set_model(&id, &model)
                         .map_err(|error| error.to_string())?;
+                    // A model Pistachio runs here gets the thinking its template takes.
+                    if let Some((catalog_id, thinking)) = &local
+                        && *catalog_id == model.id
+                    {
+                        let thinking = thinking.as_ref().filter(|_| model.reasoning);
+                        for (key, value) in [
+                            ("compat", thinking.map(|t| t.compat.clone())),
+                            ("thinkingLevelMap", thinking.map(|t| t.level_map.clone())),
+                        ] {
+                            file.set_model_field(&id, &model.id, key, value)
+                                .map_err(|error| error.to_string())?;
+                        }
+                    }
                     if !row.saved && added.is_none() {
                         added = Some((id.clone(), row.spec.id.clone()));
                     }

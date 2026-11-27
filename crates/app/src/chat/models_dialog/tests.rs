@@ -485,3 +485,57 @@ fn keys_to_ask_a_server_with() {
     assert_eq!(place.key("$PISTACHIO_NO_SUCH_VARIABLE"), None);
     assert_eq!(place.key("${HOME}"), std::env::var("HOME").ok());
 }
+
+/// A model Pistachio runs here is saved so that pi's thinking levels reach its chat template.
+#[gpui_kit::test]
+fn a_local_model_gets_its_thinking(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let address = serve(|method, path, _, _| match (method, path) {
+        ("GET", "/v1/models") => (200, r#"{"data":[{"id":"ternary-bonsai-2-27b"}]}"#.into()),
+        _ => (404, r#"{"error":"not found"}"#.into()),
+    });
+    let port: u16 = address.rsplit(':').next().unwrap().parse().unwrap();
+    let setup = local_models::Setup {
+        model: "ternary-bonsai-2-27b".into(),
+        build: "gguf-q2_0".into(),
+        engine: "llama-cpp".into(),
+        port,
+        context: 32_768,
+    };
+    local_models::setups::save(root.path(), std::slice::from_ref(&setup)).unwrap();
+    let (dialog, cx) = open(dir.path(), "", cx);
+    cx.update(|window, cx| {
+        let mut config = cx.global::<AppConfig>().clone();
+        config.local_models_dir = root.path().into();
+        cx.set_global(config);
+        crate::local_models::init(cx);
+        dialog.update(cx, |dialog, cx| {
+            dialog.open_new_server(vec![setup.base_url()], window, cx);
+        });
+    });
+    settle(&dialog, cx);
+    click("save-server", cx);
+    let text = std::fs::read_to_string(dir.path().join("models.json")).unwrap();
+    let file: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let provider = file["providers"]
+        .as_object()
+        .unwrap()
+        .values()
+        .next()
+        .unwrap();
+    let model = &provider["models"][0];
+    assert_eq!(model["id"], "ternary-bonsai-2-27b");
+    assert_eq!(model["reasoning"], true);
+    assert_eq!(model["contextWindow"], 32_768);
+    assert_eq!(model["compat"]["thinkingFormat"], "chat-template");
+    assert_eq!(
+        model["compat"]["chatTemplateKwargs"]["reasoning_effort"]["$var"],
+        "thinking.effort"
+    );
+    assert_eq!(model["thinkingLevelMap"]["high"], "xhigh");
+    assert_eq!(
+        model["thinkingLevelMap"]["minimal"],
+        serde_json::Value::Null
+    );
+}

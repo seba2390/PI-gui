@@ -73,7 +73,8 @@ Locally hosted model
   that says what it is looking at, and lists what it found; nothing leaves the computer.
   **Suggest models** then offers up to three: **Fast**, **Balanced** and **Most capable**, each faster and less capable than the next. Each starts collapsed
   to its name and its **Download and run** button; the arrow along its bottom opens it. Opened,
-  it says why it fits and shows the
+  it says why it fits, its context, whether it takes images and whether it thinks (with the
+  thinking levels pi offers for it), and shows the
   inference engine that runs it best here, the checkpoint and its quantization, the memory it
   takes and its speed here (measured or estimated); the engine and the checkpoint link to their
   pages. Each comes with a
@@ -83,7 +84,8 @@ Locally hosted model
   run** button says how much it is; pressing it shows exactly what is downloaded (the engine and
   the model's files, linked to their pages, with their sizes and licenses) and asks first. Everything is pinned to a version and
   checked against its SHA-256, and kept in `~/.pi/agent/pistachio/local-models`. Once it runs,
-  the model is connected like any other server. It runs for this computer only, is started when
+  the model is connected like any other server, set up so that the thinking levels of the
+  message box reach it. It runs for this computer only, is started when
   a chat sends to it, and stops when Pistachio quits.
 
 API provider model

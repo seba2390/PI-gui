@@ -258,6 +258,20 @@ impl LocalModels {
         self.setup(&choice.key()).map(Setup::base_url)
     }
 
+    /// The model, its context and the engine of the setup listening at `base_url`.
+    pub fn chosen_at(
+        &self,
+        base_url: &str,
+    ) -> Option<(&'static catalog::Model, &'static catalog::Engine, u64)> {
+        let setup = setups::at(&self.setups, base_url)?;
+        let catalog = catalog();
+        Some((
+            catalog.model(&setup.model)?,
+            catalog.engine(&setup.engine)?,
+            setup.context,
+        ))
+    }
+
     /// Whether the setup listening at `base_url` runs; `None` when Pistachio set none up there.
     pub fn run_state_at(&self, base_url: &str) -> Option<RunState> {
         let key = setups::at(&self.setups, base_url)?.key();

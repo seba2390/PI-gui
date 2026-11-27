@@ -9,6 +9,7 @@ pub enum AppIcon {
     CodeXml,
     CornerDownRight,
     Download,
+    ExternalLink,
     Files,
     Gauge,
     GitBranch,
@@ -33,6 +34,7 @@ pub enum AppIcon {
     Play,
     Plug,
     RotateCcw,
+    ScrollText,
     Server,
     ShieldCheck,
     ShieldOff,
@@ -82,6 +84,8 @@ impl AppIcon {
             Self::Laptop => "icons/laptop.svg",
             Self::MemoryStick => "icons/memory-stick.svg",
             Self::Plug => "icons/plug.svg",
+            Self::ExternalLink => "icons/external-link.svg",
+            Self::ScrollText => "icons/scroll-text.svg",
             Self::Wrench => "icons/wrench.svg",
         }
     }

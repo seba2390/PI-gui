@@ -22,6 +22,7 @@ pub mod install;
 pub mod recommend;
 mod server;
 pub mod setups;
+pub mod thinking;
 
 pub use catalog::{Catalog, catalog};
 pub use hardware::Hardware;

@@ -68,6 +68,9 @@ pub struct Engine {
     pub name: String,
     pub license: String,
     pub effort: Effort,
+    /// Whether it applies a request's `chat_template_kwargs`, which is how pi sets thinking.
+    #[serde(default)]
+    pub template_kwargs: bool,
     pub formats: Vec<Format>,
     /// Its command line; `{bin}`, `{python}`, `{model}`, `{model_dir}`, `{upstream}`, `{id}` (the
     /// model's id, the name pi sees), `{port}` and `{ctx}` are filled in.
@@ -202,6 +205,13 @@ pub struct Model {
     /// Curated rank of how useful it is for an agent (0-100). Only compared, never shown.
     pub quality: u32,
     pub vision: bool,
+    /// Whether it can think before it answers; `None` when the catalog does not say.
+    #[serde(default)]
+    pub reasoning: Option<bool>,
+    /// The `reasoning_effort` its chat template takes for each of pi's thinking levels; empty
+    /// when thinking is only on or off (`enable_thinking`).
+    #[serde(default)]
+    pub thinking_levels: BTreeMap<String, String>,
     pub tool_calling: bool,
     pub sources: Vec<String>,
     pub builds: Vec<Build>,
