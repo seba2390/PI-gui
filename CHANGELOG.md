@@ -48,6 +48,15 @@ All notable changes to PI-gui are listed here. The format follows
   model that thinks without streaming it, or streams only a summary, gets no live estimate; nor
   does a model before one of its replies has checked out.
 
+- **Python code as it is written.** Expanding a chat's "Computed" row while the model is still
+  writing the call shows the code growing line by line, before it runs.
+
+### Changed
+
+- **A shorter, sharper Python tool text.** What the model is told about the python tool is down
+  from about 1,750 to 700 characters: what it returns (errors included, to fix and retry), when to
+  use it, said once, and the limits that would otherwise cost a failed call.
+
 ### Fixed
 
 - A llama.cpp server is now added to `models.json` as `llama-cpp`, not `llama.cpp`: pi 1.5 has

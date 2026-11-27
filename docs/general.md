@@ -148,7 +148,7 @@ statistics), and use it for small jobs a program does more reliably than reasoni
 words, sorting or reformatting text, regular expressions, JSON, dates. The code runs in
 [Monty](https://github.com/pydantic/monty), a Python interpreter with no files, network,
 environment or programs, stopped after 5 seconds or 256 MB. The chat shows the call as
-"Computed" with its result; expand it for the code.
+"Computed" with its result; expand it for the code, which shows as the model writes it.
 
 Turn it off under [Settings → General](#settings-general) → Chat mode or on
 [Tools](settings/tools.md).
