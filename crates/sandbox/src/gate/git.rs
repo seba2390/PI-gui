@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use super::config::{self, Repo, normalize_url, unsafe_url};
-use super::relay::{Env, Mirror};
+use super::relay::{self, Env, Mirror};
 use super::{Class, Options, Plan, Request, inside, parse_args, project_of};
 
 /// Options before the command that may come along (`git -C dir push`).
@@ -1406,19 +1406,8 @@ fn run_job(job: &Job, request: &Request, env: &Env) -> Result<i32, String> {
             let oids = if oids.is_empty() {
                 // What the remote lacks (the mirror knows what it has).
                 mirror.fetch(&[])?;
-                let mut command = mirror.git();
-                command
-                    .args(["lfs", "push", "--dry-run", "origin"])
-                    .args(refs)
-                    .stdin(Stdio::null())
-                    .stderr(Stdio::inherit());
-                let listed = command.output().map_err(|error| error.to_string())?;
-                String::from_utf8_lossy(&listed.stdout)
-                    .lines()
-                    .filter_map(|line| line.strip_prefix("push "))
-                    .filter_map(|rest| rest.split_whitespace().next())
-                    .map(str::to_owned)
-                    .collect()
+                let refs: Vec<&str> = refs.iter().map(String::as_str).collect();
+                lfs_to_send(&mirror, &refs)?
             } else {
                 oids.clone()
             };
@@ -1434,6 +1423,23 @@ fn run_job(job: &Job, request: &Request, env: &Env) -> Result<i32, String> {
             Ok(status(command))
         }
     }
+}
+
+/// The LFS files of `revs` (in the mirror) that the remote doesn't have yet, as git-lfs says.
+fn lfs_to_send(mirror: &Mirror, revs: &[&str]) -> Result<Vec<String>, String> {
+    let mut command = mirror.git();
+    command
+        .args(["lfs", "push", "--dry-run", "origin"])
+        .args(revs)
+        .stdin(Stdio::null())
+        .stderr(Stdio::inherit());
+    let listed = command.output().map_err(|error| error.to_string())?;
+    Ok(String::from_utf8_lossy(&listed.stdout)
+        .lines()
+        .filter_map(|line| line.strip_prefix("push "))
+        .filter_map(|rest| rest.split_whitespace().next())
+        .map(str::to_owned)
+        .collect())
 }
 
 /// Runs `command`, its output passed on; the exit code.
@@ -1566,6 +1572,28 @@ fn push_from_mirror(
     env: &Env,
 ) -> Result<i32, String> {
     let mirror = Mirror::open(env, project, &push.url)?;
+    // git-lfs uploads the LFS files of what is pushed first (its pre-push hook; hooks are off).
+    let objects: Vec<&str> = push
+        .updates
+        .iter()
+        .filter_map(|(_, object)| object.as_deref())
+        .collect();
+    if !objects.is_empty() && relay::lfs_installed() {
+        let oids = lfs_to_send(&mirror, &objects)?;
+        if !oids.is_empty() {
+            mirror.lfs_server_ok()?;
+            mirror.import_lfs(project, &request.cwd, &oids)?;
+            let mut upload = mirror.git();
+            upload
+                .args(["lfs", "push", "origin"])
+                .args(&objects)
+                .stdin(Stdio::null());
+            let code = status(upload);
+            if code != 0 {
+                return Ok(code);
+            }
+        }
+    }
     let mut command = mirror.git();
     command
         .arg("push")
@@ -2248,7 +2276,7 @@ mod tests {
 
     #[test]
     fn lfs_files_come_and_go_through_the_mirror() {
-        if !super::super::relay::lfs_installed() {
+        if !relay::lfs_installed() {
             return;
         }
         let setup = repo("main", 0);
@@ -2315,10 +2343,11 @@ mod tests {
         std::fs::write(setup.work.join("mine.bin"), "my big file").expect("write");
         lfs_git(&setup.work, &["add", "mine.bin"]);
         lfs_git(&setup.work, &["commit", "-q", "-m", "mine"]);
-        assert_eq!(pull(&["lfs", "push", "origin", "main"]), 0);
+        // A plain push uploads it (as git-lfs's pre-push hook would).
+        assert_eq!(setup.run(&["push"]).1, 0);
         let oid = {
             use sha2::Digest as _;
-            super::super::relay::hex(&sha2::Sha256::digest(b"my big file"))
+            relay::hex(&sha2::Sha256::digest(b"my big file"))
         };
         assert!(
             setup

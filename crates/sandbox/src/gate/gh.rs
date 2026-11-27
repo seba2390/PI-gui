@@ -156,7 +156,62 @@ fn auth_json(host: &str) -> Option<serde_json::Value> {
         .args(["auth", "status", "--json", "hosts", "--hostname", host])
         .output()
         .ok()?;
-    serde_json::from_slice(&output.stdout).ok()
+    if let Ok(json) = serde_json::from_slice(&output.stdout) {
+        return Some(json);
+    }
+    // gh before 2.64 (Ubuntu's own package, say) has no `--json`: read what it prints.
+    let output = gh_command()
+        .args(["auth", "status", "--hostname", host])
+        .output()
+        .ok()?;
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&output.stderr));
+    Some(auth_from_text(host, &text))
+}
+
+/// `gh auth status`'s text as its `--json hosts` would say it: each account's login, whether it
+/// works and is the active one, and its token's permissions.
+fn auth_from_text(host: &str, text: &str) -> serde_json::Value {
+    let mut accounts: Vec<serde_json::Value> = Vec::new();
+    for line in text.lines().map(str::trim) {
+        let logged_in = format!("Logged in to {host} ");
+        let failed_in = format!("Failed to log in to {host} ");
+        let found = line
+            .find(&logged_in)
+            .map(|at| at + logged_in.len())
+            .or_else(|| line.find(&failed_in).map(|at| at + failed_in.len()));
+        if let Some(at) = found {
+            let rest = &line[at..];
+            let login = rest
+                .strip_prefix("account ")
+                .or_else(|| rest.strip_prefix("as "))
+                .and_then(|rest| rest.split_whitespace().next())
+                .unwrap_or_default();
+            let failed = line.contains("Failed");
+            accounts.push(serde_json::json!({
+                "login": login,
+                "state": if failed { "error" } else { "success" },
+                "active": false,
+                "scopes": "",
+            }));
+        } else if let Some(account) = accounts.last_mut() {
+            if let Some(active) = line.strip_prefix("- Active account: ") {
+                account["active"] = serde_json::Value::Bool(active.trim() == "true");
+            } else if let Some(scopes) = line.strip_prefix("- Token scopes: ") {
+                let scopes: Vec<&str> = scopes
+                    .split(',')
+                    .map(|scope| scope.trim().trim_matches('\''))
+                    .filter(|scope| !scope.is_empty())
+                    .collect();
+                account["scopes"] = serde_json::Value::String(scopes.join(","));
+            }
+        }
+    }
+    // An old gh with one account doesn't say it is the active one.
+    if let [only] = accounts.as_mut_slice() {
+        only["active"] = serde_json::Value::Bool(true);
+    }
+    serde_json::json!({ "hosts": { host: accounts } })
 }
 
 impl Accounts for Installed {
@@ -875,6 +930,25 @@ mod tests {
             "{refused}"
         );
         assert!(refused.contains("me, me-at-work"), "{refused}");
+    }
+
+    #[test]
+    fn an_old_gh_is_read_from_its_text() {
+        let text = "github.com\n  ✓ Logged in to github.com account seba2390 (/home/a/.config/gh/hosts.yml)\n  - Active account: true\n  - Git operations protocol: https\n  - Token: gho_****\n  - Token scopes: 'gist', 'read:org', 'repo', 'workflow'\n\n  ✓ Logged in to github.com account work (keyring)\n  - Active account: false\n  X Failed to log in to github.com account gone (keyring)\n";
+        let json = auth_from_text("github.com", text);
+        let accounts = json["hosts"]["github.com"].as_array().unwrap();
+        assert_eq!(accounts.len(), 3);
+        assert_eq!(accounts[0]["login"], "seba2390");
+        assert_eq!(accounts[0]["active"], true);
+        assert_eq!(accounts[0]["scopes"], "gist,read:org,repo,workflow");
+        assert_eq!(accounts[1]["active"], false);
+        assert_eq!(accounts[2]["state"], "error");
+        let older = auth_from_text(
+            "github.com",
+            "github.com\n  ✓ Logged in to github.com as ana (oauth_token)\n",
+        );
+        assert_eq!(older["hosts"]["github.com"][0]["login"], "ana");
+        assert_eq!(older["hosts"]["github.com"][0]["active"], true);
     }
 
     #[test]
