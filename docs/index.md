@@ -8,7 +8,8 @@ and (experimentally) Windows.
 Pistachio runs pi itself (`pi --mode rpc`) and draws pi's own event stream, so a session behaves
 exactly as it does in pi's terminal: the same sessions, models, skills, extensions and settings,
 and you can switch between the app and the terminal at any time. Extra tools are opt-in: Code
-sessions get exactly pi's own tools until you turn more on in [Settings → Tools](settings/tools.md).
+sessions get pi's own tools, plus a way to ask you for help while the sandbox is on, until you
+turn more on in [Settings → Tools](settings/tools.md).
 
 - **Easy to use and polished.** A clean, intuitive interface built to the standard of the
   Claude Code and Codex desktop apps: streaming markdown, inline diffs and readable tool calls.
@@ -22,7 +23,8 @@ sessions get exactly pi's own tools until you turn more on in [Settings → Tool
   for complex layouts, scans and formulas.
 - **Web search and deep research** in chats.
 - **Sandboxing and security.** The agent's commands see only the project and the folders you
-  allow, never your keys. Pushing, GitHub and signing go through a gate that asks you first.
+  allow, never your keys. Pushing, GitHub and signing go through a gate that asks you first,
+  and a step the sandbox blocks can be handed to you to do yourself.
 - **Background sessions, branches and side chats**, so several things can run at once.
 
 ## Install
