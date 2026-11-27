@@ -178,7 +178,8 @@ pi reads skills when it starts, so a change restarts it on the same session.
 
 **Add or change models…** in the model menu (or [pi & models](settings/pi-and-models.md))
 connects a locally hosted model (Ollama, LM Studio, llama.cpp, vLLM and others, on this device
-or another) or an API provider. The startup model and thinking level are set there too.
+or another) or an API provider. On this device it also suggests models that run well on this
+computer, and downloads and runs one on request. The startup model and thinking level are set there too.
 
 ## Settings → General
 

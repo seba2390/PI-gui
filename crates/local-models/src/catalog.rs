@@ -69,8 +69,8 @@ pub struct Engine {
     pub license: String,
     pub effort: Effort,
     pub formats: Vec<Format>,
-    /// Its command line; `{bin}`, `{python}`, `{model}`, `{model_dir}`, `{upstream}`, `{port}` and
-    /// `{ctx}` are filled in.
+    /// Its command line; `{bin}`, `{python}`, `{model}`, `{model_dir}`, `{upstream}`, `{id}` (the
+    /// model's id, the name pi sees), `{port}` and `{ctx}` are filled in.
     pub launch: Vec<String>,
     /// Answers 200 once the model is loaded.
     pub health: String,
@@ -94,7 +94,7 @@ pub struct Engine {
 
 impl Engine {
     pub fn runs(&self, model: &Model) -> bool {
-        self.families.is_empty() || self.families.iter().any(|id| *id == model.id)
+        self.families.is_empty() || self.families.contains(&model.id)
     }
 
     /// The version installed, for its folder name.

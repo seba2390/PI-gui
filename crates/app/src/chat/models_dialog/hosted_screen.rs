@@ -2,17 +2,22 @@
 //! once a device is chosen, Ollama, LM Studio and the other known servers are looked for on their
 //! usual ports there, and any server can also be connected by its address or port.
 
-use gpui_kit::component::button::Button;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Input;
-use gpui_kit::component::{IconName, h_flex, v_flex};
+use gpui_kit::component::{
+    ActiveTheme as _, Disableable as _, IconName, Sizable as _, h_flex, v_flex,
+};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use pi_config::server::{self, KNOWN_SERVERS, Kind, KnownServer, Lookup, THIS_DEVICE};
 
 use super::start_screen::{Back, available, grid};
 use super::{ModelsDialog, card, label, probe};
+use crate::local_models::{LocalModels, Scan as Machine, Status};
 use crate::pi_place::PiPlace;
 use crate::ui::AppIcon;
+use crate::ui::download::download_button;
+use local_models::{Choice, Suggestion};
 
 /// Where the server runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,6 +60,12 @@ impl ModelsDialog {
         self.address_error = None;
         if device == Device::This && self.this_device.is_none() {
             self.scan(device, THIS_DEVICE.to_owned(), cx);
+        }
+        if device == Device::This
+            && self.suggests_models()
+            && let Some(models) = crate::local_models::local_models(cx)
+        {
+            models.update(cx, LocalModels::ensure_scanned);
         }
         cx.notify();
     }
@@ -279,6 +290,7 @@ impl ModelsDialog {
             ));
         v_flex()
             .gap_4()
+            .children(self.render_suggestions(cx))
             .children(
                 self.this_device
                     .as_ref()
@@ -286,6 +298,276 @@ impl ModelsDialog {
             )
             .child(port)
             .into_any_element()
+    }
+
+    /// Models are suggested where pi runs on this computer: they run here.
+    fn suggests_models(&self) -> bool {
+        matches!(
+            self.place.as_ref().map(|place| &place.pi),
+            Some(PiPlace::Local { .. })
+        )
+    }
+
+    /// Three models for this computer (fast, balanced, most capable), each with the engine that
+    /// runs it best here and, where one is faster, a specialized engine.
+    fn render_suggestions(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.suggests_models() {
+            return None;
+        }
+        let models = crate::local_models::local_models(cx)?;
+        let (summary, picks, busy, error) = {
+            let state = models.read(cx);
+            let (summary, picks) = match state.scan() {
+                Machine::NotYet | Machine::Scanning => (None, Vec::new()),
+                Machine::Done {
+                    hardware,
+                    suggestions,
+                } => (
+                    Some(hardware.summary()),
+                    suggestions
+                        .iter()
+                        .map(|suggestion| {
+                            let status = |choice: &Option<Choice>| {
+                                choice.as_ref().map(|choice| state.status(choice))
+                            };
+                            (
+                                suggestion.clone(),
+                                status(&suggestion.default),
+                                status(&suggestion.specialized),
+                            )
+                        })
+                        .collect(),
+                ),
+            };
+            (
+                summary,
+                picks,
+                state.is_busy(),
+                state.error().map(str::to_owned),
+            )
+        };
+        let body = match &summary {
+            None => label("Looking at this computer…", cx).into_any_element(),
+            Some(summary) if picks.is_empty() => label(
+                format!("{summary}: no model Pistachio knows runs well enough here."),
+                cx,
+            )
+            .into_any_element(),
+            Some(summary) => v_flex()
+                .gap_2()
+                .child(label(summary.clone(), cx))
+                .children(picks.into_iter().map(|(suggestion, default, special)| {
+                    self.render_suggestion(&models, &suggestion, default, special, busy, cx)
+                }))
+                .into_any_element(),
+        };
+        Some(
+            v_flex()
+                .gap_1p5()
+                .child(label("Suggested for this device", cx))
+                .child(body)
+                .children(error.map(|error| {
+                    div()
+                        .text_xs()
+                        .text_color(crate::theme::palette(cx).error)
+                        .child(error)
+                }))
+                .into_any_element(),
+        )
+    }
+
+    fn render_suggestion(
+        &self,
+        models: &Entity<LocalModels>,
+        suggestion: &Suggestion,
+        default: Option<Status>,
+        special: Option<Status>,
+        busy: bool,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let theme = cx.theme();
+        let (border, muted) = (theme.border, theme.muted_foreground);
+        let accent = crate::theme::palette(cx).accent;
+        let tier = suggestion.tier.label();
+        let rows = [
+            (suggestion.default.as_ref(), default, false),
+            (suggestion.specialized.as_ref(), special, true),
+        ];
+        v_flex()
+            .debug_selector(move || format!("suggestion:{tier}"))
+            .w_full()
+            .gap_1p5()
+            .px_3()
+            .py_2()
+            .rounded_lg()
+            .border_1()
+            .border_color(border)
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(accent)
+                            .child(tier),
+                    )
+                    .child(div().text_sm().child(suggestion.model.name.clone()))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(suggestion.model.params.clone()),
+                    ),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(suggestion.model.why.clone()),
+            )
+            .children(
+                rows.into_iter()
+                    .filter_map(|(choice, status, specialized)| {
+                        Some(self.render_choice(
+                            models,
+                            tier,
+                            choice?,
+                            status?,
+                            specialized,
+                            busy,
+                            cx,
+                        ))
+                    }),
+            )
+    }
+
+    #[allow(clippy::too_many_arguments, clippy::cast_precision_loss)]
+    fn render_choice(
+        &self,
+        models: &Entity<LocalModels>,
+        tier: &'static str,
+        choice: &Choice,
+        status: Status,
+        specialized: bool,
+        busy: bool,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let muted = cx.theme().muted_foreground;
+        let role = if specialized {
+            "specialized"
+        } else {
+            "default"
+        };
+        let id = format!("local-{tier}-{role}");
+        let speed = if choice.measured.is_some() {
+            "measured"
+        } else {
+            "estimated"
+        };
+        let mut facts = format!(
+            "~{:.0} tok/s ({speed}) · {:.1} GB memory",
+            choice.tps,
+            choice.memory as f64 / 1e9
+        );
+        if choice.streams {
+            facts.push_str(" · reads the model from the disk");
+        }
+        if specialized {
+            facts.push_str(if choice.missing_tools.is_empty() {
+                " · built on this computer"
+            } else {
+                " · needs a build tool"
+            });
+        }
+        let title = format!(
+            "{} · {} {}",
+            choice.engine.name,
+            choice.build.quant,
+            choice.build.format_label()
+        );
+        let action: AnyElement = match status {
+            Status::Missing(size) => {
+                let (models, choice) = (models.clone(), choice.clone());
+                let name = choice.model.name.clone();
+                let button = if size > 0 {
+                    download_button(id.clone(), &name, size)
+                } else {
+                    Button::new(SharedString::from(id.clone()))
+                        .label("Set up")
+                        .outline()
+                        .xsmall()
+                };
+                button
+                    .disabled(busy)
+                    .on_click(move |_, window, cx| {
+                        LocalModels::ask_and_set_up(&models, &choice, window, cx);
+                    })
+                    .into_any_element()
+            }
+            Status::Installing(progress) => {
+                let models = models.clone();
+                let text = progress.map_or_else(
+                    || "Starting the download…".to_owned(),
+                    |progress| {
+                        format!(
+                            "{} {:.0}%",
+                            progress.stage.label(),
+                            progress.fraction() * 100.
+                        )
+                    },
+                );
+                h_flex()
+                    .gap_2()
+                    .child(label(text, cx).max_w(px(220.)).truncate())
+                    .child(
+                        Button::new(SharedString::from(format!("{id}-cancel")))
+                            .label("Cancel")
+                            .ghost()
+                            .xsmall()
+                            .on_click(move |_, _, cx| models.update(cx, |m, _| m.cancel())),
+                    )
+                    .into_any_element()
+            }
+            Status::Installed => {
+                let (models, choice) = (models.clone(), choice.clone());
+                Button::new(SharedString::from(id.clone()))
+                    .label("Run")
+                    .outline()
+                    .xsmall()
+                    .on_click(move |_, _, cx| models.update(cx, |m, cx| m.run(&choice, cx)))
+                    .into_any_element()
+            }
+            Status::Starting => label("Starting…", cx).into_any_element(),
+            Status::Running => {
+                let url = models.read(cx).url(choice).unwrap_or_default();
+                Button::new(SharedString::from(id.clone()))
+                    .label("Connect")
+                    .outline()
+                    .xsmall()
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.back_to = Back::Hosted;
+                        this.open_new_server(vec![url.clone()], window, cx);
+                    }))
+                    .into_any_element()
+            }
+        };
+        h_flex()
+            .w_full()
+            .gap_2()
+            .pt_1()
+            .border_t_1()
+            .border_color(cx.theme().border)
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .child(div().text_xs().child(title))
+                    .child(div().text_xs().text_color(muted).child(facts)),
+            )
+            .child(div().flex_none().debug_selector(move || id).child(action))
     }
 
     fn render_other_device(&self, cx: &mut Context<Self>) -> AnyElement {

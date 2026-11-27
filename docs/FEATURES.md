@@ -227,7 +227,13 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   Jan, Docker Model Runner, SGLang, Lemonade and KoboldCpp are looked for on their usual ports
   (another device by its address, like `192.168.1.89`), and
   any server is connected by its port or address (`192.168.1.89:8888`): which API it speaks
-  (OpenAI's, Anthropic's or Gemini's) is found out. **API provider model** lists pi's own
+  (OpenAI's, Anthropic's or Gemini's) is found out. On this device (pi running here) it also
+  suggests up to three models for the computer's hardware (**Fast**, **Balanced**, **Most
+  capable**), each with the engine that runs it best here: a default that installs unattended and,
+  where faster, a specialized engine built on the computer. Download asks first and lists exactly
+  what is downloaded; everything is pinned and checked, runs for this computer only, starts when a
+  chat sends to it and stops when the app quits. The catalog of models and engines comes from
+  local-llm-radar (`crates/local-models/catalog.json`). **API provider model** lists pi's own
   providers, which need only an API key (checked with the provider first, where it allows that) or
   a sign-in; then all their models are in the menu. What is connected already is listed below the
   two choices. A server is asked which models it has, and they are ticked in a list; their

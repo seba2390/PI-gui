@@ -76,7 +76,7 @@ mod tests {
     #[test]
     fn saves_finds_and_allocates_ports() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(load(dir.path()).is_empty());
+        assert_eq!(load(dir.path()), Vec::new());
         let setup = Setup {
             model: "qwen3.5-9b".into(),
             build: "mlx-4bit".into(),
@@ -86,7 +86,7 @@ mod tests {
         };
         save(dir.path(), std::slice::from_ref(&setup)).unwrap();
         let setups = load(dir.path());
-        assert_eq!(setups, [setup.clone()]);
+        assert_eq!(setups, std::slice::from_ref(&setup));
         assert_ne!(free_port(&setups), Some(setup.port));
         assert_eq!(at(&setups, &setup.base_url()), Some(&setup));
         let localhost = format!("http://localhost:{}/v1", setup.port);

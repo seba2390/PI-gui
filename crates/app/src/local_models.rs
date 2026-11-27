@@ -71,10 +71,7 @@ struct Job {
 #[derive(Debug, Clone)]
 pub enum LocalModelsEvent {
     /// A setup runs and answers at `url`; connect pi to it.
-    Ready {
-        url: String,
-    },
-    Failed(String),
+    Ready { url: String },
 }
 
 impl EventEmitter<LocalModelsEvent> for LocalModels {}
@@ -144,6 +141,17 @@ impl LocalModels {
             error: None,
             _quit: quit,
         }
+    }
+
+    /// Takes `hardware` as this computer's (for tests).
+    #[cfg(test)]
+    pub fn scanned(&mut self, hardware: Hardware, cx: &mut Context<Self>) {
+        let suggestions = local_models::suggest(&hardware, catalog());
+        self.scan = Scan::Done {
+            hardware,
+            suggestions,
+        };
+        cx.notify();
     }
 
     pub fn scan(&self) -> &Scan {
@@ -348,11 +356,6 @@ impl LocalModels {
         self.start(&choice.key(), true, cx);
     }
 
-    pub fn stop(&mut self, choice: &Choice, cx: &mut Context<Self>) {
-        self.running.remove(&choice.key());
-        cx.notify();
-    }
-
     /// A task that ends when the setup `key` runs, starting it when it does not.
     fn wait_for(&mut self, key: &str, cx: &mut Context<Self>) -> Option<Task<bool>> {
         if self.runs(key) {
@@ -432,7 +435,7 @@ impl LocalModels {
                         }
                     }
                     Err(error) => {
-                        this.fail(format!("The local model could not start: {error}"), cx)
+                        this.fail(format!("The local model could not start: {error}"), cx);
                     }
                 }
                 for waiter in waiters {
@@ -446,8 +449,7 @@ impl LocalModels {
 
     fn fail(&mut self, error: String, cx: &mut Context<Self>) {
         log::warn!("{error}");
-        self.error = Some(error.clone());
-        cx.emit(LocalModelsEvent::Failed(error));
+        self.error = Some(error);
         cx.notify();
     }
 }
@@ -480,10 +482,9 @@ fn details(root: &std::path::Path, choice: &Choice, parts: &[Part]) -> Details {
             " The engine is built from source on this computer, which takes several minutes.",
         );
         if !choice.missing_tools.is_empty() {
-            intro.push_str(&format!(
-                " It needs {}, which this computer does not have yet; install it first.",
-                choice.missing_tools.join(" and ")
-            ));
+            intro.push_str(" It needs ");
+            intro.push_str(&choice.missing_tools.join(" and "));
+            intro.push_str(", which this computer does not have yet; install it first.");
         }
     }
     let parts = parts

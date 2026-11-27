@@ -326,7 +326,7 @@ fn install_model(
         let step = step.replace("{model_dir}", &quote(&partial.join("model.gturbo")));
         let mut command = shell(&step, &src, path);
         python_env::run(&mut command, "Fetching the model", cancel, &mut |_| {
-            progress(0)
+            progress(0);
         })?;
     } else {
         let mut done = 0;

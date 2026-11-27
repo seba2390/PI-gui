@@ -53,7 +53,7 @@ impl Server {
             let mut ggufs: Vec<_> = build
                 .files
                 .iter()
-                .filter(|f| f.name.ends_with(".gguf"))
+                .filter(|f| f.name.to_ascii_lowercase().ends_with(".gguf"))
                 .collect();
             ggufs.sort_by(|a, b| a.name.cmp(&b.name));
             ggufs.first().map(|file| models.join(&file.name))
@@ -79,6 +79,7 @@ impl Server {
                 )
                 .replace("{model_dir}", &model_path.to_string_lossy())
                 .replace("{upstream}", &build.repo)
+                .replace("{id}", &model.id)
                 .replace("{port}", &setup.port.to_string())
                 .replace("{ctx}", &setup.context.to_string())
         };

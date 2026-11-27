@@ -21,6 +21,8 @@ crates/
   searxng/      a private SearXNG for web search: downloading it on request (pinned and checked), running it,
                 checking one at an address
   python-env/   what both download with: uv, a private Python and locked packages
+  local-models/ models suggested for this computer: hardware scan, the pinned catalog (from
+                local-llm-radar), suggestions, downloading engines and models, running them
   app/          the GPUI application (binary `pistachio`)
 ```
 

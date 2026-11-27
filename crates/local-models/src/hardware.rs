@@ -432,6 +432,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::float_cmp)] // exact table values
     fn reads_apple_chips() {
         let chip = |generation, tier| Some(AppleChip { generation, tier });
         assert_eq!(parse_apple_chip("Apple M3 Pro"), chip(3, AppleTier::Pro));
@@ -458,6 +459,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)] // exact table values
     fn reads_system_tools() {
         assert_eq!(parse_version("26.4.1"), Some((26, 4)));
         assert_eq!(parse_version("27"), Some((27, 0)));
