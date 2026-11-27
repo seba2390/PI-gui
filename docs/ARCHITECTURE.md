@@ -4,8 +4,10 @@
 crates/
   pi-rpc/       typed protocol (serde mirror of pi's rpc-types), strict JSONL framing, client, process
   transcript/   pure reducer: pi events / stored messages → renderable transcript (no UI, no I/O)
+                and the tokens-per-second meter, calibrated per model on its finished replies
   pi-sessions/  index of pi's session files for the sidebar; writes the file a side chat starts from
-  pi-config/    editing pi's config: models.json, SKILL.md front matter, the trust store
+  pi-config/    editing pi's config: models.json, SKILL.md front matter, the trust store; what a
+                model server offers and how it takes thinking levels (the requests, and reading the answers)
   workspace/    git status/diff (git CLI) + gitignore-aware file listing + fs watcher
   remote/       SSH: ~/.ssh/config discovery, saved hosts, shared connections, remote probes,
                 pi auto-install, askpass prompts, remote sessions, the RemoteShell for workspace
