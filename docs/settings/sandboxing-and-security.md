@@ -95,8 +95,11 @@ kind of action) or **Don't allow**. With several GitHub accounts, the card offer
 command runs with that account only.
 
 The gate accepts only these commands and a list of their options, and only for remote servers.
-It refuses repositories whose settings could start a program (`core.sshCommand`,
-`credential.helper`, filters, …) and runs git with hooks off.
+git with your keys never works in the agent's repository: Pistachio keeps its own copy of each
+remote, per project, out of the sandbox's reach. Fetches, pulls, clones and LFS downloads come in
+through that copy, and pushes go out from it, with hooks off. So nothing the agent writes into its
+repository's settings can run a program with your keys. If the repository changes while you're
+asked, the command doesn't run. `gh pr create` needs `--title` and `--body` (or `--body-file`).
 
 **Allowed with your keys** lists what you allowed with "Always for this project", per project,
 each removable.

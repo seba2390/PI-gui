@@ -6,6 +6,11 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- A documentation site, https://seba2390.github.io/pistachio/: each feature, and a page for each
+  Settings page.
+
 ### Security
 
 - The sandbox's git gate (pushing, pulling and `gh` with your logins) no longer runs git in the
