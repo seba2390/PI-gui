@@ -925,6 +925,7 @@ impl SettingsView {
                 SettingGroup::new()
                     .title("Models")
                     .item(SettingItem::render(|_, _, cx| {
+                        crate::online::refresh(cx);
                         crate::stt::ui::settings_model_rows(cx)
                     })),
             )
@@ -1077,6 +1078,7 @@ fn naming_page(cx: &App) -> SettingPage {
                      once from Hugging Face; nothing ships with the app.",
                 )
                 .item(SettingItem::render(|_, _, cx| {
+                    crate::online::refresh(cx);
                     crate::naming::ui::settings_model_rows(cx)
                 })),
         )

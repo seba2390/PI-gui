@@ -6,6 +6,27 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Downloads wait for the internet.** Where Pistachio downloads something (a suggested local
+  model, a document parser, a speech-to-text or naming model, SearXNG, an update), it first checks
+  that the internet can be reached. When it can't, the download button shows a crossed-out Wi-Fi
+  icon and says **No internet**, and nothing starts; clicking it checks again.
+- **A progress bar while a local model downloads.** **Download and run** turns into the step it is
+  on, how much has arrived of how much, a progress bar and Cancel.
+
+### Changed
+
+- The names of the suggested models are centered on their cards.
+
+### Fixed
+
+- The hardware scan's bar now fills from empty over two seconds (longer if the scan takes longer)
+  and its loader turns, also when the system asks for reduced motion; before, it showed full at
+  once.
+- Cancel on a local model's download takes effect at once: the button comes back right away, also
+  when the connection had stalled.
+
 ## [0.6.0] - 2026-11-28
 
 ### Added

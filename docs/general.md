@@ -238,6 +238,10 @@ there is a newer one, a prompt shows what's new:
 
 Nothing is downloaded without a yes. After an update, Pistachio shows what changed.
 
+Every download in Pistachio (updates, local models, document parsers, speech and naming models,
+SearXNG) first checks that the internet can be reached. When it can't, its button shows a
+crossed-out Wi-Fi icon and says **No internet**; clicking it checks again.
+
 ## Keyboard shortcuts
 
 | Key | Action |

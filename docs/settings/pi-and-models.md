@@ -92,7 +92,10 @@ Locally hosted model
   Macs, BigMoeOnEdge for models larger than the memory) and, where one is clearly faster, a
   specialized engine that is built on this computer (ik_llama.cpp, TurboFieldfare). The **Download and
   run** button says how much it is; pressing it shows exactly what is downloaded (the engine and
-  the model's files, linked to their pages, with their sizes and licenses) and asks first. Everything is pinned to a version and
+  the model's files, linked to their pages, with their sizes and licenses) and asks first. While
+  it downloads, the card shows the step, how much has arrived, a progress bar and **Cancel**,
+  which stops it at once. Without an internet connection the button says **No internet** and
+  nothing is downloaded. Everything is pinned to a version and
   ```{image} /_static/screenshots/models-deploy-light.webp
   :class: shot only-light
   :alt: The hardware this device has and the three models suggested for it

@@ -379,13 +379,21 @@ impl MainWindow {
             .unwrap_or_else(|| release.page_url.clone());
         let version = release.version.clone();
         let failed = matches!(state, UpdateState::Failed(_));
+        crate::online::refresh(cx);
         let primary = match install {
-            Ok(_) => Button::new("update-now")
-                .primary()
-                .label(if failed { "Try again" } else { "Update" })
-                .loading(working)
-                .disabled(working)
-                .on_click(cx.listener(|this, _, _, cx| this.start_update(cx))),
+            Ok(_) => crate::ui::download::offline_aware(
+                Button::new("update-now").label(if failed { "Try again" } else { "Update" }),
+                cx,
+            )
+            .primary()
+            .loading(working)
+            .disabled(working)
+            .on_click(cx.listener(|_, _, window, cx| {
+                let this = cx.weak_entity();
+                crate::online::when_online(window, cx, move |_, cx| {
+                    let _ = this.update(cx, |this, cx| this.start_update(cx));
+                });
+            })),
             Err(_) => Button::new("update-download")
                 .primary()
                 .label("Download")

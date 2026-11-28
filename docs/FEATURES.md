@@ -234,7 +234,7 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   capable**), each showing its inference engine, checkpoint and quantization, memory and speed
   here: a default engine that installs unattended and,
   where faster, a specialized engine built on the computer. Download asks first and lists exactly
-  what is downloaded; everything is pinned and checked, runs for this computer only, starts when a
+  what is downloaded, then shows its progress with Cancel; everything is pinned and checked, runs for this computer only, starts when a
   chat sends to it and stops when the app quits. The catalog of models and engines comes from
   local-llm-radar (`crates/local-models/catalog.json`). **API provider model** lists pi's own
   providers, which need only an API key (checked with the provider first, where it allows that) or
@@ -579,6 +579,11 @@ GitHub's checksum; if anything fails, the old version stays and the prompt says 
 A progress bar shows how much is downloaded, also when Homebrew downloads it.
 **Download instead** opens the download in your browser, and a version can be skipped. Nothing is
 downloaded or installed without a yes, and the automatic check can be turned off in Settings.
+
+**No internet.** Every download (updates, local models, document parsers, speech and naming
+models, SearXNG) first checks that the internet can be reached. When it can't, its button shows a
+crossed-out Wi-Fi icon and says **No internet**, and nothing starts; clicking it checks again.
+Nothing watches the network: it is asked when downloads are shown and when one is asked for.
 
 **What's new.** After an update, Pistachio shows what changed since the version you had.
 
