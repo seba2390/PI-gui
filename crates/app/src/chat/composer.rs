@@ -1710,19 +1710,28 @@ impl Composer {
         let levels = session.thinking_levels();
         let current = session.thinking_level();
         let reasoning = session.model().is_some_and(|model| model.reasoning);
+        // A model that thinks anyway: its "off" is its lowest effort, and says so.
+        let off_thinks = session.model().is_some_and(|model| {
+            crate::chat::thinking_notes::ThinkingNotes::off_thinks(cx, &model.provider, &model.id)
+        });
+        let name = move |level: Option<pi_rpc::protocol::ThinkingLevel>| match level {
+            None | Some(pi_rpc::protocol::ThinkingLevel::Off) if off_thinks => "lowest".to_owned(),
+            None => "off".to_owned(),
+            Some(level) => level.to_string(),
+        };
         let handle = self.session.clone();
         let picker = Button::new(menu_id("thinking-picker", &(&levels, current)))
             .quiet(cx)
             .small()
             .icon(Icon::from(AppIcon::Brain))
-            .label(current.map_or_else(|| "off".to_owned(), |level| level.to_string()))
+            .label(name(current))
             .tooltip("Thinking level (shift+tab)")
             .disabled(!reasoning || levels.len() < 2)
             .dropdown_menu_with_anchor(Anchor::BottomRight, move |mut menu, _, _| {
                 for level in &levels {
                     let (handle, level) = (handle.clone(), *level);
                     menu = menu.item(
-                        crate::demo::menu_item(level.to_string(), format!("thinking:{level}"))
+                        crate::demo::menu_item(name(Some(level)), format!("thinking:{level}"))
                             .checked(current == Some(level))
                             .on_click(move |_, _, cx| {
                                 handle.update(cx, |session, cx| {

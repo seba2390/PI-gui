@@ -310,6 +310,12 @@ fn locally_hosted_on_this_device(cx: &mut TestAppContext) {
     cx.update(|_, cx| assert!(dialog.read(cx).this_device.is_none()));
     assert!(cx.debug_bounds("local:Ollama").is_none());
     click("device:this", cx);
+    // A page of its own: attach or deploy; nothing is looked for yet.
+    assert!(cx.debug_bounds("device:other").is_none());
+    assert!(cx.debug_bounds("way:deploy").is_some());
+    cx.update(|_, cx| assert!(dialog.read(cx).this_device.is_none()));
+    click("way:attach", cx);
+    assert!(cx.debug_bounds("way:deploy").is_none());
     cx.update(|_, cx| {
         assert_eq!(
             dialog.read(cx).this_device.as_ref().unwrap().host,
@@ -334,9 +340,96 @@ fn locally_hosted_on_this_device(cx: &mut TestAppContext) {
         provider.base_url.as_deref(),
         Some(format!("http://localhost:{port}/v1").as_str())
     );
-    // Back goes to where the server was chosen.
+    // Back goes to where the server was chosen, then to attach or deploy.
+    click("models-back", cx);
+    assert!(cx.debug_bounds("local:Ollama").is_some());
+    click("models-back", cx);
+    assert!(cx.debug_bounds("local:Ollama").is_none());
+    assert!(cx.debug_bounds("way:attach").is_some());
     click("models-back", cx);
     assert!(cx.debug_bounds("device:this").is_some());
+}
+
+/// Deploying on this device scans its hardware when asked, shows what it found, and suggests
+/// three models for it when asked; downloading one asks first, saying what is downloaded.
+#[gpui_kit::test]
+fn suggests_local_models(cx: &mut TestAppContext) {
+    use local_models::hardware::{AppleChip, AppleTier, Hardware, Os};
+    let dir = tempfile::tempdir().unwrap();
+    let (_dialog, cx) = open(dir.path(), "", cx);
+    let models = cx.update(|_, cx| {
+        crate::local_models::init(cx);
+        crate::local_models::local_models(cx).unwrap()
+    });
+    click("start:hosted", cx);
+    click("device:this", cx);
+    click("way:deploy", cx);
+    assert!(cx.debug_bounds("local:Ollama").is_none());
+    assert!(cx.debug_bounds("hardware:Memory").is_none());
+    click("scan-hardware", cx);
+    assert!(cx.debug_bounds("scanning-hardware").is_some());
+    cx.update(|_, cx| {
+        models.update(cx, |models, cx| {
+            models.scanned(
+                Hardware {
+                    os: Os::Macos,
+                    arm64: true,
+                    os_version: Some((26, 4)),
+                    cpu: "Apple M4".into(),
+                    apple: Some(AppleChip {
+                        generation: 4,
+                        tier: AppleTier::Base,
+                    }),
+                    ram: 16_000_000_000,
+                    gpu: None,
+                    avx512: false,
+                    free_disk: Some(500_000_000_000),
+                    tools: Vec::new(),
+                },
+                cx,
+            );
+        });
+    });
+    draw(cx);
+    assert!(cx.debug_bounds("scanning-hardware").is_none());
+    for fact in ["Processor", "Memory", "Graphics", "Disk"] {
+        let row: &'static str = format!("hardware:{fact}").leak();
+        assert!(cx.debug_bounds(row).is_some(), "{fact}");
+    }
+    assert!(
+        cx.debug_bounds("suggestion:Fast").is_none(),
+        "only once asked"
+    );
+    click("suggest-models", cx);
+    for tier in ["Fast", "Balanced", "Most capable"] {
+        let card: &'static str = format!("suggestion:{tier}").leak();
+        assert!(cx.debug_bounds(card).is_some(), "{tier}");
+    }
+    // Collapsed until opened, with the way to run it at the top.
+    assert!(cx.debug_bounds("local-Fast-default").is_some());
+    assert!(cx.debug_bounds("local-Fast-default-checkpoint").is_none());
+    click("expand:Fast", cx);
+    assert!(cx.debug_bounds("local-Fast-default-checkpoint").is_some());
+    assert!(
+        cx.debug_bounds("local-Balanced-default-checkpoint")
+            .is_none()
+    );
+    let asking = |cx: &mut VisualTestContext| {
+        cx.update(|window, _| {
+            gpui_kit::test::TestWindowExt::try_find(window, "download-start").is_some()
+        })
+    };
+    assert!(!asking(cx));
+    click("local-Fast-default", cx);
+    assert!(asking(cx), "asks first");
+    click("download-cancel", cx);
+    assert!(!asking(cx));
+    cx.update(|_, cx| {
+        assert!(
+            !models.read(cx).is_busy(),
+            "nothing downloads without a yes"
+        );
+    });
 }
 
 /// An address without a port is a device to look around on; with one, a server.
@@ -351,6 +444,8 @@ fn another_device_by_its_address(cx: &mut TestAppContext) {
         assert_eq!(dialog.other_device.as_ref().unwrap().host, "127.0.0.2");
     });
     assert!(cx.debug_bounds("other:Ollama").is_some());
+    click("models-back", cx);
+    assert!(cx.debug_bounds("device:other").is_some());
     click("models-back", cx);
     click("start:provider", cx);
     click("built-in:openai", cx);
@@ -389,4 +484,58 @@ fn keys_to_ask_a_server_with() {
     assert_eq!(place.key("!pass x"), None);
     assert_eq!(place.key("$PISTACHIO_NO_SUCH_VARIABLE"), None);
     assert_eq!(place.key("${HOME}"), std::env::var("HOME").ok());
+}
+
+/// A model Pistachio runs here is saved so that pi's thinking levels reach its chat template.
+#[gpui_kit::test]
+fn a_local_model_gets_its_thinking(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let address = serve(|method, path, _, _| match (method, path) {
+        ("GET", "/v1/models") => (200, r#"{"data":[{"id":"ternary-bonsai-2-27b"}]}"#.into()),
+        _ => (404, r#"{"error":"not found"}"#.into()),
+    });
+    let port: u16 = address.rsplit(':').next().unwrap().parse().unwrap();
+    let setup = local_models::Setup {
+        model: "ternary-bonsai-2-27b".into(),
+        build: "gguf-q2_0".into(),
+        engine: "llama-cpp".into(),
+        port,
+        context: 32_768,
+    };
+    local_models::setups::save(root.path(), std::slice::from_ref(&setup)).unwrap();
+    let (dialog, cx) = open(dir.path(), "", cx);
+    cx.update(|window, cx| {
+        let mut config = cx.global::<AppConfig>().clone();
+        config.local_models_dir = root.path().into();
+        cx.set_global(config);
+        crate::local_models::init(cx);
+        dialog.update(cx, |dialog, cx| {
+            dialog.open_new_server(vec![setup.base_url()], window, cx);
+        });
+    });
+    settle(&dialog, cx);
+    click("save-server", cx);
+    let text = std::fs::read_to_string(dir.path().join("models.json")).unwrap();
+    let file: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let provider = file["providers"]
+        .as_object()
+        .unwrap()
+        .values()
+        .next()
+        .unwrap();
+    let model = &provider["models"][0];
+    assert_eq!(model["id"], "ternary-bonsai-2-27b");
+    assert_eq!(model["reasoning"], true);
+    assert_eq!(model["contextWindow"], 32_768);
+    assert_eq!(model["compat"]["thinkingFormat"], "chat-template");
+    assert_eq!(
+        model["compat"]["chatTemplateKwargs"]["reasoning_effort"]["$var"],
+        "thinking.effort"
+    );
+    assert_eq!(model["thinkingLevelMap"]["high"], "xhigh");
+    assert_eq!(
+        model["thinkingLevelMap"]["minimal"],
+        serde_json::Value::Null
+    );
 }

@@ -33,6 +33,8 @@ use crate::ui::{AppIcon, PiField};
 pub enum SettingsEvent {
     /// Opens the dialog for this computer's models.
     Models(ModelsOpen),
+    /// A provider was removed from this computer's models.json; says what was done.
+    ModelsRemoved(SharedString),
     Host(SavedHostAction),
     CheckForUpdates,
 }
@@ -185,6 +187,10 @@ impl SettingsView {
         let mut subscriptions = subscriptions;
         subscriptions.push(cx.observe(&security, |_, _, cx| cx.notify()));
         subscriptions.push(cx.observe(&tools, |_, _, cx| cx.notify()));
+        // Local models start and stop from the list of connected models.
+        if let Some(models) = crate::local_models::local_models(cx) {
+            subscriptions.push(cx.observe(&models, |_, _, cx| cx.notify()));
+        }
         // The site field is checked as it is typed; Enter adds it.
         subscriptions.push(cx.subscribe_in(
             &site_input,

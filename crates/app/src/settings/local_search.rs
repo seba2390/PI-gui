@@ -407,24 +407,28 @@ fn setup_details(problem: &str) -> Details {
         ),
         parts: vec![
             Part {
+                link: None,
                 icon: AppIcon::Globe.into(),
                 name: "SearXNG".into(),
                 note: "The search engine".into(),
                 size: catalog::SEARXNG_SIZE,
             },
             Part {
+                link: None,
                 icon: AppIcon::CodeXml.into(),
                 name: format!("Python {}", catalog::PYTHON_VERSION),
                 note: "A private copy; your own Python is not touched".into(),
                 size: size(|platform| platform.python.python_size),
             },
             Part {
+                link: None,
                 icon: AppIcon::Package.into(),
                 name: format!("{} Python packages", catalog::package_count()),
                 note: "What SearXNG is built on".into(),
                 size: size(|platform| platform.packages_size),
             },
             Part {
+                link: None,
                 icon: AppIcon::Wrench.into(),
                 name: format!("uv {}", catalog::UV_VERSION),
                 note: "Installs the rest, and is deleted afterwards".into(),

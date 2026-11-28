@@ -253,6 +253,9 @@ pub struct Usage {
     pub cache_read: u64,
     pub cache_write: u64,
     pub total_tokens: u64,
+    /// The part of `output` the model spent thinking, for providers that report it
+    /// (`OpenAI`, Gemini); 0 otherwise.
+    pub reasoning: u64,
     pub cost: UsageCost,
 }
 

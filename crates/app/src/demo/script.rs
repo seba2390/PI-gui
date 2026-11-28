@@ -97,6 +97,9 @@ pub enum Step {
     ScrollDiff { lines: u32, ms: u64 },
     /// Click Settings in the sidebar.
     OpenSettings,
+    /// Click the element marked `target` (see `demo::mark` and `demo::probe`), like the
+    /// Models dialog's buttons; for documentation screenshots.
+    Click { target: String },
     /// Choose a theme in the Settings page's Theme menu (the page must be open).
     Theme { theme: ThemeName },
     /// Glide the cursor to a point, as fractions of the window.
@@ -124,6 +127,7 @@ impl Step {
             Self::ExpandDiff { .. } => "expand_diff",
             Self::ScrollDiff { .. } => "scroll_diff",
             Self::OpenSettings => "open_settings",
+            Self::Click { .. } => "click",
             Self::Theme { .. } => "theme",
             Self::Move { .. } => "move",
             Self::Marker { .. } => "marker",

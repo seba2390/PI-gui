@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use pi_config::providers::BuiltIn;
 use pi_config::server::{self, Kind, KnownServer, Offer};
+use pi_config::thinking;
 
 use crate::pi_place::{NoReply, PiPlace, Reply};
 
@@ -174,6 +175,72 @@ pub fn try_model(
         401 | 403 => Err("The server did not accept the API key.".to_owned()),
         _ => Err(refusal(&reply)),
     }
+}
+
+/// What came of checking how a model's server takes thinking levels.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ThinkingCheck {
+    pub setup: thinking::Setup,
+    /// Whether it still thinks with thinking off; `None` when that could not be told.
+    pub off_thinks: Option<bool>,
+}
+
+/// How long one rendered prompt may take (the server may still be loading the model).
+const RENDER: Duration = Duration::from_secs(15);
+/// How long the short reply with thinking off may take.
+const OFF_TRIAL: Duration = Duration::from_secs(20);
+
+/// Finds out how the server of `model` takes pi's thinking levels ([`thinking`]): rendered
+/// prompts where it shows them, llama.cpp's template capabilities, and one short reply with
+/// thinking off. A few seconds; `None` for an API other than `openai-completions`.
+pub fn check_thinking(
+    place: &PiPlace,
+    kind: Kind,
+    api: &str,
+    base_url: &str,
+    key: Option<&str>,
+    model: &str,
+) -> Option<ThinkingCheck> {
+    if api != "openai-completions" {
+        return None;
+    }
+    let headers = server::headers(api, key);
+    let ask = |url: &str, body: Option<&str>, timeout| {
+        place
+            .request(url, &headers, body, timeout)
+            .ok()
+            .filter(|reply| reply.status == 200)
+            .map(|reply| reply.body)
+    };
+    let mut facts = thinking::Facts::default();
+    if kind == Kind::Ollama {
+        let (url, body) = thinking::ollama_show(base_url, model);
+        facts.family = ask(&url, Some(&body), LIST).and_then(|body| thinking::family(&body));
+    } else if kind != Kind::LmStudio {
+        // A server that does not render the first one renders none of them.
+        for render in thinking::renders(base_url, model) {
+            let Some(prompt) = ask(&render.url, Some(&render.body), RENDER)
+                .and_then(|body| thinking::rendered_prompt(&body))
+            else {
+                break;
+            };
+            facts.renders.push((render.variant, prompt));
+        }
+        if facts.renders.is_empty() {
+            facts.props = ask(&thinking::props_url(base_url), None, LIST)
+                .and_then(|body| serde_json::from_str(&body).ok());
+        }
+    }
+    let setup = thinking::setup(kind, &facts);
+    let off_thinks = match &setup.off {
+        Some(off) => {
+            let (url, body) = thinking::off_trial(base_url, model, off);
+            ask(&url, Some(&body), OFF_TRIAL).and_then(|body| thinking::thought(&body))
+        }
+        // Nothing turns it off.
+        None => Some(true),
+    };
+    Some(ThinkingCheck { setup, off_thinks })
 }
 
 /// Whether a provider takes a key.
@@ -383,5 +450,25 @@ pub(super) mod tests {
         // pi looks these up itself.
         assert_eq!(check("$OPENAI_API_KEY"), KeyCheck::Accepted);
         assert_eq!(check("!pass openai"), KeyCheck::Accepted);
+    }
+
+    /// `PISTACHIO_THINKING_TEST=<base URL>|<model>|<kind: vllm, llamacpp, ollama, other>`: checks
+    /// a real server's thinking and prints what it found.
+    #[test]
+    #[ignore = "needs a model server"]
+    fn checks_a_real_servers_thinking() {
+        let spec = std::env::var("PISTACHIO_THINKING_TEST").expect("PISTACHIO_THINKING_TEST");
+        let [base_url, model, kind] = spec.splitn(3, '|').collect::<Vec<_>>()[..] else {
+            panic!("<base URL>|<model>|<kind>");
+        };
+        let kind = match kind {
+            "vllm" => Kind::Vllm,
+            "llamacpp" => Kind::LlamaCpp,
+            "ollama" => Kind::Ollama,
+            _ => Kind::Other,
+        };
+        let start = Instant::now();
+        let check = check_thinking(&here(), kind, "openai-completions", base_url, None, model);
+        println!("{:#?}\ntook {:?}", check, start.elapsed());
     }
 }

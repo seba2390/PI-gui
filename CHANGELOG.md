@@ -6,6 +6,69 @@ All notable changes to PI-gui are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-28
+
+### Added
+
+- **Models suggested for this computer.** Add models… → Locally hosted model → This device now
+  looks at the computer (memory, chip or graphics card, free disk) and suggests up to three models:
+  Fast, Balanced and Most capable. Each comes with the engine that runs it best here, with its
+  estimated speed and memory: a default that installs unattended (llama.cpp, Rapid-MLX, Splash,
+  BigMoeOnEdge) and, where clearly faster, a specialized engine built on the computer
+  (ik_llama.cpp, TurboFieldfare). Download says how much it is and asks first, listing exactly what
+  is downloaded; every file is pinned and checked against its SHA-256. A model that runs is
+  connected like any server, is started when a chat sends to it (the message waits until it
+  answers) and stops when Pistachio quits.
+- **Attach or deploy on this device.** Locally hosted model is now a series of pages: This device
+  or Another device, then on this device **Attach to existing model** (Ollama, LM Studio, vLLM…
+  and a server by its port) or **Deploy new model**. Deploying starts with **Scan local
+  hardware**, which shows a progress bar through what it looks at and then lists the processor,
+  memory, graphics, free disk and build tools found; **Suggest models** then shows Fast, Balanced
+  and Most capable, each with its inference engine, quantization, memory, speed here and checkpoint.
+  The suggestions start collapsed to their name and a centered **Download and run** (or Run,
+  Connect) button; the full-width arrow at the bottom of each opens why it fits and how it runs. The engine and the checkpoint link to their pages, also in the download
+  dialog, and the button says **Download and run**. Opened, a suggestion also shows its context,
+  whether it takes images, and whether it thinks, with the levels pi offers for it here.
+- **Thinking levels for local models.** A model Pistachio downloaded is added to `models.json`
+  with `reasoning` and the `compat` (`chat-template` kwargs) and `thinkingLevelMap` its chat
+  template needs, so the thinking levels in chat and code mode reach it: off or on for most, and
+  their own levels for the four that take `reasoning_effort` (a template raises on a value it does
+  not know). TurboFieldfare cannot pass thinking on, so a model it runs is added without it.
+- **Connected models by where they run.** Settings → pi & models groups them into This device,
+  Other devices and API connections, and each has a trash button that removes it after asking. A
+  model Pistachio downloaded is also stopped and deleted from this computer, with its engine
+  unless another local model uses it; for anything else only the connection is removed. A model
+  Pistachio set up on this device also has a play / stop button that starts its engine (loading
+  the model) or stops it, without deleting anything.
+- **Tokens per second.** While a reply streams, a pill slides down from under the top bar with
+  a line of the model's speed over the last seconds and its speed now ("~31 tok/s"); when the reply
+  ends it turns gray with the reply's exact average ("avg. 30 tok/s") and slides back up after a
+  few seconds. The live figure is an estimate from the streamed text, calibrated per model on its
+  finished replies against the provider's exact count; hovering it says how far off it has been
+  for that model on average. A provider that counts as it streams (Gemini) is shown exactly. A
+  model that thinks without streaming it, or streams only a summary, gets no live estimate; nor
+  does a model before one of its replies has checked out.
+- **Python code as it is written.** Expanding a chat's "Computed" row while the model is still
+  writing the call shows the code growing line by line, before it runs.
+- **Thinking levels that do what they say on servers you add.** Adding a thinking model in
+  Models → Locally hosted model now checks, in a few seconds, how its server takes thinking: which
+  way of asking it reads, which levels change anything (levels that do the same show as one) and
+  whether "off" really stops it. Before, "off" sent nothing to such servers, so most models went on
+  thinking. A model that thinks a little at any effort, or can't stop, shows "lowest" instead of
+  "off".
+
+### Changed
+
+- **A shorter, sharper Python tool text.** What the model is told about the python tool is down
+  from about 1,750 to 700 characters: what it returns (errors included, to fix and retry), when to
+  use it, said once, and the limits that would otherwise cost a failed call.
+
+### Fixed
+
+- A llama.cpp server is now added to `models.json` as `llama-cpp`, not `llama.cpp`: pi 1.5 has
+  a built-in provider with that ID, which took the entry's place, so sending to it failed with
+  "Provider is not configured: llama.cpp".
+
 ## [0.5.10] - 2026-11-27
 
 ### Added
@@ -789,7 +852,8 @@ chats, skills and model management. Changes since the last private build:
 - A corrupt `hosts.json` is kept as a backup.
 - A remembered terminal height can no longer squeeze out the chat.
 
-[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.5.10...HEAD
+[Unreleased]: https://github.com/seba2390/pistachio/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/seba2390/pistachio/compare/v0.5.10...v0.6.0
 [0.5.10]: https://github.com/seba2390/pistachio/compare/v0.5.9...v0.5.10
 [0.5.9]: https://github.com/seba2390/pistachio/compare/v0.5.8...v0.5.9
 [0.5.8]: https://github.com/seba2390/pistachio/compare/v0.5.7...v0.5.8

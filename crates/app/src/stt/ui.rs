@@ -138,6 +138,7 @@ fn part(file: &ModelFile) -> Part {
         name: name.into(),
         note: format!("{what} · {}", file.name),
         size: file.size,
+        link: None,
     }
 }
 

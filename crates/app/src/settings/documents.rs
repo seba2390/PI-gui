@@ -337,6 +337,7 @@ pub fn ask_to_download(parser: Parser, window: &mut Window, cx: &mut App) {
 fn details(parser: Parser) -> Option<Details> {
     let download = parser.download().ok()?;
     let mut parts = vec![Part {
+        link: None,
         icon: AppIcon::Package.into(),
         name: format!("{} {}", parser.label(), download.version()),
         note: "The parser and the Python packages it is built on".into(),
@@ -344,6 +345,7 @@ fn details(parser: Parser) -> Option<Details> {
     }];
     if download.models_size() > 0 {
         parts.push(Part {
+            link: None,
             icon: AppIcon::Brain.into(),
             name: "Models".into(),
             note: "From Hugging Face; they run on this computer".into(),
@@ -351,12 +353,14 @@ fn details(parser: Parser) -> Option<Details> {
         });
     }
     parts.push(Part {
+        link: None,
         icon: AppIcon::CodeXml.into(),
         name: format!("Python {}", python_env::catalog::PYTHON_VERSION),
         note: "A private copy; your own Python is not touched".into(),
         size: download.platform.python_size,
     });
     parts.push(Part {
+        link: None,
         icon: AppIcon::Wrench.into(),
         name: format!("uv {}", python_env::catalog::UV_VERSION),
         note: "Installs the rest, and is deleted afterwards".into(),

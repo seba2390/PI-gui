@@ -11,6 +11,7 @@ pub mod providers;
 pub mod server;
 pub mod settings;
 pub mod skills;
+pub mod thinking;
 pub mod tools;
 pub mod trust;
 
@@ -320,6 +321,82 @@ impl ModelsFile {
                 entry.insert("id".into(), id.into());
                 set_model_fields(&mut entry, model);
                 models.push(Value::Object(entry));
+            }
+        }
+        Ok(())
+    }
+
+    /// Sets (or with `None` removes) one field of a model that is in the file, like its `compat`.
+    /// Merges the object `value` into the object field `key` of a model in the file (made when
+    /// missing): its keys are set, those that are `null` removed, the others kept.
+    pub fn merge_model_field(
+        &mut self,
+        provider: &str,
+        id: &str,
+        key: &str,
+        value: &Map<String, Value>,
+    ) -> Result<(), ConfigError> {
+        let mut merged = self
+            .model_entry(provider, id)?
+            .get(key)
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        for (name, field) in value {
+            if field.is_null() {
+                merged.shift_remove(name);
+            } else {
+                merged.insert(name.clone(), field.clone());
+            }
+        }
+        self.set_model_field(provider, id, key, Some(Value::Object(merged)))
+    }
+
+    fn model_entry(
+        &mut self,
+        provider: &str,
+        id: &str,
+    ) -> Result<&Map<String, Value>, ConfigError> {
+        self.provider_mut(provider)?
+            .get("models")
+            .and_then(Value::as_array)
+            .and_then(|models| {
+                models
+                    .iter()
+                    .find(|model| model.get("id").and_then(Value::as_str) == Some(id))
+            })
+            .and_then(Value::as_object)
+            .ok_or_else(|| {
+                ConfigError::Invalid(format!("Provider \"{provider}\" has no model \"{id}\"."))
+            })
+    }
+
+    pub fn set_model_field(
+        &mut self,
+        provider: &str,
+        id: &str,
+        key: &str,
+        value: Option<Value>,
+    ) -> Result<(), ConfigError> {
+        let entry = self
+            .provider_mut(provider)?
+            .get_mut("models")
+            .and_then(Value::as_array_mut)
+            .and_then(|models| {
+                models
+                    .iter_mut()
+                    .find(|model| model.get("id").and_then(Value::as_str) == Some(id))
+            })
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| {
+                ConfigError::Invalid(format!("Provider \"{provider}\" has no model \"{id}\"."))
+            })?;
+        match value {
+            Some(value) => {
+                entry.insert(key.to_owned(), value);
+            }
+            None => {
+                entry.shift_remove(key);
             }
         }
         Ok(())
@@ -655,5 +732,28 @@ mod tests {
         assert_eq!(literal_key("$OPENAI_API_KEY"), None);
         assert_eq!(literal_key("!pass show x"), None);
         assert_eq!(literal_key(""), None);
+    }
+
+    #[test]
+    fn merging_a_models_compat_keeps_its_other_keys() {
+        let mut file = ModelsFile::parse(
+            r#"{"providers": {"p": {"baseUrl": "http://h/v1", "models": [
+                {"id": "m", "compat": {"maxTokensField": "max_tokens",
+                 "chatTemplateKwargs": {"enable_thinking": true}}}]}}}"#,
+        )
+        .unwrap();
+        let thinking = json!({"thinkingFormat": "openai", "chatTemplateKwargs": null});
+        file.merge_model_field("p", "m", "compat", thinking.as_object().unwrap())
+            .unwrap();
+        let text = file.to_text();
+        let parsed: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            parsed["providers"]["p"]["models"][0]["compat"],
+            json!({"maxTokensField": "max_tokens", "thinkingFormat": "openai"})
+        );
+        assert!(
+            file.merge_model_field("p", "x", "compat", &Map::new())
+                .is_err()
+        );
     }
 }

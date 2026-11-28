@@ -401,6 +401,114 @@ fn parse_diff_line(line: &str) -> DiffLine {
     }
 }
 
+/// The string argument `key` of `tool`: from its arguments once they are complete, and while
+/// they stream, as much of it as has arrived (the arguments are incomplete JSON then), so code
+/// can be shown as the model writes it.
+pub fn string_arg(tool: &ToolBlock, key: &str) -> Option<String> {
+    if !tool.args.is_null() {
+        return tool
+            .args
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+    }
+    partial_string(&tool.args_partial, key)
+}
+
+/// The value of the top-level string field `key` in `json`, which may end anywhere: what has
+/// arrived of it, its escapes decoded (an escape cut off at the end is left out).
+fn partial_string(json: &str, key: &str) -> Option<String> {
+    let rest = json.trim_start().strip_prefix('{')?;
+    let mut chars = rest.chars().peekable();
+    // Field by field: a key, a colon, then the value (skipped unless it is the one).
+    loop {
+        while chars.peek().is_some_and(|c| c.is_whitespace() || *c == ',') {
+            chars.next();
+        }
+        if chars.next()? != '"' {
+            return None;
+        }
+        let name = read_string(&mut chars)?;
+        while chars.peek().is_some_and(|c| c.is_whitespace() || *c == ':') {
+            chars.next();
+        }
+        if name.0 == key {
+            return (chars.next()? == '"').then(|| read_string(&mut chars).map(|value| value.0))?;
+        }
+        skip_value(&mut chars)?;
+    }
+}
+
+/// Reads a JSON string after its opening quote: its text, and whether it was closed. `None`
+/// only when nothing at all could be read.
+fn read_string(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Option<(String, bool)> {
+    let mut text = String::new();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => return Some((text, true)),
+            '\\' => {
+                let decoded = match chars.next() {
+                    Some('n') => '\n',
+                    Some('t') => '\t',
+                    Some('r') => '\r',
+                    Some('b') => '\u{8}',
+                    Some('f') => '\u{c}',
+                    Some('u') => {
+                        let hex: String = chars.by_ref().take(4).collect();
+                        let Some(unit) = (hex.len() == 4)
+                            .then(|| u16::from_str_radix(&hex, 16).ok())
+                            .flatten()
+                        else {
+                            break;
+                        };
+                        if (0xd800..0xdc00).contains(&unit) {
+                            // A surrogate pair: its second half follows as another escape.
+                            let low: String = chars.by_ref().take(6).collect();
+                            let Some(low) = low
+                                .strip_prefix("\\u")
+                                .and_then(|hex| u16::from_str_radix(hex, 16).ok())
+                            else {
+                                break;
+                            };
+                            char::decode_utf16([unit, low])
+                                .next()?
+                                .unwrap_or('\u{fffd}')
+                        } else {
+                            char::from_u32(u32::from(unit)).unwrap_or('\u{fffd}')
+                        }
+                    }
+                    Some(other) => other,
+                    None => break,
+                };
+                text.push(decoded);
+            }
+            c => text.push(c),
+        }
+    }
+    Some((text, false))
+}
+
+/// Skips a JSON value of any kind; `None` when it ends before the value does.
+fn skip_value(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Option<()> {
+    let mut depth = 0usize;
+    loop {
+        match chars.next()? {
+            '"' => {
+                if !read_string(chars)?.1 {
+                    return None;
+                }
+            }
+            '{' | '[' => depth += 1,
+            '}' | ']' => depth = depth.checked_sub(1)?,
+            ',' if depth == 0 => return Some(()),
+            _ => {}
+        }
+        if depth == 0 && chars.peek() == Some(&',') {
+            return Some(());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -592,5 +700,37 @@ mod tests {
             result_summary(&edit).unwrap(),
             "Added 1 line, removed 1 line"
         );
+    }
+
+    #[test]
+    fn string_args_show_while_they_stream() {
+        let streaming = |partial: &str| ToolBlock {
+            args: Value::Null,
+            args_partial: partial.into(),
+            ..tool("python", Value::Null)
+        };
+        for (partial, code) in [
+            ("{", None),
+            (r#"{"code"#, None),
+            (r#"{"code": "#, None),
+            (r#"{"code": ""#, Some("")),
+            (r#"{"code": "import math\npri"#, Some("import math\npri")),
+            (r#"{"code": "print(\"hi\")\n"#, Some("print(\"hi\")\n")),
+            // An escape cut off at the end is left out.
+            (r#"{"code": "a\"#, Some("a")),
+            (r#"{"code": "caf\u00e9 \ud83c\udf30"}"#, Some("café 🌰")),
+            (
+                r#"{"other": {"x": [1, "}"]}, "code": "1 + 1""#,
+                Some("1 + 1"),
+            ),
+        ] {
+            assert_eq!(
+                string_arg(&streaming(partial), "code").as_deref(),
+                code,
+                "{partial}"
+            );
+        }
+        let done = tool("python", json!({"code": "2 ** 10"}));
+        assert_eq!(string_arg(&done, "code").as_deref(), Some("2 ** 10"));
     }
 }

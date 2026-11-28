@@ -76,6 +76,12 @@ pub(super) struct Row {
     open: bool,
     pub(super) fields: Option<Fields>,
     trial: Trial,
+    /// It is in the file as a thinking model.
+    saved_reasoning: bool,
+    /// Its server's thinking was checked ([`probe::check_thinking`]), and what was found, if
+    /// anything could be.
+    thinking_checked: bool,
+    thinking: Option<probe::ThinkingCheck>,
 }
 
 /// The fields of a row that was opened.
@@ -106,6 +112,9 @@ impl Row {
             open: false,
             fields: None,
             trial: Trial::None,
+            saved_reasoning: false,
+            thinking_checked: false,
+            thinking: None,
         }
     }
 
@@ -113,6 +122,7 @@ impl Row {
         Self {
             saved: true,
             ticked: true,
+            saved_reasoning: model.spec.reasoning,
             base_url: model.base_url.clone(),
             ..Self::new(model.spec.clone())
         }
@@ -165,6 +175,39 @@ impl Row {
         }
         Ok(spec)
     }
+}
+
+/// What the catalog knows of the model a server Pistachio runs here offers: whether it thinks
+/// here and the context it was started with, which the server may not say.
+fn local_facts(base_url: &str, offer: &mut Offer, cx: &App) {
+    let Some(models) = crate::local_models::local_models(cx) else {
+        return;
+    };
+    let Some((model, engine, context)) = models.read(cx).chosen_at(base_url) else {
+        return;
+    };
+    for offered in offer
+        .models
+        .iter_mut()
+        .filter(|offered| offered.id == model.id)
+    {
+        offered.reasoning = Some(local_models::thinking::thinks(model, engine));
+        offered.context_window = offered.context_window.or(Some(context));
+    }
+}
+
+/// The catalog id of the model a server Pistachio runs at `base_url` offers, and what pi's
+/// models.json needs for its thinking (`None` when it does not think there).
+fn local_thinking(
+    base_url: &str,
+    cx: &App,
+) -> Option<(String, Option<local_models::thinking::PiThinking>)> {
+    let models = crate::local_models::local_models(cx)?;
+    let (model, engine, _) = models.read(cx).chosen_at(base_url)?;
+    Some((
+        model.id.clone(),
+        local_models::thinking::pi_thinking(model, engine),
+    ))
 }
 
 /// The models in the file, then the others the server offers: those for conversations first.
@@ -431,7 +474,11 @@ impl ModelsDialog {
                 set(&screen.id, &id, window, cx);
             };
         match connection {
-            Connection::Online { base_url, offer } => {
+            Connection::Online {
+                base_url,
+                mut offer,
+            } => {
+                local_facts(&base_url, &mut offer, cx);
                 screen.kind = offer.kind;
                 screen.state = State::Online;
                 if new {
@@ -608,8 +655,78 @@ impl ModelsDialog {
         }));
     }
 
+    /// Checks how the servers of the thinking models being added take thinking levels, then
+    /// saves. Returns false when there is nothing to check.
+    fn check_thinking_first(&mut self, cx: &mut Context<Self>) -> bool {
+        let (Some(place), Screen::Server(screen)) = (self.place.clone(), &mut self.screen) else {
+            return false;
+        };
+        let api = if screen.api.is_empty() {
+            "openai-completions".to_owned()
+        } else {
+            screen.api.clone()
+        };
+        let base_url = text(&screen.base_url, cx);
+        // A model Pistachio runs here gets the thinking its catalog entry says.
+        let local = local_thinking(&base_url, cx).map(|(id, _)| id);
+        let key = place.key(screen.key.read(cx).value().as_ref());
+        let kind = screen.kind;
+        let jobs: Vec<(String, String)> = screen
+            .rows
+            .iter()
+            .filter(|row| {
+                row.ticked
+                    && row.spec.reasoning
+                    && !row.thinking_checked
+                    && !(row.saved && row.saved_reasoning)
+                    && local.as_ref() != Some(&row.spec.id)
+            })
+            .map(|row| {
+                let url = row.base_url.clone().unwrap_or_else(|| base_url.clone());
+                (row.spec.id.clone(), url)
+            })
+            .collect();
+        if jobs.is_empty() {
+            return false;
+        }
+        self.saving = true;
+        self.checking_thinking = true;
+        cx.notify();
+        self.task = Some(cx.spawn(async move |this, cx| {
+            for (id, url) in jobs {
+                let (pi, api, key, model) =
+                    (place.pi.clone(), api.clone(), key.clone(), id.clone());
+                let check = cx
+                    .background_executor()
+                    .spawn(async move {
+                        probe::check_thinking(&pi, kind, &api, &url, key.as_deref(), &model)
+                    })
+                    .await;
+                let going_on = this.update(cx, |this, _| {
+                    let Screen::Server(screen) = &mut this.screen else {
+                        return false;
+                    };
+                    if let Some(row) = screen.rows.iter_mut().find(|row| row.spec.id == id) {
+                        row.thinking_checked = true;
+                        row.thinking = check;
+                    }
+                    true
+                });
+                if !matches!(going_on, Ok(true)) {
+                    return;
+                }
+            }
+            let _ = this.update(cx, |this, cx| {
+                this.saving = false;
+                this.checking_thinking = false;
+                this.save_server(cx);
+            });
+        }));
+        true
+    }
+
     pub(super) fn save_server(&mut self, cx: &mut Context<Self>) {
-        if self.saving {
+        if self.saving || self.check_thinking_first(cx) {
             return;
         }
         let (Some(Ok(file)), Screen::Server(screen)) = (&self.loaded, &self.screen) else {
@@ -644,10 +761,40 @@ impl ModelsDialog {
                 id
             };
             let mut added = None;
+            let mut notes = Vec::new();
+            let local = local_thinking(&spec.base_url, cx);
             for row in &screen.rows {
                 if row.ticked {
-                    file.set_model(&id, &row.spec(cx)?)
+                    let model = row.spec(cx)?;
+                    file.set_model(&id, &model)
                         .map_err(|error| error.to_string())?;
+                    // A model Pistachio runs here gets the thinking its template takes.
+                    if let Some((catalog_id, thinking)) = &local
+                        && *catalog_id == model.id
+                    {
+                        let thinking = thinking.as_ref().filter(|_| model.reasoning);
+                        for (key, value) in [
+                            ("compat", thinking.map(|t| t.compat.clone())),
+                            ("thinkingLevelMap", thinking.map(|t| t.level_map.clone())),
+                        ] {
+                            file.set_model_field(&id, &model.id, key, value)
+                                .map_err(|error| error.to_string())?;
+                        }
+                    } else if let Some(check) = row.thinking.as_ref().filter(|_| model.reasoning) {
+                        // What the check found its server takes.
+                        if let Some(compat) = check.setup.compat.as_object() {
+                            file.merge_model_field(&id, &model.id, "compat", compat)
+                                .map_err(|error| error.to_string())?;
+                        }
+                        file.set_model_field(
+                            &id,
+                            &model.id,
+                            "thinkingLevelMap",
+                            Some(check.setup.level_map.clone()),
+                        )
+                        .map_err(|error| error.to_string())?;
+                        notes.push((id.clone(), model.id.clone(), check.off_thinks == Some(true)));
+                    }
                     if !row.saved && added.is_none() {
                         added = Some((id.clone(), row.spec.id.clone()));
                     }
@@ -655,10 +802,17 @@ impl ModelsDialog {
                     file.remove_model(&id, &row.spec.id);
                 }
             }
-            Ok((file.to_text(), added))
+            Ok((file.to_text(), added, notes))
         })();
         match result {
-            Ok((text, select)) => self.save(text, select, None, cx),
+            Ok((text, select, notes)) => {
+                for (provider, model, off_thinks) in notes {
+                    crate::chat::thinking_notes::ThinkingNotes::set(
+                        cx, &provider, &model, off_thinks,
+                    );
+                }
+                self.save(text, select, None, cx);
+            }
             Err(error) => {
                 self.set_error(Some(error.into()));
                 cx.notify();
@@ -731,7 +885,9 @@ impl ModelsDialog {
         });
         let (added, removed) = screen.changes();
         let any = screen.rows.iter().any(|row| row.ticked);
-        let action = if self.saving {
+        let action = if self.checking_thinking {
+            "Checking thinking…".to_owned()
+        } else if self.saving {
             "Saving…".to_owned()
         } else if screen.existing.is_some() && (added == 0 || removed > 0) {
             "Save".to_owned()

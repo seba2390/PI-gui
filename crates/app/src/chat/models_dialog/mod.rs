@@ -34,7 +34,7 @@ use remote::HostId;
 pub use probe::answers;
 pub use start_screen::describe;
 
-use self::hosted_screen::{Device, Scan};
+use self::hosted_screen::{DeployStep, Device, Scan, Way};
 use self::key_screen::KeyScreen;
 use self::server_screen::ServerScreen;
 use self::start_screen::Back;
@@ -132,6 +132,14 @@ pub struct ModelsDialog {
     back_to: Back,
     /// Where a locally hosted server runs, once chosen.
     device: Option<Device>,
+    /// On this device: attach to a server that runs, or deploy a new model.
+    this_way: Option<Way>,
+    /// How far deploying a new model on this device got.
+    deploy: DeployStep,
+    /// Hardware scans asked for, so each one's progress starts from the beginning.
+    scans: usize,
+    /// The suggestions opened to show how they run (by tier).
+    expanded: Vec<&'static str>,
     /// The known servers on this device, once it was chosen.
     this_device: Option<Scan>,
     /// The known servers on the other device last asked for.
@@ -144,6 +152,8 @@ pub struct ModelsDialog {
     editor: Entity<EditorState>,
     json_error: Option<SharedString>,
     saving: bool,
+    /// Checking how servers take thinking levels, before saving.
+    checking_thinking: bool,
     /// Counts what is asked of servers, so an answer that comes too late is left out.
     asked: usize,
     /// What is being asked of servers; a new question replaces it.
@@ -197,6 +207,23 @@ impl ModelsDialog {
                 _ => {}
             },
         );
+        let mut subscriptions = vec![enter, enter_port];
+        if let Some(models) = crate::local_models::local_models(cx) {
+            subscriptions.push(cx.observe(&models, |_, _, cx| cx.notify()));
+            // A suggested model that started is connected like any server.
+            subscriptions.push(cx.subscribe_in(
+                &models,
+                window,
+                |this, _, event: &crate::local_models::LocalModelsEvent, window, cx| {
+                    if let crate::local_models::LocalModelsEvent::Ready { url } = event
+                        && matches!(this.screen, Screen::Hosted)
+                    {
+                        this.back_to = Back::Hosted;
+                        this.open_new_server(vec![url.clone()], window, cx);
+                    }
+                },
+            ));
+        }
         let mut this = Self {
             window: window.window_handle(),
             loaded: None,
@@ -211,6 +238,10 @@ impl ModelsDialog {
             open,
             back_to: Back::Start,
             device: None,
+            this_way: None,
+            deploy: DeployStep::Start,
+            scans: 0,
+            expanded: Vec::new(),
             this_device: None,
             other_device: None,
             address,
@@ -219,10 +250,11 @@ impl ModelsDialog {
             editor: cx.new(|cx| EditorState::new(window, cx).language("json")),
             json_error: None,
             saving: false,
+            checking_thinking: false,
             asked: 0,
             task: None,
             _tasks: Vec::new(),
-            _subscriptions: vec![enter, enter_port],
+            _subscriptions: subscriptions,
             place,
         };
         // Servers are only looked for once a device is chosen: none is assumed to run anywhere.
@@ -290,6 +322,22 @@ impl ModelsDialog {
     }
 
     fn back(&mut self, cx: &mut Context<Self>) {
+        // The pages of a locally hosted model: attaching or deploying, then this device or
+        // another, then the device's choice.
+        if matches!(self.screen, Screen::Hosted) && self.device.is_some() {
+            if self.device == Some(Device::This)
+                && self.this_way.is_some()
+                && self.suggests_models()
+            {
+                self.this_way = None;
+            } else {
+                self.device = None;
+                self.this_way = None;
+            }
+            self.address_error = None;
+            cx.notify();
+            return;
+        }
         let screen = match (&self.screen, self.back_to) {
             (Screen::Key(_) | Screen::Server(_), Back::Hosted) => Screen::Hosted,
             (Screen::Key(_) | Screen::Server(_), Back::Providers) => Screen::Providers,
@@ -562,7 +610,11 @@ fn card(
     Button::new(SharedString::from(id))
         .choice_card(chosen, cx)
         .h(px(40.))
-        .accessibility_label(format!("{title}, {detail}"))
+        .accessibility_label(if detail.is_empty() {
+            title.to_string()
+        } else {
+            format!("{title}, {detail}")
+        })
         .child(
             h_flex()
                 .w_full()

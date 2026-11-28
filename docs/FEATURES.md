@@ -227,13 +227,28 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   Jan, Docker Model Runner, SGLang, Lemonade and KoboldCpp are looked for on their usual ports
   (another device by its address, like `192.168.1.89`), and
   any server is connected by its port or address (`192.168.1.89:8888`): which API it speaks
-  (OpenAI's, Anthropic's or Gemini's) is found out. **API provider model** lists pi's own
+  (OpenAI's, Anthropic's or Gemini's) is found out. On this device (pi running here) it asks
+  first whether to **attach to an existing model** (the servers above) or **deploy a new model**:
+  **Scan local hardware** lists the processor, memory, graphics, free disk and build tools it
+  found, and **Suggest models** then offers up to three for them (**Fast**, **Balanced**, **Most
+  capable**), each showing its inference engine, checkpoint and quantization, memory and speed
+  here: a default engine that installs unattended and,
+  where faster, a specialized engine built on the computer. Download asks first and lists exactly
+  what is downloaded; everything is pinned and checked, runs for this computer only, starts when a
+  chat sends to it and stops when the app quits. The catalog of models and engines comes from
+  local-llm-radar (`crates/local-models/catalog.json`). **API provider model** lists pi's own
   providers, which need only an API key (checked with the provider first, where it allows that) or
   a sign-in; then all their models are in the menu. What is connected already is listed below the
-  two choices. A server is asked which models it has, and they are ticked in a list; their
+  two choices. Settings → pi & models groups what is connected into **This device**, **Other
+  devices** and **API connections**, each with a trash button that removes it after asking; a
+  model Pistachio downloaded is also stopped and deleted, with its engine unless another local
+  model uses it. A server is asked which models it has, and they are ticked in a list; their
   context, longest answer and whether they think or see pictures are filled in as far as the
   server says. Models can be tested with a short message before they are added, and added by their
-  ID when a server has no list. The same screens change and remove what is connected; what they do
+  ID when a server has no list. Adding a thinking model checks how its server takes thinking levels (the
+  prompt vLLM builds for each way of asking, the efforts llama.cpp's template knows, and one short
+  reply with thinking off), so each level of the message box does what it says; a model that
+  thinks anyway shows **lowest** instead of **off**. The same screens change and remove what is connected; what they do
   not know of a provider or model in `models.json` stays as it is. The file can also be edited as
   text, with validation. It is the one the session's pi reads (on the SSH host for remote
   sessions); the previous version is kept as `models.json.bak-pistachio`. pi reads the file only
@@ -247,6 +262,11 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
 - **Working indicator**: a little green π with orbiting dots shows a working agent in the
   chat ("Working… 12s · esc to interrupt", centred) and before its name in the sidebar. Settings
   → Appearance → Working indicator picks the style, with a live preview.
+- **Tokens per second**: while a reply streams, a pill under the top bar shows a line of the
+  model's speed over the last seconds and its speed now ("~31 tok/s"), then the reply's exact
+  average in gray ("avg. 30 tok/s") before it slides away. The live figure is estimated from the
+  streamed text and calibrated per model against the provider's exact counts (hover it for how far
+  off it has been); models whose thinking doesn't stream get none.
 - **Transcript layout**: the model's text is the main voice. Tool calls and thinking sit on a
   thin rail on the left in a quieter style, with more room where they meet the text.
 - **Turn rail**: dots at the left edge of the conversation, one per prompt (Chat and Code, from two

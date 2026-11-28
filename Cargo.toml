@@ -6,7 +6,7 @@ exclude = ["vendor"]
 default-members = ["crates/app"]
 
 [workspace.package]
-version = "0.5.10"
+version = "0.6.0"
 edition = "2024"
 rust-version = "1.98"
 publish = false
@@ -17,6 +17,7 @@ repository = "https://github.com/seba2390/pistachio"
 # Internal crates
 deepsearch = { path = "crates/deepsearch" }
 documents = { path = "crates/documents" }
+local-models = { path = "crates/local-models" }
 pi-config = { path = "crates/pi-config" }
 pi-rpc = { path = "crates/pi-rpc" }
 pi-sessions = { path = "crates/pi-sessions" }

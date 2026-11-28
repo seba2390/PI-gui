@@ -3,6 +3,14 @@
 Read [CONTRIBUTING.md](CONTRIBUTING.md) first: ground rules, setup, and the checks to run before a
 pull request.
 
+## Keep `target/` small
+
+Build output piles up (debug, release and test builds, stale incremental caches) and has passed
+90 GB. When a task builds or tests, check its size first with `du -sh target`, in every checkout
+and worktree you build in (each has its own `target/`). Above 30 GB, run `cargo clean` before
+building, and say so: the next build starts from scratch (a few minutes in release). Never clean
+while another build or test in that checkout is running.
+
 ## Releasing
 
 Only when the user asks to release a version. After a documentation review, it is one command:

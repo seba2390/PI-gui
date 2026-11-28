@@ -1309,9 +1309,10 @@ fn render_tool(key: BlockKey, tool: &ToolBlock, cx: &RowContext<'_>) -> AnyEleme
                         .child(format!("$ {}", command.trim())),
                 )
             });
-            // The python tool's code, above what it gave.
+            // The python tool's code, above what it gave; as it is written, while the call
+            // streams.
             let code = (tool.name == "python")
-                .then(|| tool.args.get("code").and_then(serde_json::Value::as_str))
+                .then(|| tool::string_arg(tool, "code"))
                 .flatten();
             let this = this.when_some(code, |this, code| {
                 this.child(
@@ -1342,6 +1343,10 @@ fn render_tool(key: BlockKey, tool: &ToolBlock, cx: &RowContext<'_>) -> AnyEleme
                     key,
                     cx,
                 ),
+                // Nothing to say before it has run.
+                None if matches!(tool.status, ToolStatus::Streaming | ToolStatus::Pending) => {
+                    div().into_any_element()
+                }
                 None => div()
                     .pl(px(15.))
                     .text_xs()

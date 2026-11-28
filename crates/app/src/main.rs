@@ -16,6 +16,7 @@ mod config;
 mod demo;
 mod document_parsers;
 mod hosts;
+mod local_models;
 mod model_store;
 mod naming;
 mod panels;
@@ -109,12 +110,19 @@ fn main() {
         actions::init(cx);
         cx.set_global(config);
         search_server::init(cx);
+        local_models::init(cx);
         settings::apply_pi_program(cx);
         cx.set_global(ui_state::UiState::load(
             ui_state::UiState::path().as_deref(),
         ));
         cx.set_global(chat::recall::Recall::load(
             chat::recall::Recall::path().as_deref(),
+        ));
+        cx.set_global(chat::thinking_notes::ThinkingNotes::load(
+            chat::thinking_notes::ThinkingNotes::path().as_deref(),
+        ));
+        cx.set_global(chat::token_rate::TokenRates::load(
+            chat::token_rate::TokenRates::path().as_deref(),
         ));
         window::init(cx);
         perf::phase("app_init");

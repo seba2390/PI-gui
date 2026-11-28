@@ -364,6 +364,32 @@ fn is_private(host: &str) -> bool {
             .any(|end| host.ends_with(end))
 }
 
+/// Where a server runs, as far as its address tells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Location {
+    ThisDevice,
+    /// Another computer on one's own network.
+    OtherDevice,
+    /// A service on the internet.
+    Online,
+}
+
+pub fn location(base_url: &str) -> Location {
+    let host = host_of(base_url).to_ascii_lowercase();
+    let loopback = host == "localhost"
+        || host.ends_with(".localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback() || ip.is_unspecified());
+    if loopback {
+        Location::ThisDevice
+    } else if is_private(&host) {
+        Location::OtherDevice
+    } else {
+        Location::Online
+    }
+}
+
 /// The host of a URL.
 pub fn host_of(url: &str) -> &str {
     host(url.split_once("://").map_or(url, |(_, rest)| rest))
@@ -380,7 +406,7 @@ pub fn short_address(base_url: &str) -> &str {
 
 /// The server's root: the base URL without `/v1`, where Ollama, LM Studio and llama.cpp answer
 /// on their own APIs.
-fn root(base_url: &str) -> &str {
+pub(crate) fn root(base_url: &str) -> &str {
     let base = base_url.trim_end_matches('/');
     base.strip_suffix("/v1").unwrap_or(base)
 }
@@ -868,6 +894,11 @@ pub fn error_message(body: &str) -> Option<String> {
     Some(line)
 }
 
+/// Providers pi has built in under these IDs (`llama.cpp` since pi 1.5). One in `models.json`
+/// with the same ID is taken over by pi's, which is configured on its own, so pi says the
+/// provider "is not configured" and nothing reaches the server.
+const PI_PROVIDERS: &[&str] = &["llama.cpp"];
+
 /// A provider ID for a new server: its program's name, else its host, made one word, and unlike
 /// the ones `taken`.
 pub fn provider_id(kind: Kind, base_url: &str, taken: &[&str]) -> String {
@@ -901,6 +932,8 @@ pub fn provider_id(kind: Kind, base_url: &str, taken: &[&str]) -> String {
     }
     let id = match id.trim_matches(['-', '.']) {
         "" => "server".to_owned(),
+        // pi's own provider of that name, which needs its own sign-in, would take its place.
+        id if PI_PROVIDERS.contains(&id) => id.replace('.', "-"),
         id => id.to_owned(),
     };
     let free = |id: &str| !taken.contains(&id);
@@ -945,6 +978,17 @@ mod tests {
         assert_eq!(base_urls("http://h:1").unwrap(), ["http://h:1"]);
         assert!(is_private_url("http://10.0.0.2:1/v1"));
         assert!(!is_private_url("https://openrouter.ai/api/v1"));
+        for (url, at) in [
+            ("http://127.0.0.1:39280/v1", Location::ThisDevice),
+            ("http://localhost:11434/v1", Location::ThisDevice),
+            ("http://[::1]:8000/v1", Location::ThisDevice),
+            ("http://192.168.1.89:8888/v1", Location::OtherDevice),
+            ("http://spark:8000/v1", Location::OtherDevice),
+            ("http://spark.local:8000/v1", Location::OtherDevice),
+            ("https://openrouter.ai/api/v1", Location::Online),
+        ] {
+            assert_eq!(location(url), at, "{url}");
+        }
         for address in ["", "  ", "two words", "ftp://host", "http://", "/v1"] {
             assert!(base_url(address).is_err(), "{address}");
         }
@@ -1242,6 +1286,7 @@ mod tests {
         assert_eq!(id(Kind::Ollama, "http://localhost:11434/v1"), "ollama-2");
         assert_eq!(id(Kind::LmStudio, "http://localhost:1234/v1"), "lm-studio");
         assert_eq!(id(Kind::Other, "http://localhost:9/v1"), "local");
+        assert_eq!(id(Kind::LlamaCpp, "http://127.0.0.1:8080/v1"), "llama-cpp");
         assert_eq!(
             id(Kind::Vllm, "http://192.168.1.89:8888/v1"),
             "vllm-192.168.1.89"

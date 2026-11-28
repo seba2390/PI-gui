@@ -49,6 +49,15 @@ Pistachio is started from the Dock or a desktop launcher.
 - **Find in chat** (⌘F) searches prompts, replies, thinking and tool output, collapsed rows
   included. Enter / Shift+Enter (or ⌘G / ⌘⇧G) go to the next / previous match, Esc closes it.
 - Ctrl+T expands all thinking, Ctrl+O all tool output.
+- **Tokens per second.** While a reply streams, a pill slides down under the top bar: a line of
+  the model's speed over the last seconds and its speed now ("~31 tok/s"). When the reply ends it
+  turns gray with the reply's exact average ("avg. 30 tok/s") and slides away after a few seconds.
+  The live figure is an estimate from the streamed text; Pistachio calibrates it for each model
+  against the exact token counts of its finished replies, and hovering the pill says how far off
+  it has been for that model on average (usually a few percent). A model that thinks without
+  streaming its thinking, or streams only a summary, gets no live figure, since the tokens it
+  writes can't be seen; a new model shows only the exact average until one of its replies has
+  been checked.
 
 ## The message box
 
@@ -139,7 +148,7 @@ statistics), and use it for small jobs a program does more reliably than reasoni
 words, sorting or reformatting text, regular expressions, JSON, dates. The code runs in
 [Monty](https://github.com/pydantic/monty), a Python interpreter with no files, network,
 environment or programs, stopped after 5 seconds or 256 MB. The chat shows the call as
-"Computed" with its result; expand it for the code.
+"Computed" with its result; expand it for the code, which shows as the model writes it.
 
 Turn it off under [Settings → General](#settings-general) → Chat mode or on
 [Tools](settings/tools.md).
@@ -178,7 +187,8 @@ pi reads skills when it starts, so a change restarts it on the same session.
 
 **Add or change models…** in the model menu (or [pi & models](settings/pi-and-models.md))
 connects a locally hosted model (Ollama, LM Studio, llama.cpp, vLLM and others, on this device
-or another) or an API provider. The startup model and thinking level are set there too.
+or another) or an API provider. On this device it can also deploy a new model: it scans this
+computer's hardware, suggests models that run well on it, and downloads and runs one on request. The startup model and thinking level are set there too.
 
 ## Settings → General
 

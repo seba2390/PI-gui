@@ -2,23 +2,49 @@
 //! once a device is chosen, Ollama, LM Studio and the other known servers are looked for on their
 //! usual ports there, and any server can also be connected by its address or port.
 
-use gpui_kit::component::button::Button;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Input;
-use gpui_kit::component::{IconName, h_flex, v_flex};
+use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::{
+    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, h_flex, v_flex,
+};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use pi_config::server::{self, KNOWN_SERVERS, Kind, KnownServer, Lookup, THIS_DEVICE};
 
 use super::start_screen::{Back, available, grid};
 use super::{ModelsDialog, card, label, probe};
+use crate::local_models::{LocalModels, Scan as Machine, Status};
 use crate::pi_place::PiPlace;
-use crate::ui::AppIcon;
+use crate::ui::download::download_and_run_button;
+use crate::ui::{AppIcon, FadingText, QuietButton as _, web_link};
+use local_models::hardware::Fact;
+use local_models::{Choice, Suggestion};
+
+/// How far deploying a new model on this device got.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DeployStep {
+    Start,
+    /// The hardware scan was asked for, so what it found shows.
+    Hardware,
+    /// Models are suggested for the hardware found.
+    Suggestions,
+}
 
 /// Where the server runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Device {
     This,
     Other,
+}
+
+/// What to do on this device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Way {
+    /// Connect to a server that runs here already.
+    Attach,
+    /// Download a model suggested for this device's hardware, and run it.
+    Deploy,
 }
 
 /// Whether a known server answers on its usual port.
@@ -53,8 +79,31 @@ impl ModelsDialog {
     pub(super) fn choose_device(&mut self, device: Device, cx: &mut Context<Self>) {
         self.device = Some(device);
         self.address_error = None;
-        if device == Device::This && self.this_device.is_none() {
-            self.scan(device, THIS_DEVICE.to_owned(), cx);
+        if device == Device::This {
+            self.this_way = None;
+            // Nothing to deploy where pi does not run on this computer.
+            if !self.suggests_models() {
+                self.choose_way(Way::Attach, cx);
+            }
+        }
+        cx.notify();
+    }
+
+    fn choose_way(&mut self, way: Way, cx: &mut Context<Self>) {
+        self.this_way = Some(way);
+        self.address_error = None;
+        if way == Way::Attach && self.this_device.is_none() {
+            self.scan(Device::This, THIS_DEVICE.to_owned(), cx);
+        }
+        cx.notify();
+    }
+
+    /// Looks at this computer's hardware (again); models are suggested once asked for.
+    fn scan_hardware(&mut self, cx: &mut Context<Self>) {
+        self.deploy = DeployStep::Hardware;
+        self.scans += 1;
+        if let Some(models) = crate::local_models::local_models(cx) {
+            models.update(cx, LocalModels::scan_now);
         }
         cx.notify();
     }
@@ -214,6 +263,8 @@ impl ModelsDialog {
             };
             div()
                 .debug_selector(|| selector.into())
+                .relative()
+                .children(crate::demo::probe(selector))
                 .w(relative(0.49))
                 .child(
                     card(
@@ -242,25 +293,84 @@ impl ModelsDialog {
                 "Another device",
                 "By its address".into(),
             ));
-        let below = match self.device {
-            None => label(
-                "Ollama, LM Studio, llama.cpp, MLX, vLLM, Jan, Docker Model Runner, or any server \
-                 that speaks OpenAI's, Anthropic's or Gemini's API.",
-                cx,
-            )
-            .into_any_element(),
-            Some(Device::This) => self.render_this_device(cx),
-            Some(Device::Other) => self.render_other_device(cx),
+        // Each choice opens a page of its own; Back goes to the one before.
+        let (title, body) = match (self.device, self.this_way) {
+            (None, _) => (
+                "Locally hosted model",
+                v_flex()
+                    .gap_3()
+                    .child(devices)
+                    .child(label(
+                        "Ollama, LM Studio, llama.cpp, MLX, vLLM, Jan, Docker Model Runner, or \
+                         any server that speaks OpenAI's, Anthropic's or Gemini's API.",
+                        cx,
+                    ))
+                    .into_any_element(),
+            ),
+            (Some(Device::Other), _) => ("Another device", self.render_other_device(cx)),
+            (Some(Device::This), None) => ("This device", self.render_ways(cx).into_any_element()),
+            (Some(Device::This), Some(Way::Attach)) if !self.suggests_models() => {
+                ("This device", self.render_attach(cx))
+            }
+            (Some(Device::This), Some(Way::Attach)) => {
+                ("Attach to existing model", self.render_attach(cx))
+            }
+            (Some(Device::This), Some(Way::Deploy)) => ("Deploy new model", self.render_deploy(cx)),
         };
         v_flex()
             .gap_3()
-            .child(Self::render_top("Locally hosted model", None, cx))
-            .child(devices)
-            .child(below)
+            .child(Self::render_top(title, None, cx))
+            .child(body)
             .into_any_element()
     }
 
-    fn render_this_device(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// Attach to a server that runs here, or deploy a new model.
+    fn render_ways(&self, cx: &mut Context<Self>) -> Div {
+        let way_card = |way: Way, icon: AppIcon, title| {
+            let selector = match way {
+                Way::Attach => "way:attach",
+                Way::Deploy => "way:deploy",
+            };
+            div()
+                .debug_selector(|| selector.into())
+                .relative()
+                .children(crate::demo::probe(selector))
+                .w(relative(0.49))
+                .child(
+                    card(
+                        selector.to_owned(),
+                        icon,
+                        title,
+                        SharedString::default(),
+                        None,
+                        false,
+                        cx,
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| this.choose_way(way, cx))),
+                )
+        };
+        v_flex()
+            .gap_1p5()
+            .child(
+                h_flex()
+                    .justify_between()
+                    .child(way_card(
+                        Way::Attach,
+                        AppIcon::Plug,
+                        "Attach to existing model",
+                    ))
+                    .child(way_card(Way::Deploy, AppIcon::Download, "Deploy new model")),
+            )
+            .child(label(
+                "Attach connects to a server that already runs here, like Ollama or LM Studio. \
+                 Deploy looks at this device's hardware, suggests models that run well on it, \
+                 and downloads and runs the one you pick.",
+                cx,
+            ))
+    }
+
+    /// The known servers on this device, and a server on another port.
+    fn render_attach(&self, cx: &mut Context<Self>) -> AnyElement {
         let port = v_flex()
             .gap_1p5()
             .child(label("Another server on this device", cx))
@@ -286,6 +396,571 @@ impl ModelsDialog {
             )
             .child(port)
             .into_any_element()
+    }
+
+    /// Models are suggested where pi runs on this computer: they run here.
+    pub(super) fn suggests_models(&self) -> bool {
+        matches!(
+            self.place.as_ref().map(|place| &place.pi),
+            Some(PiPlace::Local { .. })
+        )
+    }
+
+    /// Scans the hardware when asked, shows what it found, and then suggests models for it.
+    fn render_deploy(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(models) = crate::local_models::local_models(cx) else {
+            return div().into_any_element();
+        };
+        // What the app scanned before shows only once asked for here.
+        let asked = self.deploy != DeployStep::Start;
+        let (scanning, facts) = match models.read(cx).scan() {
+            Machine::Scanning => (asked, None),
+            Machine::Done { hardware, .. } if asked => (false, Some(hardware.facts())),
+            Machine::NotYet | Machine::Done { .. } => (false, None),
+        };
+        let accent = crate::theme::palette(cx).accent_icon;
+        let scan_button = div()
+            .flex_none()
+            .debug_selector(|| "scan-hardware".into())
+            .relative()
+            .children(crate::demo::probe("scan-hardware"))
+            .child(
+                Button::new("scan-hardware")
+                    .icon(Icon::new(IconName::Cpu).text_color(accent))
+                    .label(if facts.is_some() {
+                        "Scan again"
+                    } else {
+                        "Scan local hardware"
+                    })
+                    .when(facts.is_some(), |button| button.outline().xsmall())
+                    .when(facts.is_none(), |button| button.form_other(cx))
+                    .disabled(scanning)
+                    .on_click(cx.listener(|this, _, _, cx| this.scan_hardware(cx))),
+            );
+        let facts_found = facts.is_some();
+        let hardware: AnyElement = match facts {
+            _ if scanning => self.render_scanning(cx),
+            None => v_flex()
+                .gap_3()
+                .child(label(
+                    "Pistachio looks at this device's processor, memory, graphics and free \
+                     disk to suggest models that run well here. Nothing leaves this device.",
+                    cx,
+                ))
+                .child(h_flex().w_full().justify_center().child(scan_button))
+                .into_any_element(),
+            Some(facts) => v_flex()
+                .gap_1p5()
+                .child(
+                    h_flex()
+                        .justify_between()
+                        .child(label("Found on this device", cx))
+                        .child(scan_button),
+                )
+                .child(render_facts(&facts, cx))
+                .into_any_element(),
+        };
+        let suggest = facts_found.then(|| -> AnyElement {
+            if self.deploy == DeployStep::Suggestions {
+                self.render_suggestions(&models, cx)
+            } else {
+                h_flex()
+                    .w_full()
+                    .justify_center()
+                    .child(
+                        div()
+                            .debug_selector(|| "suggest-models".into())
+                            .relative()
+                            .children(crate::demo::probe("suggest-models"))
+                            .child(
+                                Button::new("suggest-models")
+                                    .form_other(cx)
+                                    .icon(Icon::from(AppIcon::Sparkles).text_color(accent))
+                                    .label("Suggest models")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.deploy = DeployStep::Suggestions;
+                                        cx.notify();
+                                    })),
+                            ),
+                    )
+                    .into_any_element()
+            }
+        });
+        v_flex()
+            .gap_4()
+            .child(hardware)
+            .children(suggest)
+            .into_any_element()
+    }
+
+    /// A bar that fills while the hardware is scanned, saying what is looked at.
+    fn render_scanning(&self, cx: &mut Context<Self>) -> AnyElement {
+        const STEPS: [&str; 5] = [
+            "Reading the processor…",
+            "Measuring the memory…",
+            "Looking for graphics…",
+            "Checking the free disk…",
+            "Looking for build tools…",
+        ];
+        let theme = cx.theme();
+        let (track, muted) = (theme.border, theme.muted_foreground);
+        let fill = crate::theme::palette(cx).accent;
+        v_flex()
+            .debug_selector(|| "scanning-hardware".into())
+            .w_full()
+            .gap_2()
+            .px_3()
+            .py_3()
+            .rounded_lg()
+            .border_1()
+            .border_color(track)
+            .child(div().w_full().with_animation(
+                ("scan-progress", self.scans),
+                Animation::new(crate::local_models::SCAN_TIME),
+                move |this, delta| {
+                    #[allow(
+                        clippy::cast_possible_truncation,
+                        clippy::cast_sign_loss,
+                        clippy::cast_precision_loss
+                    )]
+                    let step = ((delta * STEPS.len() as f32) as usize).min(STEPS.len() - 1);
+                    this.child(
+                        v_flex()
+                            .w_full()
+                            .gap_2()
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .gap_2()
+                                    .text_xs()
+                                    .child(Spinner::new().small().color(fill))
+                                    .child(div().flex_1().child(STEPS[step]))
+                                    .child(
+                                        div()
+                                            .text_color(muted)
+                                            .child(format!("{:.0}%", delta * 100.)),
+                                    ),
+                            )
+                            .child(
+                                div().w_full().h(px(6.)).rounded_full().bg(track).child(
+                                    div().h_full().w(relative(delta)).rounded_full().bg(fill),
+                                ),
+                            ),
+                    )
+                },
+            ))
+            .into_any_element()
+    }
+
+    /// Three models for this computer (fast, balanced, most capable), each with the engine that
+    /// runs it best here and, where one is faster, a specialized engine.
+    fn render_suggestions(
+        &self,
+        models: &Entity<LocalModels>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let (picks, busy, error) = {
+            let state = models.read(cx);
+            let picks: Vec<_> = match state.scan() {
+                Machine::NotYet | Machine::Scanning => Vec::new(),
+                Machine::Done { suggestions, .. } => suggestions
+                    .iter()
+                    .map(|suggestion| {
+                        let status = |choice: &Option<Choice>| {
+                            choice.as_ref().map(|choice| state.status(choice))
+                        };
+                        (
+                            suggestion.clone(),
+                            status(&suggestion.default),
+                            status(&suggestion.specialized),
+                        )
+                    })
+                    .collect(),
+            };
+            (picks, state.is_busy(), state.error().map(str::to_owned))
+        };
+        let body = if picks.is_empty() {
+            label(
+                "No model Pistachio knows runs well enough on this device.",
+                cx,
+            )
+            .into_any_element()
+        } else {
+            v_flex()
+                .gap_2()
+                .children(picks.into_iter().map(|(suggestion, default, special)| {
+                    self.render_suggestion(models, &suggestion, default, special, busy, cx)
+                }))
+                .into_any_element()
+        };
+        v_flex()
+            .gap_1p5()
+            .child(label("Suggested for this device", cx))
+            .child(body)
+            .children(error.map(|error| {
+                div()
+                    .text_xs()
+                    .text_color(crate::theme::palette(cx).error)
+                    .child(error)
+            }))
+            .into_any_element()
+    }
+
+    fn render_suggestion(
+        &self,
+        models: &Entity<LocalModels>,
+        suggestion: &Suggestion,
+        default: Option<Status>,
+        special: Option<Status>,
+        busy: bool,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let theme = cx.theme();
+        let (border, muted) = (theme.border, theme.muted_foreground);
+        let accent = crate::theme::palette(cx).accent;
+        let tier = suggestion.tier.label();
+        let expanded = self.expanded.contains(&tier);
+        let toggle = div()
+            .w_full()
+            .debug_selector(move || format!("expand:{tier}"))
+            .relative()
+            .children(crate::demo::probe(format!("expand:{tier}")))
+            .child(
+                Button::new(SharedString::from(format!("expand:{tier}")))
+                    .quiet(cx)
+                    .w_full()
+                    .h(px(24.))
+                    .rounded_none()
+                    .rounded_b_lg()
+                    .border_t_1()
+                    .border_color(border)
+                    .icon(
+                        Icon::new(if expanded {
+                            IconName::ChevronUp
+                        } else {
+                            IconName::ChevronDown
+                        })
+                        .text_color(muted),
+                    )
+                    .accessibility_label(if expanded {
+                        format!("Hide how {} runs", suggestion.model.name)
+                    } else {
+                        format!("Show how {} runs", suggestion.model.name)
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(ix) = this.expanded.iter().position(|open| *open == tier) {
+                            this.expanded.remove(ix);
+                        } else {
+                            this.expanded.push(tier);
+                        }
+                        cx.notify();
+                    })),
+            );
+        let rows = [
+            (suggestion.default.as_ref(), default, false),
+            (suggestion.specialized.as_ref(), special, true),
+        ];
+        // The way it runs by default (else the specialized one) is downloaded and run from the
+        // top of the card, also while it is closed.
+        let main = rows
+            .iter()
+            .position(|(choice, status, _)| choice.is_some() && status.is_some());
+        let main_action = main.and_then(|ix| {
+            let (choice, status, specialized) = &rows[ix];
+            let role = if *specialized {
+                "specialized"
+            } else {
+                "default"
+            };
+            let id = format!("local-{tier}-{role}");
+            let action = self.choice_action(models, &id, (*choice)?, status.clone()?, busy, cx);
+            Some(
+                h_flex()
+                    .w_full()
+                    .justify_center()
+                    .child(div().debug_selector(move || id).child(action)),
+            )
+        });
+        let details = v_flex()
+            .gap_1p5()
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(suggestion.model.why.clone()),
+            )
+            .children(rows.into_iter().enumerate().filter_map(
+                |(ix, (choice, status, specialized))| {
+                    Some(self.render_choice(
+                        models,
+                        tier,
+                        choice?,
+                        status?,
+                        specialized,
+                        Some(ix) != main,
+                        busy,
+                        cx,
+                    ))
+                },
+            ));
+        v_flex()
+            .debug_selector(move || format!("suggestion:{tier}"))
+            .w_full()
+            .rounded_lg()
+            .border_1()
+            .border_color(border)
+            .child(
+                v_flex()
+                    .w_full()
+                    .gap_2()
+                    .px_3()
+                    .pt_2()
+                    .pb_2()
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .text_xs()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(accent)
+                                    .child(tier),
+                            )
+                            .child(div().text_sm().child(suggestion.model.name.clone()))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .child(suggestion.model.params.clone()),
+                            ),
+                    )
+                    .children(main_action)
+                    .when(expanded, |this| this.child(details)),
+            )
+            .child(toggle)
+    }
+
+    /// A way to run a suggested model: the engine, the checkpoint, the memory it takes and its
+    /// speed here, and what to do with it.
+    #[allow(clippy::too_many_arguments, clippy::cast_precision_loss)]
+    fn render_choice(
+        &self,
+        models: &Entity<LocalModels>,
+        tier: &'static str,
+        choice: &Choice,
+        status: Status,
+        specialized: bool,
+        with_action: bool,
+        busy: bool,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let muted = cx.theme().muted_foreground;
+        let role = if specialized {
+            "specialized"
+        } else {
+            "default"
+        };
+        let id = format!("local-{tier}-{role}");
+        let speed = if choice.measured.is_some() {
+            "measured"
+        } else {
+            "estimated"
+        };
+        let mut notes = Vec::new();
+        if choice.streams {
+            notes.push("Reads the model from the disk as it goes".to_owned());
+        }
+        if specialized {
+            notes.push(if choice.missing_tools.is_empty() {
+                "Faster engine, built on this computer".to_owned()
+            } else {
+                format!(
+                    "Faster engine, built on this computer; needs {}",
+                    choice.missing_tools.join(" and ")
+                )
+            });
+        }
+        let engine = match choice.engine.home_page() {
+            Some(url) => web_link(format!("{id}-engine"), choice.engine.name.clone(), url, cx)
+                .into_any_element(),
+            None => FadingText::new(choice.engine.name.clone()).into_any_element(),
+        };
+        let checkpoint = web_link(
+            format!("{id}-checkpoint"),
+            choice.build.repo.clone(),
+            choice.build.page(),
+            cx,
+        )
+        .debug_selector({
+            let id = id.clone();
+            move || format!("{id}-checkpoint")
+        })
+        .into_any_element();
+        let quant = format!("{} {}", choice.build.quant, choice.build.format_label());
+        let memory = format!("~{:.1} GB of RAM", choice.memory as f64 / 1e9);
+        let tps = format!("~{:.0} tokens/s ({speed})", choice.tps);
+        let tokens = |n: u64| format!("{}K", n / 1024);
+        let context = if choice.context < choice.model.context {
+            format!(
+                "{} tokens (the model takes up to {})",
+                tokens(choice.context),
+                tokens(choice.model.context)
+            )
+        } else {
+            format!("{} tokens", tokens(choice.context))
+        };
+        let images = if choice.model.vision {
+            "Yes"
+        } else {
+            "No, text only"
+        }
+        .to_owned();
+        let levels = local_models::thinking::levels(choice.model, choice.engine);
+        let thinking = match choice.model.reasoning {
+            Some(true) if levels.is_empty() => format!("Not with {}", choice.engine.name),
+            Some(true) if levels == ["off", "high"] => "Yes · on or off".to_owned(),
+            Some(true) => format!("Yes · {}", levels.join(", ")),
+            Some(false) => "No".to_owned(),
+            None => "Unknown".to_owned(),
+        };
+        let fact = |icon: Icon, name: &'static str, value: AnyElement| {
+            h_flex()
+                .flex_1()
+                .min_w_0()
+                .gap_2()
+                .child(icon.small().text_color(muted))
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .child(div().text_xs().text_color(muted).child(name))
+                        .child(div().text_xs().min_w_0().truncate().child(value)),
+                )
+        };
+        let text = |value: String| FadingText::new(value).into_any_element();
+        h_flex()
+            .w_full()
+            .gap_3()
+            .pt_1p5()
+            .border_t_1()
+            .border_color(cx.theme().border)
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_1p5()
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(fact(AppIcon::Server.into(), "Inference engine", engine))
+                            .child(fact(AppIcon::Package.into(), "Quantization", text(quant))),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(fact(AppIcon::MemoryStick.into(), "Memory", text(memory)))
+                            .child(fact(AppIcon::Gauge.into(), "Speed here", text(tps))),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(fact(AppIcon::ScrollText.into(), "Context", text(context)))
+                            .child(fact(AppIcon::Image.into(), "Image input", text(images))),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(fact(AppIcon::Brain.into(), "Thinking", text(thinking)))
+                            .child(fact(AppIcon::Link.into(), "Checkpoint", checkpoint)),
+                    )
+                    .children((!notes.is_empty()).then(|| label(notes.join(" · "), cx))),
+            )
+            .when(with_action, |this| {
+                let action = self.choice_action(models, &id, choice, status, busy, cx);
+                this.child(div().flex_none().debug_selector(move || id).child(action))
+            })
+    }
+
+    /// What can be done with `choice` as it stands: download and run it, run it, connect to it.
+    #[allow(clippy::too_many_arguments)]
+    fn choice_action(
+        &self,
+        models: &Entity<LocalModels>,
+        id: &str,
+        choice: &Choice,
+        status: Status,
+        busy: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let id = id.to_owned();
+        match status {
+            Status::Missing(size) => {
+                let (models, choice) = (models.clone(), choice.clone());
+                let name = choice.model.name.clone();
+                let button = if size > 0 {
+                    download_and_run_button(id.clone(), &name, size)
+                } else {
+                    Button::new(SharedString::from(id.clone()))
+                        .label("Set up")
+                        .outline()
+                        .xsmall()
+                };
+                button
+                    .disabled(busy)
+                    .on_click(move |_, window, cx| {
+                        LocalModels::ask_and_set_up(&models, &choice, window, cx);
+                    })
+                    .into_any_element()
+            }
+            Status::Installing(progress) => {
+                let models = models.clone();
+                let text = progress.map_or_else(
+                    || "Starting the download…".to_owned(),
+                    |progress| {
+                        format!(
+                            "{} {:.0}%",
+                            progress.stage.label(),
+                            progress.fraction() * 100.
+                        )
+                    },
+                );
+                h_flex()
+                    .gap_2()
+                    .child(label(text, cx).max_w(px(180.)).truncate())
+                    .child(
+                        Button::new(SharedString::from(format!("{id}-cancel")))
+                            .label("Cancel")
+                            .ghost()
+                            .xsmall()
+                            .on_click(move |_, _, cx| models.update(cx, |m, _| m.cancel())),
+                    )
+                    .into_any_element()
+            }
+            Status::Installed => {
+                let (models, choice) = (models.clone(), choice.clone());
+                Button::new(SharedString::from(id.clone()))
+                    .label("Run")
+                    .outline()
+                    .xsmall()
+                    .on_click(move |_, _, cx| models.update(cx, |m, cx| m.run(&choice, cx)))
+                    .into_any_element()
+            }
+            Status::Starting => label("Starting…", cx).into_any_element(),
+            Status::Running => {
+                let url = models.read(cx).url(choice).unwrap_or_default();
+                Button::new(SharedString::from(id.clone()))
+                    .label("Connect")
+                    .outline()
+                    .xsmall()
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.back_to = Back::Hosted;
+                        this.open_new_server(vec![url.clone()], window, cx);
+                    }))
+                    .into_any_element()
+            }
+        }
     }
 
     fn render_other_device(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -402,6 +1077,45 @@ impl ModelsDialog {
                 ))
             })
     }
+}
+
+/// What the hardware scan found, a line each.
+fn render_facts(facts: &[(Fact, String)], cx: &App) -> Div {
+    let theme = cx.theme();
+    let (border, muted) = (theme.border, theme.muted_foreground);
+    v_flex()
+        .w_full()
+        .gap_1p5()
+        .px_3()
+        .py_2()
+        .rounded_lg()
+        .border_1()
+        .border_color(border)
+        .children(facts.iter().map(|(fact, value)| {
+            let icon: Icon = match fact {
+                Fact::Chip => IconName::Cpu.into(),
+                Fact::Memory => AppIcon::MemoryStick.into(),
+                Fact::Graphics => AppIcon::Gpu.into(),
+                Fact::ForModels => AppIcon::Brain.into(),
+                Fact::Disk => AppIcon::HardDrive.into(),
+                Fact::System => AppIcon::Laptop.into(),
+                Fact::Tools => AppIcon::Wrench.into(),
+            };
+            let name = fact.label();
+            h_flex()
+                .debug_selector(move || format!("hardware:{name}"))
+                .w_full()
+                .gap_2()
+                .text_xs()
+                .child(icon.small().text_color(muted))
+                .child(div().w(px(84.)).flex_none().text_color(muted).child(name))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(FadingText::new(value.clone())),
+                )
+        }))
 }
 
 /// A Connect button next to a field.

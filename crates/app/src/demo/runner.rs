@@ -285,6 +285,7 @@ impl Runner {
             }
             Step::ScrollDiff { lines, ms } => self.scroll_diff(*lines, *ms, cx).await?,
             Step::OpenSettings => self.click("show-settings", true, cx).await?,
+            Step::Click { target } => self.click(target, true, cx).await?,
             Step::Theme { theme } => {
                 let item = match theme {
                     ThemeName::Light => "theme:light",
