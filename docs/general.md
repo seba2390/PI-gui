@@ -57,7 +57,9 @@ Pistachio is started from the Dock or a desktop launcher.
   it has been for that model on average (usually a few percent). A model that thinks without
   streaming its thinking, or streams only a summary, gets no live figure, since the tokens it
   writes can't be seen; a new model shows only the exact average until one of its replies has
-  been checked.
+  been checked. Replies that call a tool (a web search, say) aren't used for that check, since a
+  tool call costs tokens that never stream. A local server that reports no token counts at all
+  gets estimates throughout, also for the average ("avg. ~30 tok/s").
 
 ## The message box
 

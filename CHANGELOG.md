@@ -24,6 +24,11 @@ All notable changes to PI-gui are listed here. The format follows
 - The hardware scan's bar now fills from empty over two seconds (longer if the scan takes longer)
   and its loader turns, also when the system asks for reduced motion; before, it showed full at
   once.
+- The tokens-per-second pill stayed away for good for local models (Ternary Bonsai with
+  llama.cpp, for one) once a reply that only called a tool, like a web search, was taken for
+  hidden thinking: a tool call costs tokens that never stream. Replies that call a tool are no
+  longer judged, the latest judged reply decides, and a server that reports no token counts gets
+  estimates (marked "~") instead of no pill.
 - Cancel on a local model's download takes effect at once: the button comes back right away, also
   when the connection had stalled.
 

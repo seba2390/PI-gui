@@ -266,7 +266,9 @@ Everything Pistachio does, in detail. For installation see the [README](../READM
   model's speed over the last seconds and its speed now ("~31 tok/s"), then the reply's exact
   average in gray ("avg. 30 tok/s") before it slides away. The live figure is estimated from the
   streamed text and calibrated per model against the provider's exact counts (hover it for how far
-  off it has been); models whose thinking doesn't stream get none.
+  off it has been); models whose thinking doesn't stream get none. Replies that call a tool aren't
+  judged (a tool call's markup never streams), and a server that counts no tokens at all is
+  estimated throughout ("avg. ~30 tok/s").
 - **Transcript layout**: the model's text is the main voice. Tool calls and thinking sit on a
   thin rail on the left in a quieter style, with more room where they meet the text.
 - **Turn rail**: dots at the left edge of the conversation, one per prompt (Chat and Code, from two
