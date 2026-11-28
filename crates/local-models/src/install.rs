@@ -473,25 +473,22 @@ fn unpack_archive(archive: &Path, into: &Path) -> std::io::Result<()> {
         } else if kind.is_file() {
             entry.unpack(&target)?;
         } else if kind.is_symlink() {
-            // Libraries are linked to their versioned names; only links within the archive.
-            let Some(link) = entry.link_name()? else {
-                continue;
-            };
-            let resolved = target.parent().unwrap_or(into).join(&link);
-            let normal = normalize(&resolved);
-            if link.is_absolute() || !normal.starts_with(normalize(into)) {
-                continue;
-            }
+            // Libraries are linked to their versioned names; only links within the archive. The
+            // archives for Windows have none.
             #[cfg(unix)]
-            {
-                let _ = fs::remove_file(&target);
-                std::os::unix::fs::symlink(&link, &target)?;
+            if let Some(link) = entry.link_name()? {
+                let resolved = target.parent().unwrap_or(into).join(&link);
+                if !link.is_absolute() && normalize(&resolved).starts_with(normalize(into)) {
+                    let _ = fs::remove_file(&target);
+                    std::os::unix::fs::symlink(&link, &target)?;
+                }
             }
         }
     }
     Ok(())
 }
 
+#[cfg(unix)]
 fn normalize(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for part in path.components() {
@@ -528,6 +525,8 @@ fn find_file(dir: &Path, name: &str) -> Option<PathBuf> {
     None
 }
 
+// Windows needs nothing, so it never fails there.
+#[cfg_attr(not(unix), allow(clippy::unnecessary_wraps))]
 fn make_executable(path: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
